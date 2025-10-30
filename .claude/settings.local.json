@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest:*)",
+      "Bash(python -m black:*)",
+      "Bash(python -m mypy:*)",
+      "Bash(if not exist \"docs\\qa\\gates\" mkdir \"docs\\qa\\gates\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
