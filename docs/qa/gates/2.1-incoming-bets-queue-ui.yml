@@ -1,0 +1,58 @@
+# <!-- Powered by BMAD™ Core -->
+template:
+  id: qa-gate-template-v1
+  name: Quality Gate Decision
+  version: 1.0
+  output:
+    format: yaml
+    filename: docs/qa/gates/2.1-incoming-bets-queue-ui.yml
+    title: "Quality Gate: 2.1"
+
+# Required fields (keep these first)
+schema: 1
+story: "2.1"
+story_title: "Incoming Bets Queue UI"
+gate: "PASS"
+status_reason: "All acceptance criteria fully implemented with excellent code quality and comprehensive unit tests"
+reviewer: "Quinn (Test Architect)"
+updated: "2025-10-31T01:03:00Z"
+
+# Always present but only active when WAIVED
+waiver: { active: false }
+
+# Issues (if any) - Use fixed severity: low | medium | high
+top_issues: []
+
+# Risk summary (from risk-profile task if run)
+risk_summary:
+  totals: { critical: 0, high: 0, medium: 0, low: 0 }
+  recommendations:
+    must_fix: []
+    monitor: []
+
+# Optional extended fields
+quality_score: 98
+expires: "2025-11-14T00:00:00Z"
+
+evidence:
+  tests_reviewed: 21
+  risks_identified: 0
+  trace:
+    ac_covered: [1, 2, 3, 4]
+    ac_gaps: []
+
+nfr_validation:
+  security: { status: PASS, notes: "Proper parameterized queries used, no security vulnerabilities" }
+  performance: { status: PASS, notes: "Efficient SQL queries with proper joins and filtering" }
+  reliability: { status: PASS, notes: "Good error handling with structured logging" }
+  maintainability: { status: PASS, notes: "Well-structured modular code with clear separation of concerns" }
+
+recommendations:
+  immediate: []
+  future:
+    - action: "Add integration tests for incoming bets flow"
+      refs: ["tests/integration/"]
+    - action: "Consider pagination for very large bet volumes (>1000 bets)"
+      refs: ["src/ui/pages/1_incoming_bets.py:137-138"]
+    - action: "Add error handling for missing screenshot files in production"
+      refs: ["src/ui/components/bet_card.py:44-52"]

@@ -171,16 +171,23 @@ def insert_canonical_markets(conn: sqlite3.Connection) -> Dict[str, int]:
         Dictionary mapping market codes to their IDs.
     """
     markets = [
-        {
-            "market_code": "TOTAL_GOALS_OVER_UNDER",
-            "description": "Total Goals Over/Under",
-            "created_at_utc": utc_now_iso(),
-        },
-        {
-            "market_code": "ASIAN_HANDICAP",
-            "description": "Asian Handicap",
-            "created_at_utc": utc_now_iso(),
-        },
+        # Soccer Over/Under
+        {"market_code": "TOTAL_GOALS_OVER_UNDER", "description": "Total Goals Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "FIRST_HALF_TOTAL_GOALS", "description": "1st Half Total Goals Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "SECOND_HALF_TOTAL_GOALS", "description": "2nd Half Total Goals Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "TOTAL_CARDS_OVER_UNDER", "description": "Total Cards Over/Under (Bookings)", "created_at_utc": utc_now_iso()},
+        {"market_code": "TOTAL_CORNERS_OVER_UNDER", "description": "Total Corners Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "TOTAL_SHOTS_OVER_UNDER", "description": "Total Shots Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "TOTAL_SHOTS_ON_TARGET_OVER_UNDER", "description": "Total Shots on Target Over/Under", "created_at_utc": utc_now_iso()},
+        # Soccer Yes/No and team two-way
+        {"market_code": "BOTH_TEAMS_TO_SCORE", "description": "Both Teams To Score (Yes/No)", "created_at_utc": utc_now_iso()},
+        {"market_code": "RED_CARD_AWARDED", "description": "Red Card Awarded (Yes/No)", "created_at_utc": utc_now_iso()},
+        {"market_code": "PENALTY_AWARDED", "description": "Penalty Awarded (Yes/No)", "created_at_utc": utc_now_iso()},
+        {"market_code": "DRAW_NO_BET", "description": "Draw No Bet (Home/Away)", "created_at_utc": utc_now_iso()},
+        {"market_code": "ASIAN_HANDICAP", "description": "Asian Handicap", "created_at_utc": utc_now_iso()},
+        # Tennis
+        {"market_code": "MATCH_WINNER", "description": "Match Winner (Two-Way)", "created_at_utc": utc_now_iso()},
+        {"market_code": "TOTAL_GAMES_OVER_UNDER", "description": "Total Games Over/Under (Match)", "created_at_utc": utc_now_iso()},
     ]
 
     market_ids = {}

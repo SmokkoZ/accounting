@@ -1,0 +1,7 @@
+Collecting rapidfuzz
+  Obtaining dependency information for rapidfuzz from https://files.pythonhosted.org/packages/04/7f/88c2fa572f3752094701c1799eba0c76593f1471a680f7fafcd8335a0aba/rapidfuzz-3.14.2-cp312-cp312-win_amd64.whl.metadata
+  Downloading rapidfuzz-3.14.2-cp312-cp312-win_amd64.whl.metadata (12 kB)
+Downloading rapidfuzz-3.14.2-cp312-cp312-win_amd64.whl (1.5 MB)
+   ---------------------------------------- 1.5/1.5 MB 3.3 MB/s eta 0:00:00
+Installing collected packages: rapidfuzz
+Successfully installed rapidfuzz-3.14.2

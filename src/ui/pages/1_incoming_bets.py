@@ -7,16 +7,161 @@ This page provides:
 - Screenshot previews
 - Confidence scores with color coding
 - Ingestion source indicators (Telegram vs Manual)
-- Approval/rejection actions (Epic 2)
+- Inline editing and approval/rejection actions (Epic 2)
 """
 
 import streamlit as st
 import structlog
+from decimal import Decimal
+from datetime import datetime
 
 from src.core.database import get_db_connection
+from src.services.bet_verification import BetVerificationService
 from src.ui.components.manual_upload import render_manual_upload_panel
+from src.ui.components.bet_card import render_bet_card
 
 logger = structlog.get_logger()
+
+
+# Helper functions for approval/rejection workflow
+def _handle_bet_actions(verification_service: BetVerificationService) -> None:
+    """Handle approval and rejection actions from session state.
+
+    Args:
+        verification_service: BetVerificationService instance
+    """
+    # Check for approval actions
+    approval_keys = [key for key in st.session_state.keys() if key.startswith("approve_bet_")]
+    for key in approval_keys:
+        bet_id = int(key.replace("approve_bet_", ""))
+        action_data = st.session_state[key]
+
+        if isinstance(action_data, dict):
+            # Process approval with edits
+            try:
+                # Extract canonical event ID
+                event_selection = action_data["event_selection"]
+                canonical_event_id = None
+
+                if event_selection == "[+] Create New Event":
+                    # Hand over to the modal flow handled by bet_card
+                    st.session_state[f"show_create_event_modal_{bet_id}"] = True
+                    del st.session_state[key]
+                    st.rerun()
+                    return
+                elif event_selection != "(None - Select Event)":
+                    # Find event ID from selection
+                    canonical_events = action_data["canonical_events"]
+                    for event in canonical_events:
+                        event_display = f"{event['normalized_event_name']} ({event['kickoff_time_utc'][:10] if event['kickoff_time_utc'] else 'TBD'})"
+                        if event_display == event_selection:
+                            canonical_event_id = event["id"]
+                            break
+
+                # Extract market code
+                market_selection = action_data["market_selection"]
+                market_code = None
+                if market_selection != "(None - Select Market)":
+                    market_code = market_selection.split("(")[-1].rstrip(")")
+
+                # Build edited fields dictionary
+                edited_fields = {}
+                
+                # Only include canonical_event_id if an event was selected
+                if canonical_event_id is not None:
+                    edited_fields["canonical_event_id"] = canonical_event_id
+                
+                # Only include market_code if a market was selected
+                if market_code is not None:
+                    edited_fields["market_code"] = market_code
+                
+                # Always include these fields
+                edited_fields.update({
+                    "period_scope": action_data["period"],
+                    "line_value": str(Decimal(str(action_data["line"]))) if action_data["line"] else None,
+                    "side": action_data["side"],
+                    "stake_original": str(Decimal(str(action_data["stake"]))),
+                    "odds_original": str(Decimal(str(action_data["odds"]))),
+                    "payout": str(Decimal(str(action_data["payout"]))),
+                    "currency": action_data["currency"],
+                })
+
+                # Capture manual event name input for auto-create fallback
+                event_name_input = action_data.get("event_name_input")
+                if canonical_event_id is None and event_name_input:
+                    edited_fields["_event_name_override"] = event_name_input.strip()
+
+                # Validate and approve
+                verification_service.approve_bet(bet_id, edited_fields)
+                st.success(f"✅ Bet #{bet_id} approved successfully!")
+                logger.info("bet_approved_via_ui", bet_id=bet_id)
+
+            except ValueError as e:
+                st.error(f"❌ Validation error: {str(e)}")
+                logger.error("bet_approval_failed", bet_id=bet_id, error=str(e))
+            except Exception as e:
+                st.error(f"❌ Failed to approve bet: {str(e)}")
+                logger.error("bet_approval_exception", bet_id=bet_id, error=str(e), exc_info=True)
+
+            # Clean up session state
+            del st.session_state[key]
+            st.rerun()
+        else:
+            # Simple approval without edits (from non-editable mode)
+            del st.session_state[key]
+
+    # Check for rejection actions
+    rejection_keys = [key for key in st.session_state.keys() if key.startswith("reject_bet_")]
+    for key in rejection_keys:
+        bet_id = int(key.replace("reject_bet_", ""))
+
+        # Show rejection modal (modal handles its own state management)
+        _show_rejection_modal(bet_id, verification_service, key)
+
+
+def _show_rejection_modal(bet_id: int, verification_service: BetVerificationService, session_key: str) -> None:
+    """Show modal dialog for bet rejection.
+
+    Args:
+        bet_id: ID of bet to reject
+        verification_service: BetVerificationService instance
+        session_key: The session state key that triggered this modal
+    """
+    @st.dialog(f"Reject Bet #{bet_id}?")
+    def rejection_dialog():
+        st.warning("Are you sure you want to reject this bet?")
+
+        reason = st.text_area(
+            "Rejection Reason (optional)",
+            placeholder="e.g., 'Accumulator bet', 'Duplicate', 'Invalid screenshot'",
+            max_chars=500,
+            key=f"rejection_reason_{bet_id}"
+        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("❌ Confirm Rejection", type="primary", use_container_width=True, key=f"confirm_reject_{bet_id}"):
+                try:
+                    verification_service.reject_bet(bet_id, reason if reason else None)
+                    # Clean up session state
+                    if session_key in st.session_state:
+                        del st.session_state[session_key]
+                    st.success(f"✅ Bet #{bet_id} rejected successfully!")
+                    logger.info("bet_rejected_via_ui", bet_id=bet_id, reason=reason)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Failed to reject bet: {str(e)}")
+                    logger.error("bet_rejection_exception", bet_id=bet_id, error=str(e), exc_info=True)
+
+        with col2:
+            if st.button("Cancel", use_container_width=False, key=f"cancel_reject_{bet_id}"):
+                # Clean up session state
+                if session_key in st.session_state:
+                    del st.session_state[session_key]
+                st.rerun()
+
+    rejection_dialog()
+
 
 # Configure page
 st.set_page_config(page_title="Incoming Bets", layout="wide")
@@ -31,6 +176,12 @@ st.markdown("---")
 
 # Database connection
 db = get_db_connection()
+
+# Initialize verification service for Epic 2 approval/rejection workflow
+verification_service = BetVerificationService(db)
+
+# Handle approval/rejection actions from session state
+_handle_bet_actions(verification_service)
 
 # Counters
 try:
@@ -55,156 +206,106 @@ except Exception as e:
 
 st.markdown("---")
 
+# Filter options
+with st.expander("🔍 Filters", expanded=False):
+    filter_col1, filter_col2 = st.columns(2)
+
+    with filter_col1:
+        # Filter by associate
+        associates_data = db.execute(
+            "SELECT DISTINCT display_alias FROM associates ORDER BY display_alias"
+        ).fetchall()
+        associate_filter = st.multiselect(
+            "Filter by Associate",
+            options=["All"] + [a["display_alias"] for a in associates_data],
+            default=["All"],
+        )
+
+    with filter_col2:
+        # Filter by confidence
+        confidence_filter = st.selectbox(
+            "Filter by Confidence",
+            options=["All", "High (≥80%)", "Medium (50-79%)", "Low (<50%)", "Failed"],
+            index=0,
+        )
+
+st.markdown("---")
+
 # Incoming bets queue
 st.subheader("📋 Bets Awaiting Review")
 
 try:
-    # Query incoming bets
-    incoming_bets = db.execute(
-        """
+    # Build query with filters
+    query = """
         SELECT
             b.id as bet_id,
             b.screenshot_path,
             a.display_alias as associate,
             bk.bookmaker_name as bookmaker,
             b.ingestion_source,
+            ce.normalized_event_name as canonical_event,
+            b.selection_text,
             b.market_code,
             b.period_scope,
+            b.line_value,
             b.side,
-            b.stake_original,
-            b.stake_eur,
-            b.odds_original,
-            b.odds,
+            b.stake_original as stake,
+            b.odds_original as odds,
             b.payout,
             b.currency,
+            b.kickoff_time_utc,
             b.normalization_confidence,
             b.is_multi,
             b.created_at_utc
         FROM bets b
         JOIN associates a ON b.associate_id = a.id
         JOIN bookmakers bk ON b.bookmaker_id = bk.id
+        LEFT JOIN canonical_events ce ON b.canonical_event_id = ce.id
         WHERE b.status = 'incoming'
-        ORDER BY b.created_at_utc DESC
-        """
-    ).fetchall()
+    """
+
+    # Apply associate filter
+    query_params = []
+    if "All" not in associate_filter and associate_filter:
+        placeholders = ",".join(["?" for _ in associate_filter])
+        query += f" AND a.display_alias IN ({placeholders})"
+        query_params.extend(associate_filter)
+
+    # Apply confidence filter (cast TEXT to REAL for numeric comparison)
+    if confidence_filter != "All":
+        if confidence_filter == "High (≥80%)":
+            query += " AND CAST(b.normalization_confidence AS REAL) >= 0.8"
+        elif confidence_filter == "Medium (50-79%)":
+            query += " AND CAST(b.normalization_confidence AS REAL) >= 0.5 AND CAST(b.normalization_confidence AS REAL) < 0.8"
+        elif confidence_filter == "Low (<50%)":
+            query += " AND CAST(b.normalization_confidence AS REAL) < 0.5"
+        elif confidence_filter == "Failed":
+            query += " AND (b.normalization_confidence IS NULL OR b.normalization_confidence = '')"
+
+    query += " ORDER BY b.created_at_utc DESC"
+
+    # Execute query
+    incoming_bets = db.execute(query, query_params).fetchall()
 
     if not incoming_bets:
-        st.info("✅ No bets awaiting review")
+        st.info("✨ No bets awaiting review! Queue is empty.")
     else:
         st.caption(f"Showing {len(incoming_bets)} bet(s)")
 
-        # Display each bet
+        # Render each bet card with inline editing (Epic 2)
         for bet in incoming_bets:
-            with st.container():
-                col1, col2, col3 = st.columns([1, 3, 1])
-
-                with col1:
-                    # Screenshot preview
-                    try:
-                        st.image(bet["screenshot_path"], width=150, caption="Screenshot")
-                    except Exception:
-                        st.warning("⚠️ Screenshot not found")
-                        logger.warning(
-                            "screenshot_not_found",
-                            bet_id=bet["bet_id"],
-                            path=bet["screenshot_path"],
-                        )
-
-                with col2:
-                    # Bet details header
-                    st.markdown(
-                        f"**Bet #{bet['bet_id']}** - {bet['associate']} @ {bet['bookmaker']}"
-                    )
-
-                    # Ingestion source icon
-                    source_icon = "📱" if bet["ingestion_source"] == "telegram" else "📤"
-                    source_label = (
-                        "Telegram" if bet["ingestion_source"] == "telegram" else "Manual Upload"
-                    )
-                    st.caption(f"{source_icon} {source_label} • Created: {bet['created_at_utc']}")
-
-                    # Extracted data
-                    if bet["market_code"]:
-                        # Build bet description
-                        market_display = bet["market_code"].replace("_", " ").title()
-                        period_display = (
-                            bet["period_scope"].replace("_", " ").title()
-                            if bet["period_scope"]
-                            else "N/A"
-                        )
-                        side_display = (
-                            bet["side"].replace("_", " ").title() if bet["side"] else "N/A"
-                        )
-
-                        st.write(f"**Market:** {market_display} - {period_display}")
-                        st.write(f"**Selection:** {side_display}")
-
-                        # Display stake/odds/payout
-                        stake_display = f"{bet['stake_original'] or bet['stake_eur']}"
-                        odds_display = f"{bet['odds_original'] or bet['odds']}"
-                        payout_display = f"{bet['payout'] or 'N/A'}"
-                        currency_display = bet["currency"] or "EUR"
-
-                        st.write(
-                            f"**Bet:** {stake_display} {currency_display} @ {odds_display} = {payout_display} {currency_display}"
-                        )
-
-                    else:
-                        st.warning("⚠️ Extraction failed - manual entry required")
-
-                    # Flags
-                    if bet["is_multi"]:
-                        st.error("🚫 **Accumulator - Not Supported**")
-
-                    # Check for operator notes
-                    notes = db.execute(
-                        """
-                        SELECT notes
-                        FROM verification_audit
-                        WHERE bet_id = ?
-                        AND action = 'CREATED'
-                        ORDER BY created_at_utc DESC
-                        LIMIT 1
-                        """,
-                        (bet["bet_id"],),
-                    ).fetchone()
-
-                    if notes and notes["notes"]:
-                        st.info(f"📝 Note: {notes['notes']}")
-
-                with col3:
-                    # Confidence badge
-                    if bet["normalization_confidence"]:
-                        try:
-                            confidence_float = float(bet["normalization_confidence"])
-                            if confidence_float >= 0.8:
-                                st.success(f"✅ High\n{confidence_float:.0%}")
-                            elif confidence_float >= 0.5:
-                                st.warning(f"⚠️ Medium\n{confidence_float:.0%}")
-                            else:
-                                st.error(f"❌ Low\n{confidence_float:.0%}")
-                        except (ValueError, TypeError):
-                            st.error("❌ Invalid")
-                    else:
-                        st.error("❌ Failed")
-
-                    # Actions (Epic 2 - disabled for now)
-                    st.button(
-                        "✅ Approve",
-                        key=f"approve_{bet['bet_id']}",
-                        disabled=True,
-                        help="Approval feature coming in Epic 2",
-                    )
-                    st.button(
-                        "❌ Reject",
-                        key=f"reject_{bet['bet_id']}",
-                        disabled=True,
-                        help="Rejection feature coming in Epic 2",
-                    )
-
-                st.markdown("---")
+            bet_dict = dict(bet)  # Convert Row to dict
+            render_bet_card(bet_dict, show_actions=True, editable=True, verification_service=verification_service)
 
 except Exception as e:
     logger.error("failed_to_load_incoming_bets", error=str(e), exc_info=True)
     st.error(f"Failed to load incoming bets: {str(e)}")
     st.exception(e)
+
+# Auto-refresh option
+st.markdown("---")
+if st.checkbox("🔄 Auto-refresh every 30 seconds"):
+    import time
+
+    time.sleep(30)
+    st.rerun()

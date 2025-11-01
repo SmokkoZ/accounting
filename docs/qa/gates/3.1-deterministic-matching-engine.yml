@@ -1,0 +1,215 @@
+story_id: "3.1"
+story_title: "Deterministic Matching Engine"
+status: "ready_for_qa"
+test_date: "2025-10-31"
+
+# Manual Testing Guide for Story 3.1
+
+## Quick Start - Automated Testing
+
+The easiest way to test is to run the automated manual testing script:
+
+```bash
+python scripts/test_matching_manual.py
+```
+
+This script will:
+- Create a fresh test database
+- Run 4 comprehensive test scenarios
+- Display detailed output showing:
+  - Bets created
+  - Matching logic execution
+  - Surebets created
+  - Verification results
+
+Expected output: `[PASS] ALL TEST SCENARIOS PASSED`
+
+## Manual Testing Scenarios
+
+### Scenario 1: Basic OVER/UNDER Matching
+
+**Objective:** Verify that two opposite bets (OVER vs UNDER) automatically match into a surebet
+
+**Steps:**
+1. Create a canonical event (e.g., "Man Utd vs Liverpool")
+2. Create an OVER 2.5 bet (associate 1, stake €100, odds 1.90)
+3. Create an UNDER 2.5 bet (associate 2, stake €100, odds 2.10)
+4. Approve the OVER bet
+5. Approve the UNDER bet
+
+**Expected Results:**
+- ✓ After approving UNDER bet, both bets status = 'matched'
+- ✓ 1 surebet created with market_code='TOTAL_GOALS_OVER_UNDER', line_value='2.5'
+- ✓ 2 bet links in surebet_bets table (one with side='A', one with side='B')
+- ✓ OVER bet linked to side='A'
+- ✓ UNDER bet linked to side='B'
+- ✓ Console shows "bet_auto_matched" log message
+
+### Scenario 2: Multiple Bets on Same Side
+
+**Objective:** Verify that multiple bets on the same logical side (A1 + A2 vs B1) go into ONE surebet
+
+**Steps:**
+1. Create a canonical event (e.g., "Chelsea vs Arsenal")
+2. Create YES bet #1 (associate 1, BOTH_TEAMS_TO_SCORE, €50, odds 1.75)
+3. Create YES bet #2 (associate 2, BOTH_TEAMS_TO_SCORE, €75, odds 1.80)
+4. Create NO bet (associate 3, BOTH_TEAMS_TO_SCORE, €100, odds 2.20)
+5. Approve all three bets
+
+**Expected Results:**
+- ✓ All 3 bets status = 'matched'
+- ✓ 1 surebet created (not 3 separate surebets)
+- ✓ 3 bet links in surebet_bets table
+- ✓ Both YES bets linked to side='A'
+- ✓ NO bet linked to side='B'
+
+### Scenario 3: No Match Without Opposite Side
+
+**Objective:** Verify that a bet without an opposite side remains 'verified', not 'matched'
+
+**Steps:**
+1. Create a canonical event (e.g., "Barcelona vs Real Madrid")
+2. Create TEAM_A bet (MATCH_WINNER, €100, odds 2.50)
+3. Approve the bet (no TEAM_B bet exists)
+
+**Expected Results:**
+- ✓ Bet status = 'verified' (NOT 'matched')
+- ✓ No new surebet created
+- ✓ Console shows "no_opposite_candidates" log message
+- ✓ Bet can be matched later when opposite bet arrives
+
+### Scenario 4: Matching Idempotency
+
+**Objective:** Verify that re-running match on already-matched bet does nothing
+
+**Steps:**
+1. Use a bet that's already matched from previous scenarios
+2. Call `SurebetMatcher().attempt_match(bet_id)` again
+3. Check surebet_bets table
+
+**Expected Results:**
+- ✓ No duplicate links created in surebet_bets
+- ✓ Returns existing surebet_id
+- ✓ Console shows "bet_already_matched" log message
+- ✓ No errors or exceptions
+
+## Database Inspection Commands
+
+Use these SQL queries to inspect results:
+
+### View all bets
+```sql
+SELECT id, associate_id, status, side, market_code, line_value, stake_eur, odds
+FROM bets
+ORDER BY id;
+```
+
+### View all surebets
+```sql
+SELECT s.id, s.canonical_event_id, s.market_code, s.period_scope, s.line_value, s.status
+FROM surebets s
+ORDER BY s.id;
+```
+
+### View bet links with sides
+```sql
+SELECT sb.surebet_id, sb.bet_id, sb.side, b.side as bet_side, b.market_code
+FROM surebet_bets sb
+JOIN bets b ON sb.bet_id = b.id
+ORDER BY sb.surebet_id, sb.side;
+```
+
+### Verify deterministic side assignment
+```sql
+SELECT
+    b.id as bet_id,
+    b.side as bet_side,
+    sb.side as surebet_side,
+    CASE
+        WHEN b.side IN ('OVER', 'YES', 'TEAM_A') THEN 'A'
+        WHEN b.side IN ('UNDER', 'NO', 'TEAM_B') THEN 'B'
+    END as expected_side
+FROM bets b
+JOIN surebet_bets sb ON b.id = sb.bet_id
+WHERE b.status = 'matched';
+```
+
+Expected: `surebet_side` = `expected_side` for all rows
+
+## Key Features to Verify
+
+### ✓ Deterministic Side Assignment
+- OVER, YES, TEAM_A → side='A'
+- UNDER, NO, TEAM_B → side='B'
+- Mapping NEVER changes after assignment
+
+### ✓ Matching Criteria
+Bets match only when ALL these match:
+- canonical_event_id
+- market_code
+- period_scope
+- line_value (or both NULL)
+- opposite side (OVER vs UNDER, YES vs NO, TEAM_A vs TEAM_B)
+
+### ✓ Status Transitions
+- Incoming → Verified (on approval, no opposite found)
+- Verified → Matched (on approval when opposite exists)
+- Matched → Matched (idempotent, no change)
+
+### ✓ Automatic Trigger
+- Matching happens automatically after `BetVerificationService.approve_bet()`
+- No manual step required
+- Error in matching does NOT block approval (graceful failure)
+
+## Common Issues & Troubleshooting
+
+### Bets not matching when they should
+
+Check:
+1. Are both bets `status='verified'`? (Matching only runs on approval)
+2. Do they have the same canonical_event_id?
+3. Do they have the same market_code and period_scope?
+4. Do line_values match? (both '2.5' or both NULL)
+5. Are sides truly opposite? (OVER vs UNDER, not OVER vs OVER)
+6. Is `is_supported=1`? (Unsupported bets never match)
+
+### Bets matching that shouldn't
+
+Check:
+1. Line values - '2.5' should NOT match '3.5'
+2. Period scope - 'FULL_MATCH' should NOT match 'FIRST_HALF'
+3. Market code - 'TOTAL_GOALS_OVER_UNDER' should NOT match 'FIRST_HALF_TOTAL_GOALS'
+
+### Duplicate surebets created
+
+This should NOT happen. If it does:
+1. Check `_find_or_create_surebet()` logic
+2. Verify query for existing surebets checks all criteria
+3. Run test_scenario_2 to verify multiple bets → one surebet
+
+## Test Coverage Summary
+
+| Test Area | Coverage | Status |
+|-----------|----------|--------|
+| Deterministic side assignment | 7 tests | ✓ PASS |
+| Matching algorithm | 7 tests | ✓ PASS |
+| Multiple bets same side | 1 test | ✓ PASS |
+| Idempotency | 2 tests | ✓ PASS |
+| Unsupported bet filtering | 2 tests | ✓ PASS |
+| Edge cases | 5 tests | ✓ PASS |
+| **Total** | **24 unit tests** | **✓ ALL PASS** |
+
+## Sign-Off
+
+- [ ] All manual test scenarios executed successfully
+- [ ] Database inspection confirms correct data structure
+- [ ] Deterministic side assignment verified
+- [ ] Idempotency verified
+- [ ] No duplicate surebets created
+- [ ] Graceful failure on matching errors
+- [ ] Integration with bet approval workflow verified
+
+**QA Engineer:** _________________
+**Date:** _________________
+**Status:** _________________
+**Notes:** _________________

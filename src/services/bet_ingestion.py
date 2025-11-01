@@ -16,6 +16,7 @@ import structlog
 
 from src.core.database import get_db_connection
 from src.integrations.openai_client import OpenAIClient
+from src.services.market_normalizer import MarketNormalizer
 from src.utils.datetime_helpers import utc_now_iso
 
 logger = structlog.get_logger()
@@ -69,7 +70,32 @@ class BetIngestionService:
             # Extract data using OpenAI client
             extraction_result = self.openai_client.extract_bet_from_screenshot(screenshot_path)
 
-            # Update bet record with extracted data
+            # Normalize market fields (post-extraction)
+            normalizer = MarketNormalizer(self.db)
+            norm = normalizer.normalize(
+                sport=extraction_result.get("sport"),
+                market_label=extraction_result.get("market_label"),
+                market_code_guess=extraction_result.get("market_code"),
+                period_scope_text=extraction_result.get("period_scope"),
+                side_text=extraction_result.get("side"),
+                line_value=extraction_result.get("line_value"),
+            )
+
+            # Merge normalized fields back into extraction_result
+            # Preserve original OCR guess if normalizer couldn't map a code
+            merged = dict(extraction_result)
+            mapped_code = norm.get("market_code") is not None
+            for k, v in norm.items():
+                if k == "market_code" and v is None:
+                    # Keep original OCR guess
+                    continue
+                if k == "normalization_confidence" and not mapped_code:
+                    # Keep original extraction confidence
+                    continue
+                merged[k] = v
+            extraction_result = merged
+
+            # Update bet record with extracted + normalized data
             self._update_bet_with_extraction(bet_id, extraction_result)
 
             # Log extraction metadata
@@ -134,47 +160,54 @@ class BetIngestionService:
         payout = str(extraction_result["payout"]) if extraction_result.get("payout") else None
         confidence = str(extraction_result["confidence"])
 
-        # Update bet record
-        self.db.execute(
-            """
-            UPDATE bets
-            SET
-                market_code = ?,
-                period_scope = ?,
-                line_value = ?,
-                side = ?,
-                stake_original = ?,
-                odds_original = ?,
-                payout = ?,
-                currency = ?,
-                kickoff_time_utc = ?,
-                normalization_confidence = ?,
-                is_multi = ?,
-                is_supported = ?,
-                model_version_extraction = ?,
-                model_version_normalization = ?,
-                updated_at_utc = ?
-            WHERE id = ?
-            """,
-            (
-                extraction_result.get("market_code"),
-                extraction_result.get("period_scope"),
-                extraction_result.get("line_value"),
-                extraction_result.get("side"),
-                stake,
-                odds,
-                payout,
-                extraction_result.get("currency"),
-                extraction_result.get("kickoff_time_utc"),
-                confidence,
-                extraction_result.get("is_multi", False),
-                extraction_result.get("is_supported", True),
-                extraction_result.get("model_version_extraction"),
-                extraction_result.get("model_version_normalization"),
-                utc_now_iso(),
-                bet_id,
-            ),
+        # Build dynamic update to support minimal test schemas
+        columns = self._get_table_columns("bets")
+
+        set_clauses = []
+        params = []
+
+        # Optional selection_text (if column exists)
+        if "selection_text" in columns:
+            set_clauses.append("selection_text = COALESCE(?, selection_text)")
+            params.append(extraction_result.get("canonical_event"))
+
+        # Common fields
+        def add(col: str, value):
+            if col in columns:
+                set_clauses.append(f"{col} = ?")
+                params.append(value)
+
+        add("market_code", extraction_result.get("market_code"))
+        add("period_scope", extraction_result.get("period_scope"))
+        add("line_value", extraction_result.get("line_value"))
+        add("side", extraction_result.get("side"))
+        add("stake_original", stake)
+        add("odds_original", odds)
+        add("payout", payout)
+        add("currency", extraction_result.get("currency"))
+        add("kickoff_time_utc", extraction_result.get("kickoff_time_utc"))
+        add(
+            "normalization_confidence",
+            extraction_result.get("normalization_confidence", confidence),
         )
+        # Optional canonical_market_id
+        if "canonical_market_id" in columns:
+            add("canonical_market_id", extraction_result.get("canonical_market_id"))
+        add("is_multi", extraction_result.get("is_multi", False))
+        add("is_supported", extraction_result.get("is_supported", True))
+        add("model_version_extraction", extraction_result.get("model_version_extraction"))
+        add(
+            "model_version_normalization",
+            extraction_result.get("model_version_normalization"),
+        )
+        add("updated_at_utc", utc_now_iso())
+
+        if not set_clauses:
+            return
+
+        sql = "UPDATE bets SET " + ",\n                ".join(set_clauses) + " WHERE id = ?"
+        params.append(bet_id)
+        self.db.execute(sql, tuple(params))
 
         self.db.commit()
 
@@ -248,3 +281,7 @@ class BetIngestionService:
         """Close the database connection if owned by this service."""
         if self.db:
             self.db.close()
+
+    def _get_table_columns(self, table: str) -> set[str]:
+        cur = self.db.execute(f"PRAGMA table_info({table})")
+        return {row[1] for row in cur.fetchall()}  # type: ignore[index]

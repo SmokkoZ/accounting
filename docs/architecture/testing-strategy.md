@@ -362,6 +362,26 @@ def test_end_to_end_surebet_settlement(test_db, test_screenshots):
     verification_service.approve_bet(bet1_id)
     verification_service.approve_bet(bet2_id)
 
+    # Story 2.3: Canonical Event Auto-Creation Tests
+    # Unit Tests (src/services/bet_verification.py):
+    # - test_get_or_create_canonical_event_creates_new_event_when_none_exists()
+    # - test_get_or_create_canonical_event_reuses_fuzzy_matched_event()
+    # - test_fuzzy_matching_above_threshold_reuses_event()
+    # - test_fuzzy_matching_below_threshold_creates_new_event()
+    # - test_fuzzy_matching_within_24h_time_window()
+    # - test_fuzzy_matching_outside_24h_time_window_creates_new()
+    # - test_canonical_event_creation_with_all_fields()
+    # - test_canonical_event_creation_without_optional_competition()
+    # - test_canonical_event_creation_validation_errors()
+    # - test_canonical_event_creation_transaction_rollback_on_error()
+    # - test_audit_log_created_for_auto_event_creation()
+    # - test_audit_log_created_for_manual_event_creation()
+    # Integration Tests:
+    # - test_bet_approval_with_auto_event_creation_e2e()
+    # - test_bet_approval_with_manual_event_creation_modal_e2e()
+    # - test_multiple_bets_reuse_same_fuzzy_matched_event()
+    # Target Coverage: 90%+ for event creation logic
+
     # 3. Assert surebet created
     matcher = SurebetMatcher(db=test_db)
     surebet_id = matcher.attempt_match(bet2_id)

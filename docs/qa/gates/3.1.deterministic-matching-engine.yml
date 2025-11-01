@@ -1,0 +1,76 @@
+schema: 1
+story: '3.1'
+story_title: 'Deterministic Matching Engine'
+gate: CONCERNS
+status_reason: 'Critical database race condition and missing security rate limiting require attention before production deployment.'
+reviewer: 'Quinn (Test Architect)'
+updated: '2025-10-31T13:52:31.377Z'
+
+top_issues:
+  - id: 'TECH-001'
+    severity: high
+    finding: 'Database race condition in concurrent matching operations could create duplicate surebets and corrupt data integrity.'
+    suggested_action: 'Implement database-level locking and unique constraints to prevent duplicate surebets during concurrent bet approvals.'
+  - id: 'SEC-001'
+    severity: high
+    finding: 'Matching endpoints lack rate limiting protection, making system vulnerable to brute force attacks and automated abuse.'
+    suggested_action: 'Add rate limiting middleware to matching operations and implement authentication for access control.'
+
+waiver: { active: false }
+
+evidence:
+  tests_reviewed: 24
+  risks_identified: 6
+  trace:
+    ac_covered: [1, 2, 3, 4, 5, 6]
+    ac_gaps: []
+
+nfr_validation:
+  _assessed: [security, performance, reliability, maintainability]
+  security:
+    status: CONCERNS
+    notes: 'Missing rate limiting on matching endpoints; no authentication/authorization controls.'
+  performance:
+    status: PASS
+    notes: 'Query performance acceptable for current scale; proper indexing implemented.'
+  reliability:
+    status: PASS
+    notes: 'Comprehensive error handling and idempotency implemented; database transactions ensure consistency.'
+  maintainability:
+    status: CONCERNS
+    notes: 'Test coverage at 65% for matching logic, below 80% target; complex algorithm needs better documentation.'
+
+risk_summary:
+  totals:
+    critical: 1
+    high: 2
+    medium: 2
+    low: 1
+  highest:
+    id: 'TECH-001'
+    score: 9
+    title: 'Database race condition in concurrent matching'
+  recommendations:
+    must_fix:
+      - 'Implement database transaction isolation for matching operations'
+      - 'Add unique constraint to prevent duplicate surebets'
+      - 'Add comprehensive concurrent scenario testing'
+    monitor:
+      - 'Add monitoring for matching operation failures'
+      - 'Implement alerts for duplicate surebet creation attempts'
+
+test_design:
+  scenarios_total: 12
+  by_level:
+    unit: 8
+    integration: 3
+    e2e: 1
+  by_priority:
+    p0: 6
+    p1: 4
+    p2: 2
+  coverage_gaps: []
+
+quality_score: 72
+
+expires: '2025-11-14T13:52:31.377Z'

@@ -130,3 +130,15 @@ dmypy.json
 .Trashes
 ehthumbs.db
 Thumbs.db
+# BMAD (local only)
+.bmad-core/
+.bmad-*/
+
+# Windows reserved device names (avoid add errors on Windows)
+**/[Nn][Uu][Ll]
+**/[Nn][Uu][Ll].*
+**/[Cc][Oo][Nn]
+**/[Pp][Rr][Nn]
+**/[Aa][Uu][Xx]
+**/[Cc][Oo][Mm][1-9]
+**/[Ll][Pp][Tt][1-9]

@@ -105,7 +105,7 @@ class TestCoreDatabase(unittest.TestCase):
         self.assertEqual(summary["bookmakers"], 4)
 
         # Check that canonical markets were inserted
-        self.assertEqual(summary["canonical_markets"], 2)
+        self.assertEqual(summary["canonical_markets"], 14)
 
         # Check that other tables are empty (except for seed data)
         self.assertEqual(summary["canonical_events"], 0)
@@ -159,8 +159,8 @@ class TestCoreDatabase(unittest.TestCase):
 
         self.conn.execute(
             """
-            INSERT INTO surebets (canonical_event_id, canonical_market_id) 
-            VALUES (1, 1)
+            INSERT INTO surebets (canonical_event_id, canonical_market_id, market_code, period_scope)
+            VALUES (1, 1, 'TEST_MARKET', 'FULL_MATCH')
         """
         )
 

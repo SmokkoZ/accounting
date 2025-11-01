@@ -221,7 +221,8 @@ class OpenAIClient:
 EVENT: <Team A vs Team B or event description>
 SPORT: <football, basketball, tennis, etc.>
 LEAGUE: <league name if visible>
-MARKET_CODE: <market type - see codes below>
+MARKET_LABEL: <the exact market name as shown by the bookmaker (raw)>
+MARKET_CODE: <if obviously mappable, pick from the codes list below; otherwise write UNKNOWN>
 PERIOD_SCOPE: <FULL_MATCH, FIRST_HALF, SECOND_HALF, etc.>
 LINE_VALUE: <handicap/line value if applicable, e.g., 2.5, +0.5, or NONE>
 SIDE: <OVER, UNDER, TEAM_A, TEAM_B, DRAW, YES, NO, or specific team name>
@@ -233,12 +234,20 @@ KICKOFF_TIME: <kickoff time in ISO8601 UTC format if visible, or UNKNOWN>
 MULTI_LEG: <YES if accumulator/multi-leg bet, NO if single bet>
 
 Market Codes:
-- TOTAL_GOALS_OVER_UNDER: Total goals over/under
-- HANDICAP: Asian handicap or spread
-- MONEYLINE: Match winner (1X2)
-- BOTH_TEAMS_TO_SCORE: Both teams score yes/no
-- DOUBLE_CHANCE: Double chance market
-- CORRECT_SCORE: Exact score prediction
+- TOTAL_GOALS_OVER_UNDER: Football goals O/U (full match)
+- FIRST_HALF_TOTAL_GOALS: Football 1H goals O/U
+- SECOND_HALF_TOTAL_GOALS: Football 2H goals O/U
+- TOTAL_CARDS_OVER_UNDER: Football bookings/cards O/U (match)
+- TOTAL_CORNERS_OVER_UNDER: Football corners O/U (match)
+- TOTAL_SHOTS_OVER_UNDER: Football shots O/U (match)
+- TOTAL_SHOTS_ON_TARGET_OVER_UNDER: Football shots on target O/U (match)
+- BOTH_TEAMS_TO_SCORE: Football BTTS yes/no
+- RED_CARD_AWARDED: Football red card awarded yes/no (any team)
+- PENALTY_AWARDED: Football penalty awarded yes/no (any team)
+- DRAW_NO_BET: Football two-way (home/away) with draw void
+- ASIAN_HANDICAP: Two-way Asian handicap/spread
+- MATCH_WINNER: Tennis match winner (two-way) or football two-way contexts only
+- TOTAL_GAMES_OVER_UNDER: Tennis total games O/U (match)
 - OTHER: Any other market type
 
 Important:
@@ -252,6 +261,7 @@ Example output:
 EVENT: Manchester United vs Liverpool
 SPORT: football
 LEAGUE: Premier League
+MARKET_LABEL: Over/Under 2.5 Goals (Full Time)
 MARKET_CODE: TOTAL_GOALS_OVER_UNDER
 PERIOD_SCOPE: FULL_MATCH
 LINE_VALUE: 2.5
@@ -291,6 +301,8 @@ MULTI_LEG: NO
                     data["sport"] = value if value != "UNKNOWN" else None
                 elif key == "LEAGUE":
                     data["league"] = value if value != "UNKNOWN" else None
+                elif key == "MARKET_LABEL":
+                    data["market_label"] = value if value != "UNKNOWN" else None
                 elif key == "MARKET_CODE":
                     data["market_code"] = value if value != "UNKNOWN" else None
                 elif key == "PERIOD_SCOPE":

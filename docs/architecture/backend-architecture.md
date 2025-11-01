@@ -26,7 +26,7 @@ src/
 │   └── types.py                # Shared type definitions (Decimal, enums)
 ├── services/
 │   ├── bet_ingestion.py        # FR-1: OCR pipeline, bet creation
-│   ├── bet_verification.py     # FR-2: Approval workflow, audit log
+│   ├── bet_verification.py     # FR-2: Approval workflow, canonical event auto-creation, audit log
 │   ├── surebet_matcher.py      # FR-3: Deterministic matching logic
 │   ├── surebet_calculator.py   # FR-4: ROI calculation
 │   ├── coverage_service.py     # FR-5: Coverage proof distribution

@@ -241,17 +241,23 @@ def create_surebets_table(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS surebets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             canonical_event_id INTEGER NOT NULL,
-            canonical_market_id INTEGER NOT NULL,
+            canonical_market_id INTEGER,
+            market_code TEXT NOT NULL,
+            period_scope TEXT NOT NULL,
+            line_value TEXT,
             status TEXT NOT NULL DEFAULT 'open',
             total_stake_eur TEXT,
             expected_profit_eur TEXT,
             actual_profit_eur TEXT,
             settled_at_utc TEXT,
+            worst_case_profit_eur TEXT,
+            total_staked_eur TEXT,
+            roi TEXT,
+            risk_classification TEXT,
             created_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
             updated_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
             FOREIGN KEY (canonical_event_id) REFERENCES canonical_events(id),
             FOREIGN KEY (canonical_market_id) REFERENCES canonical_markets(id),
-            UNIQUE(canonical_event_id, canonical_market_id),
             CHECK (status IN ('open', 'matched', 'settled', 'cancelled'))
         )
     """
@@ -260,7 +266,7 @@ def create_surebets_table(conn: sqlite3.Connection) -> None:
     # Index for status lookup
     conn.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_surebets_status 
+        CREATE INDEX IF NOT EXISTS idx_surebets_status
         ON surebets(status)
     """
     )

@@ -4,7 +4,13 @@
       "Bash(python -m pytest:*)",
       "Bash(python -m black:*)",
       "Bash(python -m mypy:*)",
-      "Bash(if not exist \"docs\\qa\\gates\" mkdir \"docs\\qa\\gates\")"
+      "Bash(if not exist \"docs\\qa\\gates\" mkdir \"docs\\qa\\gates\")",
+      "Bash(dir:*)",
+      "Bash(sqlite3:*)",
+      "Bash(python:*)",
+      "Bash(if not exist \"scripts\" mkdir \"scripts\")",
+      "Bash(chcp 65001:*)",
+      "Bash(set:*)"
     ],
     "deny": [],
     "ask": []

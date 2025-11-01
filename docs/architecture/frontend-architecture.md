@@ -160,6 +160,61 @@ def render_bet_card(bet, editable=False):
                 bet.canonical_event_id = st.selectbox(
                     "Event", options=load_events(), key=f"event_{bet.id}"
                 )
+                # Event Creation Modal (Story 2.3)
+                @st.dialog("Create New Event")
+                def create_event_modal(bet):
+                    """
+                    Modal for manual canonical event creation.
+                    Pre-fills OCR-extracted values from bet.
+                    """
+                    event_name = st.text_input(
+                        "Event Name",
+                        value=bet.extracted_event_name or "",
+                        placeholder="e.g., Manchester United vs Liverpool"
+                    )
+
+                    sport = st.selectbox(
+                        "Sport",
+                        options=["FOOTBALL", "TENNIS", "BASKETBALL", "CRICKET", "RUGBY"],
+                        index=0
+                    )
+
+                    competition = st.text_input(
+                        "Competition (Optional)",
+                        value=bet.extracted_competition or "",
+                        placeholder="e.g., Premier League, ATP Masters"
+                    )
+
+                    kickoff_time = st.text_input(
+                        "Kickoff Time (UTC)",
+                        value=bet.kickoff_time_utc or "",
+                        placeholder="YYYY-MM-DDTHH:MM:SSZ"
+                    )
+
+                    if st.button("Create Event", type="primary"):
+                        # Validation
+                        if not event_name or len(event_name) < 5:
+                            st.error("Event name must be at least 5 characters")
+                            return
+
+                        if not validate_iso8601_utc(kickoff_time):
+                            st.error("Invalid kickoff time format. Use YYYY-MM-DDTHH:MM:SSZ")
+                            return
+
+                        # Create event via service layer
+                        verification_service = BetVerificationService(get_db_connection())
+                        event_id = verification_service._create_canonical_event(
+                            event_name=event_name,
+                            sport=sport,
+                            competition=competition or None,
+                            kickoff_time_utc=kickoff_time
+                        )
+
+                        if event_id:
+                            st.success(f"Event created: {event_name}")
+                            st.rerun()
+                        else:
+                            st.error("Failed to create event. Check logs.")
                 # ... other editable fields
 
             st.write(f"Market: {bet.market_code}")

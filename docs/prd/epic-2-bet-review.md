@@ -190,6 +190,66 @@ Two interconnected UI components:
 
 ---
 
+### Story 2.3: Canonical Event Auto-Creation
+
+**As the system**, I want to automatically create canonical events from OCR-extracted data when the operator approves a bet so that matching (Epic 3) has the required canonical_event_id.
+
+**Acceptance Criteria:**
+- [ ] When operator approves bet (Story 2.2) with `canonical_event_id = NULL`:
+  - System extracts event data from OCR fields:
+    - `event_name` from bet's extracted event text
+    - `sport` from bet's sport classification
+    - `kickoff_time_utc` from bet's extracted kickoff time
+    - `competition` (optional) from bet's competition text
+- [ ] Before creating new event, perform fuzzy matching check:
+  - Query existing `canonical_events` for similar event within ±24h of kickoff
+  - Use fuzzy string matching (e.g., Levenshtein distance) on event_name
+  - If match confidence > 80%: Use existing event_id
+  - If match confidence ≤ 80%: Create new event
+- [ ] Fuzzy matching algorithm:
+  - Normalize event names (lowercase, remove punctuation)
+  - Calculate similarity score using `rapidfuzz` library
+  - Match threshold: 80% similarity
+  - Time window: ±24 hours of kickoff_time_utc
+- [ ] If no match found, create new `canonical_events` row:
+  - `INSERT INTO canonical_events (event_name, sport, competition, kickoff_time_utc)`
+  - Return newly created `event_id`
+- [ ] Update bet record with `canonical_event_id` before changing status to "verified"
+- [ ] Manual override option in UI:
+  - "Create New Event" button in bet card dropdown
+  - Opens modal with fields: event_name, sport, competition, kickoff_time_utc
+  - Operator can manually create event if auto-match fails
+  - Modal pre-fills OCR-extracted values for easy editing
+- [ ] Validation:
+  - event_name: Required, min 5 chars
+  - sport: Required, from predefined list (FOOTBALL, TENNIS, BASKETBALL, etc.)
+  - kickoff_time_utc: Required, ISO8601 format with "Z" suffix
+  - competition: Optional, max 100 chars
+- [ ] Error handling:
+  - If event creation fails (DB error), show error message
+  - Bet remains in "incoming" status (not approved)
+  - Log error for debugging
+- [ ] Audit logging:
+  - Log canonical event creation to `verification_audit` table
+  - Fields: `bet_id`, `field_name="canonical_event_id"`, `old_value=NULL`, `new_value=<event_id>`, `edited_by="auto|local_user"`
+
+**Technical Notes:**
+- Extend `BetVerificationService` in `src/services/bet_verification.py`
+- Add method: `get_or_create_canonical_event(bet_id) -> int`
+- Use fuzzy matching library: `rapidfuzz` (faster than fuzzywuzzy)
+- Fuzzy matching query:
+  ```sql
+  SELECT id, event_name, kickoff_time_utc
+  FROM canonical_events
+  WHERE sport = <bet.sport>
+    AND ABS(julianday(kickoff_time_utc) - julianday(<bet.kickoff_time_utc>)) <= 1
+  ```
+  Then filter in Python with `rapidfuzz.fuzz.ratio()`
+- Transaction: Create event + update bet.canonical_event_id atomically
+- UI modal: Use `st.dialog()` for "Create New Event" form
+
+---
+
 ## User Acceptance Testing Scenarios
 
 ### Scenario 1: High-Confidence Bet (Quick Approve)
@@ -322,7 +382,7 @@ CREATE TABLE verification_audit (
 Epic 2 is complete when ALL of the following are verified:
 
 ### Functional Validation
-- [ ] All 2 stories (2.1-2.2) marked complete with passing acceptance criteria
+- [ ] All 3 stories (2.1-2.3) marked complete with passing acceptance criteria
 - [ ] Incoming Bets queue displays all `status="incoming"` bets
 - [ ] Screenshot previews load correctly
 - [ ] Inline editing works for all fields
@@ -361,7 +421,7 @@ Epic 2 is complete when ALL of the following are verified:
 ## Success Metrics
 
 ### Completion Criteria
-- All 2 stories delivered with passing acceptance criteria
+- All 3 stories delivered with passing acceptance criteria
 - Epic 2 "Definition of Done" checklist 100% complete
 - Zero blockers for Epic 3 (Surebet Matching)
 
