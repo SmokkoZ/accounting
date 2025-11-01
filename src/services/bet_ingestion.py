@@ -17,6 +17,9 @@ import structlog
 from src.core.database import get_db_connection
 from src.integrations.openai_client import OpenAIClient
 from src.services.market_normalizer import MarketNormalizer
+from src.services.event_normalizer import EventNormalizer
+from src.services.bet_verification import BetVerificationService
+from src.core.config import Config
 from src.utils.datetime_helpers import utc_now_iso
 
 logger = structlog.get_logger()
@@ -95,11 +98,45 @@ class BetIngestionService:
                 merged[k] = v
             extraction_result = merged
 
+            # Normalize event name before any auto-creation
+            normalized_event = EventNormalizer.normalize_event_name(
+                extraction_result.get("canonical_event"),
+                extraction_result.get("sport"),
+            )
+            if normalized_event:
+                extraction_result["canonical_event"] = normalized_event
+
             # Update bet record with extracted + normalized data
             self._update_bet_with_extraction(bet_id, extraction_result)
 
             # Log extraction metadata
             self._log_extraction_metadata(bet_id, extraction_result, success=True)
+
+            # Optionally auto-create/match canonical event on OCR success
+            try:
+                conf = extraction_result.get("confidence")
+                conf_f = float(conf) if conf is not None else 0.0
+                if (
+                    Config.AUTO_CREATE_EVENT_ON_OCR
+                    and extraction_result.get("canonical_event")
+                    and conf_f >= Config.OCR_EVENT_CONFIDENCE_THRESHOLD
+                ):
+                    svc = BetVerificationService(self.db)
+                    event_id = svc.get_or_create_canonical_event(
+                        bet_id=bet_id,
+                        event_name=extraction_result.get("canonical_event"),
+                        sport=extraction_result.get("sport"),
+                        competition=extraction_result.get("league"),
+                        kickoff_time_utc=extraction_result.get("kickoff_time_utc"),
+                    )
+                    # Persist event_id onto bet without changing status
+                    self.db.execute(
+                        "UPDATE bets SET canonical_event_id = ?, updated_at_utc = ? WHERE id = ?",
+                        (event_id, utc_now_iso(), bet_id),
+                    )
+                    self.db.commit()
+            except Exception as e:
+                logger.error("auto_event_create_on_ocr_failed", bet_id=bet_id, error=str(e))
 
             logger.info(
                 "bet_extraction_completed",
@@ -184,7 +221,21 @@ class BetIngestionService:
         add("stake_original", stake)
         add("odds_original", odds)
         add("payout", payout)
-        add("currency", extraction_result.get("currency"))
+        # Enforce currency from associate's home currency, do not trust OCR
+        try:
+            cur = self.db.execute(
+                """
+                SELECT a.home_currency
+                FROM bets b JOIN associates a ON b.associate_id = a.id
+                WHERE b.id = ?
+                """,
+                (bet_id,),
+            )
+            row = cur.fetchone()
+            forced_currency = (row[0] if row and row[0] else None)
+        except Exception:
+            forced_currency = None
+        add("currency", forced_currency or extraction_result.get("currency"))
         add("kickoff_time_utc", extraction_result.get("kickoff_time_utc"))
         add(
             "normalization_confidence",

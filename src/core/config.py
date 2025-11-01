@@ -40,6 +40,10 @@ class Config:
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
+    # Event creation/normalization
+    AUTO_CREATE_EVENT_ON_OCR: bool = os.getenv("AUTO_CREATE_EVENT_ON_OCR", "true").lower() in ("1", "true", "yes", "y")
+    OCR_EVENT_CONFIDENCE_THRESHOLD: float = float(os.getenv("OCR_EVENT_CONFIDENCE_THRESHOLD", "0.90"))
+
     @classmethod
     def validate(cls) -> None:
         """

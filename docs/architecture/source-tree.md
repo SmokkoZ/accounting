@@ -1,4 +1,4 @@
-# Source Tree Documentation
+﻿# Source Tree Documentation
 
 **Version:** v4
 **Last Updated:** 2025-10-29
@@ -16,18 +16,18 @@ This document explains the directory structure and purpose of each file/folder i
 
 ```
 surebet-accounting/
-├── .env                        # Environment config (API keys, paths)
-├── .env.example                # Template for .env (committed to git)
-├── .gitignore                  # Git ignore rules
-├── .pre-commit-config.yaml     # Pre-commit hooks config
-├── mypy.ini                    # Type checking config
-├── pytest.ini                  # Pytest config
-├── requirements.txt            # Python dependencies
-├── README.md                   # Project overview, quick start
-├── data/                       # Data directory (git-ignored)
-├── docs/                       # Documentation
-├── src/                        # Source code
-└── tests/                      # Test suite
+â”œâ”€â”€ .env                        # Environment config (API keys, paths)
+â”œâ”€â”€ .env.example                # Template for .env (committed to git)
+â”œâ”€â”€ .gitignore                  # Git ignore rules
+â”œâ”€â”€ .pre-commit-config.yaml     # Pre-commit hooks config
+â”œâ”€â”€ mypy.ini                    # Type checking config
+â”œâ”€â”€ pytest.ini                  # Pytest config
+â”œâ”€â”€ requirements.txt            # Python dependencies
+â”œâ”€â”€ README.md                   # Project overview, quick start
+â”œâ”€â”€ data/                       # Data directory (git-ignored)
+â”œâ”€â”€ docs/                       # Documentation
+â”œâ”€â”€ src/                        # Source code
+â””â”€â”€ tests/                      # Test suite
 ```
 
 ---
@@ -141,21 +141,21 @@ ruff>=0.1.0
 
 ```
 data/
-├── surebet.db                  # SQLite database
-├── surebet.db-shm              # Shared memory (WAL mode)
-├── surebet.db-wal              # Write-ahead log
-├── screenshots/                # Bet screenshots
-│   ├── 20251029_120530_2_5_1234.png
-│   ├── 20251029_121045_3_7_1235.png
-│   └── ...
-├── exports/                    # CSV exports
-│   ├── ledger_20251029.csv
-│   ├── ledger_backup_20251028.csv
-│   └── ...
-└── logs/                       # Application logs
-    ├── application.log
-    ├── telegram_bot.log
-    └── settlement.log
+â”œâ”€â”€ surebet.db                  # SQLite database
+â”œâ”€â”€ surebet.db-shm              # Shared memory (WAL mode)
+â”œâ”€â”€ surebet.db-wal              # Write-ahead log
+â”œâ”€â”€ screenshots/                # Bet screenshots
+â”‚   â”œâ”€â”€ 20251029_120530_2_5_1234.png
+â”‚   â”œâ”€â”€ 20251029_121045_3_7_1235.png
+â”‚   â””â”€â”€ ...
+â”œâ”€â”€ exports/                    # CSV exports
+â”‚   â”œâ”€â”€ ledger_20251029.csv
+â”‚   â”œâ”€â”€ ledger_backup_20251028.csv
+â”‚   â””â”€â”€ ...
+â””â”€â”€ logs/                       # Application logs
+    â”œâ”€â”€ application.log
+    â”œâ”€â”€ telegram_bot.log
+    â””â”€â”€ settlement.log
 ```
 
 **Purpose:** Local data storage (database, screenshots, logs, exports)
@@ -168,20 +168,20 @@ data/
 
 ```
 docs/
-├── prd.md                      # Product Requirements Document
-├── architecture.md             # Main architecture document
-└── architecture/               # Sharded architecture docs
-    ├── tech-stack.md
-    ├── frontend-architecture.md
-    ├── backend-architecture.md
-    ├── data-architecture.md
-    ├── integration-architecture.md
-    ├── deployment-architecture.md
-    ├── security-architecture.md
-    ├── testing-strategy.md
-    ├── data-flows.md
-    ├── coding-standards.md
-    └── source-tree.md (this file)
+â”œâ”€â”€ prd.md                      # Product Requirements Document
+â”œâ”€â”€ architecture.md             # Main architecture document
+â””â”€â”€ architecture/               # Sharded architecture docs
+    â”œâ”€â”€ tech-stack.md
+    â”œâ”€â”€ frontend-architecture.md
+    â”œâ”€â”€ backend-architecture.md
+    â”œâ”€â”€ data-architecture.md
+    â”œâ”€â”€ integration-architecture.md
+    â”œâ”€â”€ deployment-architecture.md
+    â”œâ”€â”€ security-architecture.md
+    â”œâ”€â”€ testing-strategy.md
+    â”œâ”€â”€ data-flows.md
+    â”œâ”€â”€ coding-standards.md
+    â””â”€â”€ source-tree.md (this file)
 ```
 
 **Purpose:** Project documentation (PRD, architecture, guides)
@@ -194,13 +194,13 @@ docs/
 
 ```
 src/
-├── core/                       # Core configuration and shared types
-├── services/                   # Business logic services
-├── integrations/               # External API clients
-├── models/                     # Domain entities
-├── ui/                         # Streamlit UI
-├── utils/                      # Shared utilities
-└── jobs/                       # Background jobs (cron scripts)
+â”œâ”€â”€ core/                       # Core configuration and shared types
+â”œâ”€â”€ services/                   # Business logic services
+â”œâ”€â”€ integrations/               # External API clients
+â”œâ”€â”€ models/                     # Domain entities
+â”œâ”€â”€ ui/                         # Streamlit UI
+â”œâ”€â”€ utils/                      # Shared utilities
+â””â”€â”€ jobs/                       # Background jobs (cron scripts)
 ```
 
 ---
@@ -209,11 +209,11 @@ src/
 
 ```
 src/core/
-├── __init__.py
-├── config.py                   # Environment config loader
-├── database.py                 # SQLite connection manager
-├── exceptions.py               # Custom exception classes
-└── types.py                    # Shared type definitions
+â”œâ”€â”€ __init__.py
+â”œâ”€â”€ config.py                   # Environment config loader
+â”œâ”€â”€ database.py                 # SQLite connection manager
+â”œâ”€â”€ exceptions.py               # Custom exception classes
+â””â”€â”€ types.py                    # Shared type definitions
 ```
 
 #### `config.py`
@@ -274,16 +274,16 @@ class SettlementError(Exception):
 
 ```
 src/services/
-├── __init__.py
-├── bet_ingestion.py            # FR-1: OCR pipeline, bet creation
-├── bet_verification.py         # FR-2: Approval workflow
-├── surebet_matcher.py          # FR-3: Deterministic matching
-├── surebet_calculator.py       # FR-4: ROI calculation
-├── coverage_service.py         # FR-5: Coverage proof delivery
-├── settlement_engine.py        # FR-6: Settlement math
-├── ledger_service.py           # Ledger queries, export
-├── fx_manager.py               # FX rate caching
-└── reconciliation.py           # FR-8: Health check calculations
+â”œâ”€â”€ __init__.py
+â”œâ”€â”€ bet_ingestion.py            # FR-1: OCR pipeline, bet creation
+â”œâ”€â”€ bet_verification.py         # FR-2: Approval workflow
+â”œâ”€â”€ surebet_matcher.py          # FR-3: Deterministic matching
+â”œâ”€â”€ surebet_calculator.py       # FR-4: ROI calculation
+â”œâ”€â”€ coverage_service.py         # FR-5: Coverage proof delivery
+â”œâ”€â”€ settlement_engine.py        # FR-6: Settlement math
+â”œâ”€â”€ ledger_service.py           # Ledger queries, export
+â”œâ”€â”€ fx_manager.py               # FX rate caching
+â””â”€â”€ reconciliation.py           # FR-8: Health check calculations
 ```
 
 **Purpose:** Core domain logic (one file per functional area)
@@ -306,10 +306,10 @@ class SettlementEngine:
 
 ```
 src/integrations/
-├── __init__.py
-├── telegram_bot.py             # Telegram Bot API (polling, handlers)
-├── openai_client.py            # GPT-4o OCR + normalization
-└── fx_api_client.py            # FX rate API client
+â”œâ”€â”€ __init__.py
+â”œâ”€â”€ telegram_bot.py             # Telegram Bot API (polling, handlers)
+â”œâ”€â”€ openai_client.py            # GPT-4o OCR + normalization
+â””â”€â”€ fx_api_client.py            # FX rate API client
 ```
 
 **Purpose:** Wrappers for external services (Telegram, OpenAI, FX API)
@@ -329,11 +329,11 @@ class OpenAIClient:
 
 ```
 src/models/
-├── __init__.py
-├── bet.py                      # Bet domain model
-├── surebet.py                  # Surebet domain model
-├── ledger_entry.py             # Ledger entry model
-└── enums.py                    # Enums (BetStatus, SettlementState, etc.)
+â”œâ”€â”€ __init__.py
+â”œâ”€â”€ bet.py                      # Bet domain model
+â”œâ”€â”€ surebet.py                  # Surebet domain model
+â”œâ”€â”€ ledger_entry.py             # Ledger entry model
+â””â”€â”€ enums.py                    # Enums (BetStatus, SettlementState, etc.)
 ```
 
 **Purpose:** Data classes representing core entities
@@ -361,26 +361,26 @@ class Bet:
 
 ```
 src/ui/
-├── __init__.py
-├── app.py                      # Main entry point
-├── pages/
-│   ├── 1_incoming_bets.py      # FR-1, FR-2: Ingestion & review
-│   ├── 2_surebets.py           # FR-3, FR-4, FR-5: Matching & coverage
-│   ├── 3_settlement.py         # FR-6: Settlement
-│   ├── 4_reconciliation.py     # FR-8: Health check
-│   ├── 5_export.py             # FR-9: Ledger export
-│   └── 6_statements.py         # FR-10: Monthly statements
-├── components/
-│   ├── __init__.py
-│   ├── bet_card.py             # Reusable bet display
-│   ├── surebet_table.py        # Surebet summary table
-│   ├── settlement_preview.py   # Settlement calculation preview
-│   └── reconciliation_card.py  # Associate health card
-└── utils/
-    ├── __init__.py
-    ├── formatters.py           # EUR formatting, date display
-    ├── validators.py           # Input validation
-    └── state_management.py     # Session state helpers
+â”œâ”€â”€ __init__.py
+â”œâ”€â”€ app.py                      # Main entry point
+â”œâ”€â”€ pages/
+â”‚   â”œâ”€â”€ 1_incoming_bets.py      # FR-1, FR-2: Ingestion & review
+â”‚   â”œâ”€â”€ 2_surebets.py           # FR-3, FR-4, FR-5: Matching & coverage
+â”‚   â”œâ”€â”€ 3_settlement.py         # FR-6: Settlement
+â”‚   â”œâ”€â”€ 4_reconciliation.py     # FR-8: Health check
+â”‚   â”œâ”€â”€ 5_export.py             # FR-9: Ledger export
+â”‚   â””â”€â”€ 6_statements.py         # FR-10: Monthly statements
+â”œâ”€â”€ components/
+â”‚   â”œâ”€â”€ __init__.py
+â”‚   â”œâ”€â”€ bet_card.py             # Reusable bet display
+â”‚   â”œâ”€â”€ surebet_table.py        # Surebet summary table
+â”‚   â”œâ”€â”€ settlement_preview.py   # Settlement calculation preview
+â”‚   â””â”€â”€ reconciliation_card.py  # Associate health card
+â””â”€â”€ utils/
+    â”œâ”€â”€ __init__.py
+    â”œâ”€â”€ formatters.py           # Currency formatting (ISO codes), date display
+    â”œâ”€â”€ validators.py           # Input validation
+    â””â”€â”€ state_management.py     # Session state helpers
 ```
 
 **Purpose:** Streamlit web UI (pages, components, utilities)
@@ -393,10 +393,10 @@ src/ui/
 
 ```
 src/utils/
-├── __init__.py
-├── decimal_helpers.py          # Decimal arithmetic utilities
-├── datetime_helpers.py         # UTC ISO8601 formatting
-└── logging_config.py           # Structured logging setup
+â”œâ”€â”€ __init__.py
+â”œâ”€â”€ decimal_helpers.py          # Decimal arithmetic utilities
+â”œâ”€â”€ datetime_helpers.py         # UTC ISO8601 formatting
+â””â”€â”€ logging_config.py           # Structured logging setup
 ```
 
 **Purpose:** Cross-cutting utilities (logging, date formatting, decimal helpers)
@@ -417,9 +417,9 @@ def utc_now_iso() -> str:
 
 ```
 src/jobs/
-├── __init__.py
-├── fetch_fx_rates.py           # Daily FX rate update
-└── export_ledger_daily.py      # Automated CSV export
+â”œâ”€â”€ __init__.py
+â”œâ”€â”€ fetch_fx_rates.py           # Daily FX rate update
+â””â”€â”€ export_ledger_daily.py      # Automated CSV export
 ```
 
 **Purpose:** Cron-scheduled background tasks
@@ -443,29 +443,29 @@ if __name__ == "__main__":
 
 ```
 tests/
-├── __init__.py
-├── conftest.py                 # Shared fixtures (test DB, mocks)
-├── unit/                       # Unit tests (70% coverage target)
-│   ├── __init__.py
-│   ├── test_settlement_engine.py
-│   ├── test_surebet_calculator.py
-│   ├── test_surebet_matcher.py
-│   ├── test_fx_manager.py
-│   └── test_reconciliation.py
-├── integration/                # Integration tests (25% target)
-│   ├── __init__.py
-│   ├── test_bet_ingestion_flow.py
-│   ├── test_settlement_flow.py
-│   └── test_fx_caching.py
-├── e2e/                        # End-to-end tests (5% target)
-│   ├── __init__.py
-│   └── test_full_surebet_lifecycle.py
-└── fixtures/                   # Test data (screenshots, SQL seeds)
-    ├── sample_screenshots/
-    │   ├── bet_over_2_5.png
-    │   └── bet_under_2_5.png
-    ├── sample_associates.sql
-    └── sample_bets.sql
+â”œâ”€â”€ __init__.py
+â”œâ”€â”€ conftest.py                 # Shared fixtures (test DB, mocks)
+â”œâ”€â”€ unit/                       # Unit tests (70% coverage target)
+â”‚   â”œâ”€â”€ __init__.py
+â”‚   â”œâ”€â”€ test_settlement_engine.py
+â”‚   â”œâ”€â”€ test_surebet_calculator.py
+â”‚   â”œâ”€â”€ test_surebet_matcher.py
+â”‚   â”œâ”€â”€ test_fx_manager.py
+â”‚   â””â”€â”€ test_reconciliation.py
+â”œâ”€â”€ integration/                # Integration tests (25% target)
+â”‚   â”œâ”€â”€ __init__.py
+â”‚   â”œâ”€â”€ test_bet_ingestion_flow.py
+â”‚   â”œâ”€â”€ test_settlement_flow.py
+â”‚   â””â”€â”€ test_fx_caching.py
+â”œâ”€â”€ e2e/                        # End-to-end tests (5% target)
+â”‚   â”œâ”€â”€ __init__.py
+â”‚   â””â”€â”€ test_full_surebet_lifecycle.py
+â””â”€â”€ fixtures/                   # Test data (screenshots, SQL seeds)
+    â”œâ”€â”€ sample_screenshots/
+    â”‚   â”œâ”€â”€ bet_over_2_5.png
+    â”‚   â””â”€â”€ bet_under_2_5.png
+    â”œâ”€â”€ sample_associates.sql
+    â””â”€â”€ sample_bets.sql
 ```
 
 **Purpose:** Test suite (unit, integration, E2E)

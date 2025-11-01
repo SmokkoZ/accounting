@@ -1,4 +1,8 @@
-"""Display formatting utilities for Streamlit UI."""
+"""Display formatting utilities for Streamlit UI.
+
+All currency amounts are rendered with ISO currency codes (e.g., "AUD 100.00").
+EUR-specific helpers also use the code format ("EUR 100.00").
+"""
 
 from datetime import datetime
 from typing import Optional, Tuple
@@ -59,29 +63,25 @@ def format_confidence_badge(confidence: Optional[float]) -> Tuple[str, str, str]
 
 
 def format_currency_amount(amount: Optional[Decimal], currency: str) -> str:
-    """Format currency amount with symbol.
+    """Format currency amount using ISO code (e.g., "AUD 100.00").
 
     Args:
         amount: Decimal amount to format
         currency: Currency code (AUD, GBP, EUR, USD, etc.)
 
     Returns:
-        Formatted string like "$100.00" or "£1,000.00"
+        Formatted string like "AUD 100.00" or "EUR 1,000.00"
     """
     if amount is None:
         return "N/A"
 
-    currency_symbols = {
-        "AUD": "$",
-        "GBP": "£",
-        "EUR": "€",
-        "USD": "$",
-        "NZD": "$",
-        "CAD": "$",
-    }
-
-    symbol = currency_symbols.get(currency, currency)
-    return f"{symbol}{amount:,.2f}"
+    code = (currency or "").upper() if currency else "CUR"
+    if not isinstance(amount, Decimal):
+        try:
+            amount = Decimal(str(amount))
+        except Exception:
+            return f"{code} 0.00"
+    return f"{code} {amount:,.2f}"
 
 
 def format_bet_summary(
@@ -90,7 +90,7 @@ def format_bet_summary(
     payout: Optional[Decimal],
     currency: str,
 ) -> str:
-    """Format bet as 'stake @ odds = payout'.
+    """Format bet as 'CODE stake @ odds = CODE payout'.
 
     Args:
         stake: Stake amount
@@ -99,12 +99,19 @@ def format_bet_summary(
         currency: Currency code
 
     Returns:
-        Formatted string like "$100.00 @ 1.90 = $190.00"
+        Formatted string like "AUD 100.00 @ 1.90 = AUD 190.00"
     """
     if not all([stake, odds, payout]):
         return "Incomplete bet data"
 
-    return f"{format_currency_amount(stake, currency)} @ {odds} = {format_currency_amount(payout, currency)}"
+    try:
+        s = Decimal(stake) if not isinstance(stake, Decimal) else stake
+        p = Decimal(payout) if not isinstance(payout, Decimal) else payout
+    except Exception:
+        return "Incomplete bet data"
+
+    code = (currency or "").upper() if currency else "CUR"
+    return f"{code} {s:,.2f} @ {odds} = {code} {p:,.2f}"
 
 
 def format_market_display(market_code: Optional[str]) -> str:
@@ -144,24 +151,23 @@ def format_market_display(market_code: Optional[str]) -> str:
 
 
 def format_eur(amount: Optional[Decimal]) -> str:
-    """Format amount as EUR with symbol.
+    """Format amount as EUR using ISO code (e.g., "EUR 100.00").
 
     Args:
         amount: Decimal amount to format
 
     Returns:
-        Formatted string like "€100.00" or "€1,000.00"
+        Formatted string like "EUR 100.00" or "EUR 1,000.00"
     """
     if amount is None:
-        return "€0.00"
+        return "EUR 0.00"
 
     try:
-        # Convert string to Decimal if needed
         if isinstance(amount, str):
             amount = Decimal(amount)
-        return f"€{amount:,.2f}"
+        return f"EUR {amount:,.2f}"
     except (ValueError, TypeError, Exception):
-        return "€0.00"
+        return "EUR 0.00"
 
 
 def format_percentage(value: Optional[Decimal]) -> str:
@@ -177,7 +183,6 @@ def format_percentage(value: Optional[Decimal]) -> str:
         return "0.0%"
 
     try:
-        # Convert string to Decimal if needed
         if isinstance(value, str):
             value = Decimal(value)
         return f"{value:.1f}%"
@@ -228,3 +233,4 @@ def get_risk_badge_html(risk_classification: Optional[str]) -> str:
         return """<div style="background-color: #f8d7da; color: #721c24; padding: 8px;
                   border: 3px solid #dc3545; border-radius: 5px; text-align: center; font-weight: bold; font-size: 1.1em;">
                   ❌ UNSAFE</div>"""
+

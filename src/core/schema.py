@@ -99,6 +99,9 @@ def create_canonical_events_table(conn: sqlite3.Connection) -> None:
             normalized_event_name TEXT NOT NULL,
             league TEXT,
             sport TEXT,
+            team1_slug TEXT,
+            team2_slug TEXT,
+            pair_key TEXT,
             kickoff_time_utc TEXT,
             created_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
             updated_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z')
@@ -119,6 +122,27 @@ def create_canonical_events_table(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_canonical_events_kickoff 
         ON canonical_events(kickoff_time_utc)
     """
+    )
+
+    # Backfill columns for existing databases (ALTER TABLE adds if missing)
+    cursor = conn.execute("PRAGMA table_info(canonical_events)")
+    existing = {row[1] for row in cursor.fetchall()}
+    to_add = []
+    if "team1_slug" not in existing:
+        to_add.append(("team1_slug", "TEXT"))
+    if "team2_slug" not in existing:
+        to_add.append(("team2_slug", "TEXT"))
+    if "pair_key" not in existing:
+        to_add.append(("pair_key", "TEXT"))
+    for col, typ in to_add:
+        conn.execute(f"ALTER TABLE canonical_events ADD COLUMN {col} {typ}")
+
+    # Pair key index for normalized event matching
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_canonical_events_pair_key
+        ON canonical_events(sport, pair_key)
+        """
     )
 
 

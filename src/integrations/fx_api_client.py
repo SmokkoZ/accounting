@@ -8,6 +8,7 @@ import httpx
 import structlog
 from decimal import Decimal
 from typing import Dict, Optional
+from urllib.parse import urlencode, urljoin
 
 from src.core.config import Config
 from src.services.fx_manager import store_fx_rate, format_timestamp_utc
@@ -32,6 +33,33 @@ class FXAPIClient:
         if not self.api_key:
             logger.warning("fx_api_no_key", message="No FX API key configured")
 
+    def _build_request(self) -> tuple[str, dict]:
+        """
+        Build the request URL and headers for the configured FX provider.
+
+        Supports both v6 path-style keys and v4 query/header-based endpoints.
+
+        Returns:
+            (url, headers)
+        """
+        base = (self.base_url or "").rstrip("/") + "/"
+        headers: dict = {}
+
+        # v6 style: https://v6.exchangerate-api.com/v6/{API_KEY}/latest/EUR
+        if "v6.exchangerate-api.com" in base:
+            url = f"{base}{self.api_key}/latest/EUR"
+            return url, headers  # no header required
+
+        # v4 style: https://api.exchangerate-api.com/v4/latest/EUR?apiKey=KEY
+        if "api.exchangerate-api.com" in base:
+            url = f"{base}EUR?" + urlencode({"apiKey": self.api_key})
+            return url, headers
+
+        # Generic fallback: base + EUR with header apikey
+        url = f"{base}EUR"
+        headers = {"apikey": self.api_key} if self.api_key else {}
+        return url, headers
+
     async def fetch_rates_from_exchangerate_api(self) -> Dict[str, Decimal]:
         """
         Fetch FX rates from Exchangerate-API.com.
@@ -46,9 +74,8 @@ class FXAPIClient:
         if not self.api_key:
             raise ValueError("FX API key is required to fetch rates")
 
-        # Exchangerate-API uses EUR as base by default
-        url = f"{self.base_url}EUR"
-        headers = {"apikey": self.api_key}
+        # Build URL/headers based on configured provider
+        url, headers = self._build_request()
 
         async with httpx.AsyncClient() as client:
             try:

@@ -7,21 +7,35 @@ to prioritize review and identify potentially unsafe positions.
 
 import streamlit as st
 from decimal import Decimal
+from datetime import date
+import asyncio
 from typing import List, Dict, Optional
 from src.core.database import get_db_connection
 from src.ui.utils.formatters import (
-    format_eur,
     format_percentage,
     format_utc_datetime_local,
     format_market_display,
-    format_currency_amount,
     get_risk_badge_html,
 )
+from src.services.fx_manager import get_fx_rate, convert_to_eur
+from src.integrations.fx_api_client import fetch_daily_fx_rates
+from src.services.surebet_calculator import SurebetRiskCalculator
 
 
 # Configure page
 st.set_page_config(page_title="Surebets Dashboard", layout="wide")
 st.title("🎯 Surebets Safety Dashboard")
+
+
+def _format_amount_code(amount, code: str) -> str:
+    try:
+        if amount is None:
+            return f"{code} 0.00"
+        if isinstance(amount, str):
+            amount = Decimal(amount)
+        return f"{code} {amount:,.2f}"
+    except Exception:
+        return f"{code} 0.00"
 
 
 def load_open_surebets(
@@ -220,8 +234,8 @@ def render_surebet_card(surebet: Dict) -> None:
         total_staked = surebet.get("total_staked_eur")
         roi = surebet.get("roi")
 
-        calc_cols[0].metric("Worst-case Profit", format_eur(worst_case))
-        calc_cols[1].metric("Total Staked", format_eur(total_staked))
+        calc_cols[0].metric("Worst-case Profit", _format_amount_code(worst_case, "EUR"))
+        calc_cols[1].metric("Total Staked", _format_amount_code(total_staked, "EUR"))
         calc_cols[2].metric("ROI", format_percentage(roi))
 
         # Bets display
@@ -234,13 +248,27 @@ def render_surebet_card(surebet: Dict) -> None:
             st.markdown("**Side A**")
             if bets["A"]:
                 for bet in bets["A"]:
-                    stake_display = format_currency_amount(
-                        Decimal(bet["stake_original"]) if bet["stake_original"] else None,
-                        bet["currency"],
-                    )
+                    # Native amount display with ISO currency code (e.g., "AUD 80.00")
+                    native_amt = Decimal(bet["stake_original"]) if bet["stake_original"] else None
+                    stake_display = _format_amount_code(native_amt, bet["currency"]) if native_amt is not None else "N/A"
+                    # EUR conversion display (using FX table or fallback to stored stake_eur)
+                    eur_converted = None
+                    try:
+                        if native_amt is not None and bet.get("currency"):
+                            if bet["currency"].upper() == "EUR":
+                                eur_converted = native_amt
+                            else:
+                                rate = get_fx_rate(bet["currency"], date.today())
+                                eur_converted = convert_to_eur(native_amt, bet["currency"], rate)
+                        elif bet.get("stake_eur"):
+                            eur_converted = Decimal(bet["stake_eur"]) if bet["stake_eur"] else None
+                    except Exception:
+                        # If conversion fails, omit EUR display
+                        eur_converted = None
+                    eur_display = f" ({_format_amount_code(eur_converted, 'EUR')})" if eur_converted is not None else ""
                     st.write(
                         f"- {bet['associate_name']} @ {bet['bookmaker_name']}: "
-                        f"{stake_display} @ {bet['odds_original']}"
+                        f"{stake_display}{eur_display} @ {bet['odds_original']}"
                     )
             else:
                 st.caption("No bets on Side A")
@@ -249,13 +277,26 @@ def render_surebet_card(surebet: Dict) -> None:
             st.markdown("**Side B**")
             if bets["B"]:
                 for bet in bets["B"]:
-                    stake_display = format_currency_amount(
-                        Decimal(bet["stake_original"]) if bet["stake_original"] else None,
-                        bet["currency"],
-                    )
+                    # Native amount display with ISO currency code (e.g., "AUD 80.00")
+                    native_amt = Decimal(bet["stake_original"]) if bet["stake_original"] else None
+                    stake_display = _format_amount_code(native_amt, bet["currency"]) if native_amt is not None else "N/A"
+                    # EUR conversion display (using FX table or fallback to stored stake_eur)
+                    eur_converted = None
+                    try:
+                        if native_amt is not None and bet.get("currency"):
+                            if bet["currency"].upper() == "EUR":
+                                eur_converted = native_amt
+                            else:
+                                rate = get_fx_rate(bet["currency"], date.today())
+                                eur_converted = convert_to_eur(native_amt, bet["currency"], rate)
+                        elif bet.get("stake_eur"):
+                            eur_converted = Decimal(bet["stake_eur"]) if bet["stake_eur"] else None
+                    except Exception:
+                        eur_converted = None
+                    eur_display = f" ({_format_amount_code(eur_converted, 'EUR')})" if eur_converted is not None else ""
                     st.write(
                         f"- {bet['associate_name']} @ {bet['bookmaker_name']}: "
-                        f"{stake_display} @ {bet['odds_original']}"
+                        f"{stake_display}{eur_display} @ {bet['odds_original']}"
                     )
             else:
                 st.caption("No bets on Side B")
@@ -269,7 +310,7 @@ def render_surebet_card(surebet: Dict) -> None:
             detail_cols = st.columns(2)
             detail_cols[0].write(f"**If Side A wins:** Calculate profit scenario")
             detail_cols[1].write(f"**If Side B wins:** Calculate profit scenario")
-            st.write(f"**Worst case:** {format_eur(worst_case)}")
+            st.write(f"**Worst case:** {_format_amount_code(worst_case, 'EUR')}" )
 
             st.markdown("##### Screenshot Links")
             all_bets = bets["A"] + bets["B"]
@@ -314,7 +355,7 @@ st.markdown("---")
 
 # Filters and sorting controls
 st.markdown("### Filters & Sorting")
-control_cols = st.columns([2, 2, 2])
+control_cols = st.columns([2, 2, 2, 2])
 
 with control_cols[0]:
     sort_by = st.selectbox(
@@ -333,6 +374,49 @@ with control_cols[1]:
 with control_cols[2]:
     associates = ["All"] + load_associates()
     filter_associate = st.selectbox("Filter by associate", associates)
+
+with control_cols[3]:
+    st.caption("FX Rates")
+    if st.button("Update FX Rates Now", use_container_width=True):
+        try:
+            with st.spinner("Updating FX rates from API..."):
+                success = asyncio.run(fetch_daily_fx_rates())
+            if success:
+                st.success("FX rates updated. Recalculating open surebets...")
+                db_fx = get_db_connection()
+                rows = db_fx.execute("SELECT id FROM surebets WHERE status='open'").fetchall()
+                calc = SurebetRiskCalculator(db_fx)
+                for r in rows:
+                    sid = r["id"]
+                    try:
+                        data = calc.calculate_surebet_risk(sid)
+                        db_fx.execute(
+                            """
+                            UPDATE surebets
+                            SET worst_case_profit_eur = ?,
+                                total_staked_eur = ?,
+                                roi = ?,
+                                risk_classification = ?,
+                                updated_at_utc = datetime('now') || 'Z'
+                            WHERE id = ?
+                            """,
+                            (
+                                str(data["worst_case_profit_eur"]),
+                                str(data["total_staked_eur"]),
+                                str(data["roi"]),
+                                data["risk_classification"],
+                                sid,
+                            ),
+                        )
+                        db_fx.commit()
+                    except Exception:
+                        pass
+                db_fx.close()
+                st.success("Open surebets recalculated. Refresh to view updates.")
+            else:
+                st.error("Failed to update FX rates from API. Check config/network.")
+        except Exception as e:
+            st.error(f"FX update failed: {e}")
 
 st.markdown("---")
 

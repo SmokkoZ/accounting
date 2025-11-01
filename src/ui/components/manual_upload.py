@@ -12,6 +12,7 @@ import streamlit as st
 import structlog
 
 from src.core.database import get_db_connection
+from src.core.config import Config
 from src.services.bet_ingestion import BetIngestionService
 from src.utils.file_storage import save_screenshot, validate_file_size, validate_file_type
 from src.utils.datetime_helpers import utc_now_iso
@@ -23,74 +24,75 @@ def render_manual_upload_panel() -> None:
     """
     Render the manual bet upload panel in Streamlit.
 
-    This component provides:
+    Provides:
     - File uploader (PNG, JPG, JPEG)
     - Associate selection dropdown
     - Bookmaker selection dropdown (filtered by associate)
     - Optional note field
     - Submit button with validation
-    - Error handling and user feedback
     """
-    st.subheader("📤 Upload Manual Bet")
+    st.subheader("Upload Manual Bet")
     st.caption("For screenshots from WhatsApp, camera photos, or other sources")
 
+    # Database connection
+    db = get_db_connection()
+    st.caption(f"DB path: `{Config.DB_PATH}`")
+
+    # Associate selection (outside the form so it refreshes instantly)
+    associates = db.execute(
+        """
+        SELECT id, display_alias
+        FROM associates
+        ORDER BY display_alias
+        """
+    ).fetchall()
+
+    if not associates:
+        st.error("No associates found. Please add associates to the database first.")
+        return
+
+    associate_options = {row["display_alias"]: row["id"] for row in associates}
+    selected_associate_name = st.selectbox(
+        "Associate",
+        options=list(associate_options.keys()),
+        help="Who placed this bet?",
+        key="manual_upload_associate",
+    )
+    selected_associate_id = associate_options[selected_associate_name]
+    st.caption(f"Associate: {selected_associate_name} (id={selected_associate_id})")
+
+    # Bookmaker selection filtered by selected associate
+    bookmakers = db.execute(
+        """
+        SELECT id, bookmaker_name
+        FROM bookmakers
+        WHERE associate_id = ?
+        AND is_active = 1
+        ORDER BY bookmaker_name
+        """,
+        (selected_associate_id,),
+    ).fetchall()
+
+    bookmaker_options = {row["bookmaker_name"]: row["id"] for row in bookmakers} if bookmakers else {}
+    names = ", ".join(sorted(bookmaker_options.keys())) if bookmaker_options else "(none)"
+    st.caption(f"Bookmakers for {selected_associate_name}: {names}")
+
+    selected_bookmaker_name = st.selectbox(
+        "Bookmaker",
+        options=(list(bookmaker_options.keys()) if bookmaker_options else ["(None available)"]),
+        help="Which bookmaker account?",
+        key=f"manual_upload_bookmaker_{selected_associate_id}",
+    )
+    selected_bookmaker_id = bookmaker_options.get(selected_bookmaker_name)
+
+    # Submission form for file + note
     with st.form("manual_upload_form"):
-        # File upload
         uploaded_file = st.file_uploader(
             "Choose screenshot file",
             type=["png", "jpg", "jpeg"],
             help="Max file size: 10MB. Supported formats: PNG, JPG, JPEG",
         )
 
-        # Database connection
-        db = get_db_connection()
-
-        # Associate selection
-        associates = db.execute(
-            """
-            SELECT id, display_alias
-            FROM associates
-            ORDER BY display_alias
-            """
-        ).fetchall()
-
-        if not associates:
-            st.error("❌ No associates found. Please add associates to the database first.")
-            st.form_submit_button("Import & OCR", type="primary", disabled=True)
-            return
-
-        associate_options = {a["display_alias"]: a["id"] for a in associates}
-        selected_associate_name = st.selectbox(
-            "Associate", options=list(associate_options.keys()), help="Who placed this bet?"
-        )
-        selected_associate_id = associate_options[selected_associate_name]
-
-        # Bookmaker selection (filtered by associate)
-        bookmakers = db.execute(
-            """
-            SELECT id, bookmaker_name
-            FROM bookmakers
-            WHERE associate_id = ?
-            AND is_active = 1
-            ORDER BY bookmaker_name
-            """,
-            (selected_associate_id,),
-        ).fetchall()
-
-        if not bookmakers:
-            st.warning(f"⚠️ No bookmakers found for {selected_associate_name}")
-            bookmaker_options = {}
-        else:
-            bookmaker_options = {b["bookmaker_name"]: b["id"] for b in bookmakers}
-
-        selected_bookmaker_name = st.selectbox(
-            "Bookmaker",
-            options=(list(bookmaker_options.keys()) if bookmaker_options else ["(None available)"]),
-            help="Which bookmaker account?",
-        )
-        selected_bookmaker_id = bookmaker_options.get(selected_bookmaker_name)
-
-        # Optional note
         note = st.text_area(
             "Note (optional)",
             placeholder="e.g., 'From WhatsApp group', 'Sent via email'",
@@ -98,7 +100,6 @@ def render_manual_upload_panel() -> None:
             help="Add any context about this bet upload",
         )
 
-        # Submit button
         submitted = st.form_submit_button("Import & OCR", type="primary")
 
         if submitted:
@@ -124,24 +125,15 @@ def _process_manual_upload(
 ) -> None:
     """
     Process manual file upload with validation and OCR extraction.
-
-    Args:
-        uploaded_file: Streamlit UploadedFile object.
-        associate_id: ID of selected associate.
-        associate_name: Name of selected associate.
-        bookmaker_id: ID of selected bookmaker.
-        bookmaker_name: Name of selected bookmaker.
-        note: Optional operator note.
-        db: Database connection.
     """
     # Validation: File selected
     if not uploaded_file:
-        st.error("❌ Please select a file to upload")
+        st.error("Please select a file to upload")
         return
 
     # Validation: Bookmaker selected
     if not bookmaker_id:
-        st.error("❌ Please select a valid bookmaker")
+        st.error("Please select a valid bookmaker")
         return
 
     # Read file bytes
@@ -149,17 +141,17 @@ def _process_manual_upload(
 
     # Validation: File size
     if not validate_file_size(file_bytes, max_size_mb=10):
-        st.error("❌ File size exceeds 10MB limit. Please upload a smaller image.")
+        st.error("File size exceeds 10MB limit. Please upload a smaller image.")
         return
 
     # Validation: File type
     if not validate_file_type(uploaded_file.name):
-        st.error("❌ Invalid file type. Please upload PNG, JPG, or JPEG only.")
+        st.error("Invalid file type. Please upload PNG, JPG, or JPEG only.")
         return
 
     # Process upload
     try:
-        with st.spinner("💾 Saving screenshot..."):
+        with st.spinner("Saving screenshot..."):
             # Save screenshot to disk
             abs_path, rel_path = save_screenshot(
                 file_bytes, associate_name, bookmaker_name, source="manual_upload"
@@ -172,8 +164,15 @@ def _process_manual_upload(
                 bookmaker_id=bookmaker_id,
             )
 
-        with st.spinner("📝 Creating bet record..."):
+        with st.spinner("Creating bet record..."):
             # Create bet record in database
+            # Determine associate's home currency to set on bet
+            assoc_cur_row = db.execute(
+                "SELECT home_currency FROM associates WHERE id = ?",
+                (associate_id,),
+            ).fetchone()
+            assoc_currency = assoc_cur_row[0] if assoc_cur_row and assoc_cur_row[0] else "EUR"
+
             cursor = db.execute(
                 """
                 INSERT INTO bets (
@@ -195,7 +194,7 @@ def _process_manual_upload(
                     "incoming",
                     "0.0",  # Will be updated by OCR
                     "0.0",  # Will be updated by OCR
-                    "EUR",  # Default, will be updated by OCR
+                    assoc_currency,  # Inherit associate currency
                     rel_path,
                     "manual_upload",
                     utc_now_iso(),
@@ -206,7 +205,7 @@ def _process_manual_upload(
             bet_id = cursor.lastrowid
 
             if bet_id is None:
-                st.error("❌ Failed to create bet record")
+                st.error("Failed to create bet record")
                 logger.error("bet_creation_failed", error="lastrowid is None")
                 return
 
@@ -233,7 +232,7 @@ def _process_manual_upload(
                 has_note=bool(note and note.strip()),
             )
 
-        with st.spinner("🔍 Running OCR extraction..."):
+        with st.spinner("Running OCR extraction..."):
             # Run OCR extraction
             ingestion_service = BetIngestionService(db)
             extraction_success = ingestion_service.process_bet_extraction(bet_id)
@@ -253,29 +252,29 @@ def _process_manual_upload(
                 is_multi = bet_data["is_multi"] if bet_data else False
 
                 # Display success message
-                st.success(f"✅ Bet #{bet_id} added to review queue!")
+                st.success(f"Bet #{bet_id} added to review queue!")
 
                 # Display confidence
                 if confidence:
                     confidence_float = float(confidence)
                     if confidence_float >= 0.8:
-                        st.info(f"✅ High confidence: {confidence_float:.0%}")
+                        st.info(f"High confidence: {confidence_float:.0%}")
                     elif confidence_float >= 0.5:
-                        st.warning(f"⚠️ Medium confidence: {confidence_float:.0%}")
+                        st.warning(f"Medium confidence: {confidence_float:.0%}")
                     else:
-                        st.error(f"❌ Low confidence: {confidence_float:.0%}")
+                        st.error(f"Low confidence: {confidence_float:.0%}")
 
                 # Display multi-leg warning
                 if is_multi:
-                    st.error("🚫 **Accumulator detected** - Not supported by system")
+                    st.error("Accumulator detected — not supported by system")
 
             else:
                 st.warning(
-                    f"⚠️ Bet #{bet_id} created but OCR extraction failed. "
+                    f"Bet #{bet_id} created but OCR extraction failed. "
                     "Please review and enter data manually."
                 )
 
     except Exception as e:
         logger.error("manual_upload_failed", error=str(e), exc_info=True)
-        st.error(f"❌ Error processing upload: {str(e)}")
+        st.error(f"Error processing upload: {str(e)}")
         st.exception(e)

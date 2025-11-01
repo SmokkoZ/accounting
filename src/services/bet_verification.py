@@ -15,6 +15,7 @@ from datetime import datetime, UTC, timedelta
 from typing import Dict, Any, Optional, List, Tuple
 from decimal import Decimal
 from rapidfuzz import fuzz
+from src.services.event_normalizer import EventNormalizer
 
 logger = structlog.get_logger()
 
@@ -82,9 +83,8 @@ class BetVerificationService:
         ):
             # Check if bet has required fields for event creation
             has_event_name = event_name_candidate and len(event_name_candidate) >= 5
-            has_kickoff = bet.get("kickoff_time_utc")
-
-            if has_event_name and has_kickoff:
+            # Use relaxed get_or_create which can work without kickoff time
+            if has_event_name:
                 try:
                     # Extract sport from edited fields or default to football
                     sport = edited_fields.get("sport", "football")
@@ -96,6 +96,7 @@ class BetVerificationService:
                         event_name=event_name_candidate,
                         sport=sport,
                         competition=competition,
+                        kickoff_time_utc=bet.get("kickoff_time_utc"),
                     )
 
                     # Add event_id to edited fields
@@ -289,17 +290,101 @@ class BetVerificationService:
         if not kickoff_time_utc:
             kickoff_time_utc = bet.get("kickoff_time_utc")
 
+        # Normalize event name consistently and compute pair key
+        if event_name:
+            event_name = EventNormalizer.normalize_event_name(event_name, sport)
+        pair = EventNormalizer.compute_pair_key(event_name)
+
         # Validate required fields
         if not event_name or len(event_name) < 5:
             raise ValueError("Event name is required (minimum 5 characters)")
-        if not kickoff_time_utc:
-            raise ValueError("Kickoff time is required")
-        if not self._validate_iso8601_utc(kickoff_time_utc):
-            raise ValueError(
-                "Kickoff time must be in ISO8601 format with Z suffix (YYYY-MM-DDTHH:MM:SSZ)"
-            )
+        # Try exact pair_key match first
+        if pair:
+            team1_slug, team2_slug, pair_key = pair
+            row = self.db.execute(
+                "SELECT id FROM canonical_events WHERE sport = ? AND pair_key = ? ORDER BY id DESC LIMIT 1",
+                (sport.lower() if sport else None, pair_key),
+            ).fetchone()
+            if row:
+                logger.info(
+                    "canonical_event_matched_pair_key",
+                    bet_id=bet_id,
+                    event_id=row[0],
+                    pair_key=pair_key,
+                )
+                return int(row[0])
 
-        # Try fuzzy matching first
+        # If kickoff is missing or invalid, try a relaxed path to reduce operator workload
+        if not kickoff_time_utc or not self._validate_iso8601_utc(kickoff_time_utc):
+            # Exact lookup by normalized event name (case-insensitive), optionally by sport
+            params: List[Any] = []  # type: ignore[name-defined]
+            where = "LOWER(normalized_event_name) = LOWER(?)"
+            params.append(EventNormalizer.normalize_event_name(event_name, sport))
+            if sport:
+                where += " AND sport = ?"
+                params.append(sport.lower())
+
+            row = self.db.execute(
+                f"SELECT id FROM canonical_events WHERE {where} ORDER BY id DESC LIMIT 1",
+                tuple(params),
+            ).fetchone()
+            if row:
+                logger.info(
+                    "canonical_event_matched_relaxed",
+                    bet_id=bet_id,
+                    event_id=row[0],
+                    event_name=event_name,
+                )
+                return int(row[0])
+
+            # Try fuzzy name-only matching across existing canonical events for this sport
+            try:
+                cursor = self.db.execute(
+                    "SELECT id, normalized_event_name FROM canonical_events WHERE (? IS NULL OR sport = ?)",
+                    (sport.lower() if sport else None, sport.lower() if sport else None),
+                )
+                best_id: Optional[int] = None
+                best_score = 0.0
+                target = EventNormalizer.normalize_event_name(event_name, sport) or event_name
+                for row in cursor.fetchall():
+                    cand_id, cand_name = row[0], row[1]
+                    score = float(fuzz.ratio(
+                        EventNormalizer.normalize_event_name(cand_name, sport) or cand_name,
+                        target,
+                    ))
+                    if score > best_score:
+                        best_score = score
+                        best_id = cand_id
+                if best_id is not None and best_score >= 90.0:
+                    logger.info(
+                        "canonical_event_matched_relaxed_fuzzy",
+                        bet_id=bet_id,
+                        event_id=best_id,
+                        similarity=best_score,
+                        event_name=event_name,
+                    )
+                    return int(best_id)
+            except Exception:
+                # Non-fatal; fall back to create
+                pass
+
+            # Create a relaxed event without kickoff time
+            event_id = self._create_canonical_event_relaxed(
+                event_name=event_name,
+                sport=sport or "football",
+                competition=competition,
+                kickoff_time_utc=None,
+            )
+            logger.info(
+                "canonical_event_auto_created_relaxed",
+                bet_id=bet_id,
+                event_id=event_id,
+                event_name=event_name,
+                reason="missing_or_invalid_kickoff",
+            )
+            return event_id
+
+        # Try fuzzy matching first; if it fails, as a safety net try pair_key reuse again
         if sport and kickoff_time_utc:
             matched_event_id = self._fuzzy_match_existing_event(
                 event_name, sport, kickoff_time_utc
@@ -313,6 +398,23 @@ class BetVerificationService:
                 )
                 return matched_event_id
 
+            # Fallback: if we have a computed pair key, try to reuse existing event by pair key
+            pair = EventNormalizer.compute_pair_key(event_name)
+            if pair:
+                _, _, pk = pair
+                row = self.db.execute(
+                    "SELECT id FROM canonical_events WHERE (? IS NULL OR sport = ?) AND pair_key = ? ORDER BY id DESC LIMIT 1",
+                    (sport.lower() if sport else None, sport.lower() if sport else None, pk),
+                ).fetchone()
+                if row:
+                    logger.info(
+                        "canonical_event_matched_pair_key_fallback",
+                        bet_id=bet_id,
+                        event_id=row[0],
+                        pair_key=pk,
+                    )
+                    return int(row[0])
+
         # No match found, create new event
         event_id = self._create_canonical_event(
             event_name, sport or "football", competition, kickoff_time_utc
@@ -325,6 +427,102 @@ class BetVerificationService:
             match_attempted=bool(sport),
         )
         return event_id
+
+    def _create_canonical_event_relaxed(
+        self,
+        event_name: str,
+        sport: str,
+        competition: Optional[str],
+        kickoff_time_utc: Optional[str],
+    ) -> int:
+        """Create canonical event without requiring kickoff time.
+
+        Accepts None kickoff_time_utc and skips strict timestamp validation.
+        """
+        # Basic validation
+        if not event_name or len(event_name) < 5:
+            raise ValueError("Event name must be at least 5 characters")
+
+        valid_sports = ["football", "tennis", "basketball", "cricket", "rugby"]
+        if not sport or sport.lower() not in valid_sports:
+            raise ValueError(
+                f"Sport is required and must be one of: {', '.join(valid_sports)}"
+            )
+
+        pair = EventNormalizer.compute_pair_key(event_name)
+        if pair:
+            t1, t2, pk = pair
+        else:
+            t1 = t2 = pk = None
+
+        cursor = self.db.execute(
+            """
+            INSERT INTO canonical_events (
+                normalized_event_name, sport, league, team1_slug, team2_slug, pair_key, kickoff_time_utc
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (event_name, sport.lower(), competition, t1, t2, pk, kickoff_time_utc),
+        )
+        self.db.commit()
+        event_id = cursor.lastrowid
+        if event_id is None:
+            raise ValueError("Failed to create canonical event (relaxed)")
+        return int(event_id)
+
+    def update_verified_bet(
+        self,
+        bet_id: int,
+        edited_fields: Dict[str, Any],
+        verified_by: str = "local_user",
+    ) -> None:
+        """Update fields on an already-verified bet and attempt matching.
+
+        Keeps current bet status (verified/matched). Logs a MODIFIED audit entry
+        with before/after diffs. If bet remains in 'verified' status after update,
+        attempts to match it via SurebetMatcher.
+        """
+        # Load current bet
+        bet = self._load_bet(bet_id)
+        if not bet:
+            raise ValueError(f"Bet {bet_id} not found")
+
+        # Validate edited fields
+        if edited_fields:
+            self._validate_bet_fields(edited_fields)
+
+        # Log diffs
+        self._log_edits(bet_id, bet, edited_fields or {}, verified_by)
+
+        # Build UPDATE statement without changing status
+        if edited_fields:
+            timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            update_fields = ["updated_at_utc = ?"]
+            params: List[Any] = [timestamp]
+            for field_name, value in edited_fields.items():
+                if isinstance(value, Decimal):
+                    value = str(value)
+                update_fields.append(f"{field_name} = ?")
+                params.append(value)
+            params.append(bet_id)
+            query = f"UPDATE bets SET {', '.join(update_fields)} WHERE id = ?"
+            self.db.execute(query, tuple(params))
+            self.db.commit()
+
+        # Attempt matching only if bet is verified after updates
+        bet_after = self._load_bet(bet_id)
+        if bet_after and bet_after.get("status") == "verified":
+            try:
+                from src.services.surebet_matcher import SurebetMatcher
+
+                matcher = SurebetMatcher(self.db)
+                matcher.attempt_match(bet_id)
+            except Exception as e:
+                logger.error(
+                    "update_verified_bet_matching_failed",
+                    bet_id=bet_id,
+                    error=str(e),
+                )
 
     def _fuzzy_match_existing_event(
         self, event_name: str, sport: str, kickoff_time_utc: str
@@ -446,6 +644,9 @@ class BetVerificationService:
         Raises:
             ValueError: If validation fails
         """
+        # Normalize event name for storage
+        event_name = EventNormalizer.normalize_event_name(event_name, sport)
+
         # Validate event_name
         if not event_name or len(event_name) < 5:
             raise ValueError("Event name must be at least 5 characters")
@@ -468,12 +669,20 @@ class BetVerificationService:
             )
 
         # Insert new event
+        pair = EventNormalizer.compute_pair_key(event_name)
+        if pair:
+            t1, t2, pk = pair
+        else:
+            t1 = t2 = pk = None
+
         cursor = self.db.execute(
             """
-            INSERT INTO canonical_events (normalized_event_name, sport, league, kickoff_time_utc)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO canonical_events (
+                normalized_event_name, sport, league, team1_slug, team2_slug, pair_key, kickoff_time_utc
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (event_name, sport.lower(), competition, kickoff_time_utc),
+            (event_name, sport.lower(), competition, t1, t2, pk, kickoff_time_utc),
         )
         self.db.commit()
         event_id = cursor.lastrowid

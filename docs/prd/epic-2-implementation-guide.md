@@ -1,4 +1,4 @@
-# Epic 2: Bet Review & Approval - Implementation Guide
+﻿# Epic 2: Bet Review & Approval - Implementation Guide
 
 **Epic Reference**: [epic-2-bet-review.md](./epic-2-bet-review.md)
 **Status**: Ready for Development
@@ -13,10 +13,10 @@ This guide provides detailed, step-by-step implementation instructions for Epic 
 **Epic Goal**: Build unified review queue with inline editing and approval workflow for quality control.
 
 **Prerequisites**:
-- ✅ Epic 1 complete and tested
-- ✅ `status="incoming"` bets exist in database
-- ✅ Screenshots saved and accessible
-- ✅ Streamlit app running from Epic 1
+- âœ… Epic 1 complete and tested
+- âœ… `status="incoming"` bets exist in database
+- âœ… Screenshots saved and accessible
+- âœ… Streamlit app running from Epic 1
 
 ---
 
@@ -26,35 +26,35 @@ This guide provides detailed, step-by-step implementation instructions for Epic 
 
 ```
 Final_App/
-├── src/
-│   ├── database/
-│   │   ├── models.py                   # UPDATE: Add verification_audit table
-│   │   └── repositories/
-│   │       ├── bet_repository.py       # UPDATE: Add approve/reject methods
-│   │       ├── event_repository.py     # NEW: Canonical events CRUD
-│   │       └── audit_repository.py     # NEW: Verification audit logging
-│   ├── streamlit_app/
-│   │   ├── pages/
-│   │   │   └── 1_incoming_bets.py      # UPDATE: Add edit/approve UI (from Epic 1)
-│   │   ├── components/
-│   │   │   ├── bet_card.py             # NEW: Individual bet card component
-│   │   │   ├── inline_editor.py        # NEW: Inline editing component
-│   │   │   └── event_modal.py          # NEW: Create new event modal
-│   │   └── utils/
-│   │       ├── validators.py           # NEW: Field validation logic
-│   │       └── formatters.py           # NEW: Display formatters
-│   └── domain/
-│       ├── __init__.py
-│       └── bet_approval.py             # NEW: Business logic for approval
-├── tests/
-│   ├── unit/
-│   │   ├── test_validators.py          # NEW: Validation tests
-│   │   ├── test_bet_approval.py        # NEW: Approval logic tests
-│   │   └── test_audit_repository.py    # NEW: Audit tests
-│   └── integration/
-│       └── test_approval_flow.py       # NEW: End-to-end approval test
-└── config/
-    └── market_codes.yaml               # NEW: Market type definitions
+â”œâ”€â”€ src/
+â”‚   â”œâ”€â”€ database/
+â”‚   â”‚   â”œâ”€â”€ models.py                   # UPDATE: Add verification_audit table
+â”‚   â”‚   â””â”€â”€ repositories/
+â”‚   â”‚       â”œâ”€â”€ bet_repository.py       # UPDATE: Add approve/reject methods
+â”‚   â”‚       â”œâ”€â”€ event_repository.py     # NEW: Canonical events CRUD
+â”‚   â”‚       â””â”€â”€ audit_repository.py     # NEW: Verification audit logging
+â”‚   â”œâ”€â”€ streamlit_app/
+â”‚   â”‚   â”œâ”€â”€ pages/
+â”‚   â”‚   â”‚   â””â”€â”€ 1_incoming_bets.py      # UPDATE: Add edit/approve UI (from Epic 1)
+â”‚   â”‚   â”œâ”€â”€ components/
+â”‚   â”‚   â”‚   â”œâ”€â”€ bet_card.py             # NEW: Individual bet card component
+â”‚   â”‚   â”‚   â”œâ”€â”€ inline_editor.py        # NEW: Inline editing component
+â”‚   â”‚   â”‚   â””â”€â”€ event_modal.py          # NEW: Create new event modal
+â”‚   â”‚   â””â”€â”€ utils/
+â”‚   â”‚       â”œâ”€â”€ validators.py           # NEW: Field validation logic
+â”‚   â”‚       â””â”€â”€ formatters.py           # NEW: Display formatters
+â”‚   â””â”€â”€ domain/
+â”‚       â”œâ”€â”€ __init__.py
+â”‚       â””â”€â”€ bet_approval.py             # NEW: Business logic for approval
+â”œâ”€â”€ tests/
+â”‚   â”œâ”€â”€ unit/
+â”‚   â”‚   â”œâ”€â”€ test_validators.py          # NEW: Validation tests
+â”‚   â”‚   â”œâ”€â”€ test_bet_approval.py        # NEW: Approval logic tests
+â”‚   â”‚   â””â”€â”€ test_audit_repository.py    # NEW: Audit tests
+â”‚   â””â”€â”€ integration/
+â”‚       â””â”€â”€ test_approval_flow.py       # NEW: End-to-end approval test
+â””â”€â”€ config/
+    â””â”€â”€ market_codes.yaml               # NEW: Market type definitions
 ```
 
 ---
@@ -137,13 +137,13 @@ def format_confidence_badge(confidence: Optional[float]) -> tuple:
         Tuple of (emoji, label, st.color_name)
     """
     if confidence is None:
-        return ("❌", "Failed", "error")
+        return ("âŒ", "Failed", "error")
     elif confidence >= 0.8:
-        return ("✅", f"High ({confidence:.0%})", "success")
+        return ("âœ…", f"High ({confidence:.0%})", "success")
     elif confidence >= 0.5:
-        return ("⚠️", f"Medium ({confidence:.0%})", "warning")
+        return ("âš ï¸", f"Medium ({confidence:.0%})", "warning")
     else:
-        return ("❌", f"Low ({confidence:.0%})", "error")
+        return ("âŒ", f"Low ({confidence:.0%})", "error")
 
 def format_currency_amount(amount: Optional[Decimal], currency: str) -> str:
     """Format currency amount with symbol."""
@@ -152,8 +152,8 @@ def format_currency_amount(amount: Optional[Decimal], currency: str) -> str:
 
     currency_symbols = {
         "AUD": "$",
-        "GBP": "£",
-        "EUR": "€",
+        "GBP": "Â£",
+        "EUR": "â‚¬",
         "USD": "$"
     }
 
@@ -195,22 +195,22 @@ from decimal import Decimal
 
 def test_confidence_badge_high():
     emoji, label, color = format_confidence_badge(0.9)
-    assert emoji == "✅"
+    assert emoji == "âœ…"
     assert "High" in label
     assert color == "success"
 
 def test_confidence_badge_low():
     emoji, label, color = format_confidence_badge(0.3)
-    assert emoji == "❌"
+    assert emoji == "âŒ"
     assert "Low" in label
 
 def test_currency_formatting():
-    assert format_currency_amount(Decimal("100.50"), "GBP") == "£100.50"
-    assert format_currency_amount(Decimal("1000"), "EUR") == "€1,000.00"
+    assert format_currency_amount(Decimal("100.50"), "GBP") == "Â£100.50"
+    assert format_currency_amount(Decimal("1000"), "EUR") == "â‚¬1,000.00"
 
 def test_bet_summary():
     summary = format_bet_summary(Decimal("100"), Decimal("1.90"), Decimal("190"), "AUD")
-    assert "$100.00 @ 1.90 = $190.00" in summary
+    assert "AUD 100.00 @ 1.90 = AUD 190.00" in summary
 ```
 
 ---
@@ -266,7 +266,7 @@ def _render_screenshot_preview(bet: Dict[str, Any]):
         st.image(screenshot_path, width=150, caption="Click to enlarge")
 
         # Full-size modal (using expander)
-        with st.expander("🔍 View Full Size"):
+        with st.expander("ðŸ” View Full Size"):
             st.image(screenshot_path, use_column_width=True)
     else:
         st.warning("Screenshot\nnot found")
@@ -277,9 +277,9 @@ def _render_bet_details(bet: Dict[str, Any]):
     st.markdown(f"**Bet #{bet['bet_id']}** - {bet['associate']} @ {bet['bookmaker']}")
 
     # Source icon and timestamp
-    source_icon = "📱" if bet['ingestion_source'] == "telegram" else "📤"
+    source_icon = "ðŸ“±" if bet['ingestion_source'] == "telegram" else "ðŸ“¤"
     timestamp_rel = format_timestamp_relative(bet['created_at_utc'])
-    st.caption(f"{source_icon} {bet['ingestion_source']} • {timestamp_rel}")
+    st.caption(f"{source_icon} {bet['ingestion_source']} â€¢ {timestamp_rel}")
 
     # Extracted data
     if bet['canonical_event']:
@@ -295,7 +295,7 @@ def _render_bet_details(bet: Dict[str, Any]):
         if bet['side']:
             details.append(f"Side: {bet['side']}")
         if details:
-            st.caption(" • ".join(details))
+            st.caption(" â€¢ ".join(details))
 
         # Financial summary
         bet_summary = format_bet_summary(
@@ -305,16 +305,16 @@ def _render_bet_details(bet: Dict[str, Any]):
 
         # Kickoff time
         if bet.get('kickoff_time_utc'):
-            st.caption(f"⏰ Kickoff: {bet['kickoff_time_utc']}")
+            st.caption(f"â° Kickoff: {bet['kickoff_time_utc']}")
     else:
-        st.warning("⚠️ **Extraction failed** - manual entry required")
+        st.warning("âš ï¸ **Extraction failed** - manual entry required")
 
     # Special flags
     if bet.get('is_multi'):
-        st.error("🚫 **Accumulator - Not Supported**")
+        st.error("ðŸš« **Accumulator - Not Supported**")
 
     if bet.get('operator_note'):
-        st.info(f"📝 Note: {bet['operator_note']}")
+        st.info(f"ðŸ“ Note: {bet['operator_note']}")
 
 def _render_bet_actions(bet: Dict[str, Any], show_actions: bool):
     """Render confidence badge and action buttons."""
@@ -326,12 +326,12 @@ def _render_bet_actions(bet: Dict[str, Any], show_actions: bool):
         st.markdown("---")
 
         # Approve button (green)
-        if st.button("✅ Approve", key=f"approve_{bet['bet_id']}", type="primary"):
+        if st.button("âœ… Approve", key=f"approve_{bet['bet_id']}", type="primary"):
             st.session_state[f"approve_bet_{bet['bet_id']}"] = True
             st.rerun()
 
         # Reject button (red)
-        if st.button("❌ Reject", key=f"reject_{bet['bet_id']}"):
+        if st.button("âŒ Reject", key=f"reject_{bet['bet_id']}"):
             st.session_state[f"reject_bet_{bet['bet_id']}"] = True
             st.rerun()
 ```
@@ -352,10 +352,10 @@ from src.streamlit_app.components.bet_card import render_bet_card
 
 st.set_page_config(page_title="Incoming Bets", layout="wide")
 
-st.title("📥 Incoming Bets")
+st.title("ðŸ“¥ Incoming Bets")
 
 # Manual upload panel (from Epic 1)
-with st.expander("📤 Upload Manual Bet", expanded=False):
+with st.expander("ðŸ“¤ Upload Manual Bet", expanded=False):
     render_manual_upload_panel()
 
 st.markdown("---")
@@ -372,14 +372,14 @@ counts_query = """
 counts = session.execute(counts_query).fetchone()
 
 col1, col2, col3 = st.columns(3)
-col1.metric("⏳ Waiting Review", counts.waiting or 0)
-col2.metric("✅ Approved Today", counts.approved_today or 0)
-col3.metric("❌ Rejected Today", counts.rejected_today or 0)
+col1.metric("â³ Waiting Review", counts.waiting or 0)
+col2.metric("âœ… Approved Today", counts.approved_today or 0)
+col3.metric("âŒ Rejected Today", counts.rejected_today or 0)
 
 st.markdown("---")
 
 # Filter options (optional)
-with st.expander("🔍 Filters", expanded=False):
+with st.expander("ðŸ” Filters", expanded=False):
     filter_col1, filter_col2 = st.columns(2)
 
     with filter_col1:
@@ -395,14 +395,14 @@ with st.expander("🔍 Filters", expanded=False):
         # Filter by confidence
         confidence_filter = st.selectbox(
             "Filter by Confidence",
-            options=["All", "High (≥80%)", "Medium (50-79%)", "Low (<50%)", "Failed"],
+            options=["All", "High (â‰¥80%)", "Medium (50-79%)", "Low (<50%)", "Failed"],
             index=0
         )
 
 st.markdown("---")
 
 # Incoming bets queue
-st.subheader("📋 Bets Awaiting Review")
+st.subheader("ðŸ“‹ Bets Awaiting Review")
 
 # Build query with filters
 query = """
@@ -439,7 +439,7 @@ if "All" not in associate_filter and associate_filter:
 
 # Apply confidence filter
 if confidence_filter != "All":
-    if confidence_filter == "High (≥80%)":
+    if confidence_filter == "High (â‰¥80%)":
         query += " AND b.normalization_confidence >= 0.8"
     elif confidence_filter == "Medium (50-79%)":
         query += " AND b.normalization_confidence >= 0.5 AND b.normalization_confidence < 0.8"
@@ -457,7 +457,7 @@ else:
     incoming_bets = session.execute(query).fetchall()
 
 if not incoming_bets:
-    st.info("✨ No bets awaiting review! Queue is empty.")
+    st.info("âœ¨ No bets awaiting review! Queue is empty.")
 else:
     st.caption(f"Showing {len(incoming_bets)} bet(s)")
 
@@ -468,7 +468,7 @@ else:
 
 # Auto-refresh option
 st.markdown("---")
-if st.checkbox("🔄 Auto-refresh every 30 seconds"):
+if st.checkbox("ðŸ”„ Auto-refresh every 30 seconds"):
     import time
     time.sleep(30)
     st.rerun()
@@ -507,7 +507,7 @@ def validate_odds(odds: Optional[Decimal]) -> Tuple[bool, Optional[str]]:
     if odds is None:
         return False, "Odds are required"
     if odds < 1.0:
-        return False, "Odds must be ≥ 1.0"
+        return False, "Odds must be â‰¥ 1.0"
     return True, None
 
 def validate_payout(payout: Optional[Decimal], stake: Optional[Decimal]) -> Tuple[bool, Optional[str]]:
@@ -515,7 +515,7 @@ def validate_payout(payout: Optional[Decimal], stake: Optional[Decimal]) -> Tupl
     if payout is None:
         return False, "Payout is required"
     if stake and payout < stake:
-        return False, "Payout should be ≥ stake (sanity check)"
+        return False, "Payout should be â‰¥ stake (sanity check)"
     return True, None
 
 def validate_currency(currency: Optional[str]) -> Tuple[bool, Optional[str]]:
@@ -580,12 +580,12 @@ def test_validate_stake_zero():
 def test_validate_odds_too_low():
     is_valid, error = validate_odds(Decimal("0.5"))
     assert not is_valid
-    assert "≥ 1.0" in error
+    assert "â‰¥ 1.0" in error
 
 def test_validate_payout_less_than_stake():
     is_valid, error = validate_payout(Decimal("90"), Decimal("100"))
     assert not is_valid
-    assert "≥ stake" in error
+    assert "â‰¥ stake" in error
 
 def test_validate_all_fields():
     bet_data = {
@@ -917,7 +917,7 @@ def render_inline_editor(bet: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Dictionary of edited field values
     """
-    st.subheader(f"✏️ Edit Bet #{bet['bet_id']}")
+    st.subheader(f"âœï¸ Edit Bet #{bet['bet_id']}")
 
     edited_values = {}
 
@@ -928,7 +928,7 @@ def render_inline_editor(bet: Dict[str, Any]) -> Dict[str, Any]:
 
     events = event_repo.get_all_events(limit=50)
     event_options = {event_repo.get_event_display_string(e): e.canonical_event_id for e in events}
-    event_options["➕ Create New Event"] = "CREATE_NEW"
+    event_options["âž• Create New Event"] = "CREATE_NEW"
 
     # Pre-select current event if exists
     current_event_display = None
@@ -945,7 +945,7 @@ def render_inline_editor(bet: Dict[str, Any]) -> Dict[str, Any]:
         key=f"event_{bet['bet_id']}"
     )
 
-    if selected_event_display == "➕ Create New Event":
+    if selected_event_display == "âž• Create New Event":
         # Show create new event modal (Task 2.2.6)
         from src.streamlit_app.components.event_modal import render_create_event_modal
         new_event = render_create_event_modal(bet['bet_id'])
@@ -1046,7 +1046,7 @@ def render_inline_editor(bet: Dict[str, Any]) -> Dict[str, Any]:
     all_valid, errors = validate_all_fields(edited_values)
 
     if not all_valid:
-        st.error("❌ **Validation Errors:**")
+        st.error("âŒ **Validation Errors:**")
         for error in errors:
             st.write(f"- {error}")
 
@@ -1113,7 +1113,7 @@ def render_create_event_modal(bet_id: int):
                     kickoff_time_utc=kickoff_datetime_utc
                 )
 
-                st.success(f"✅ Event created: {event_name}")
+                st.success(f"âœ… Event created: {event_name}")
                 st.session_state[f"new_event_{bet_id}"] = new_event
                 st.rerun()
 
@@ -1146,7 +1146,7 @@ for bet in incoming_bets:
     # Check if approve button was clicked
     if st.session_state.get(f"approve_bet_{bet_id}"):
         # Show editor modal
-        with st.expander(f"✏️ Edit Bet #{bet_id}", expanded=True):
+        with st.expander(f"âœï¸ Edit Bet #{bet_id}", expanded=True):
             from src.streamlit_app.components.inline_editor import render_inline_editor
             from src.domain.bet_approval import BetApprovalService
 
@@ -1155,7 +1155,7 @@ for bet in incoming_bets:
             col1, col2 = st.columns(2)
 
             with col1:
-                if st.button(f"✅ Confirm Approval - Bet #{bet_id}", disabled=not is_valid, type="primary"):
+                if st.button(f"âœ… Confirm Approval - Bet #{bet_id}", disabled=not is_valid, type="primary"):
                     session = get_session()
                     approval_service = BetApprovalService(session)
 
@@ -1175,7 +1175,7 @@ for bet in incoming_bets:
 
     # Check if reject button was clicked
     if st.session_state.get(f"reject_bet_{bet_id}"):
-        with st.expander(f"❌ Reject Bet #{bet_id}", expanded=True):
+        with st.expander(f"âŒ Reject Bet #{bet_id}", expanded=True):
             st.warning("Are you sure you want to reject this bet?")
 
             rejection_reason = st.text_area(
@@ -1187,7 +1187,7 @@ for bet in incoming_bets:
             col1, col2 = st.columns(2)
 
             with col1:
-                if st.button(f"✅ Confirm Rejection - Bet #{bet_id}", type="primary"):
+                if st.button(f"âœ… Confirm Rejection - Bet #{bet_id}", type="primary"):
                     from src.domain.bet_approval import BetApprovalService
 
                     session = get_session()
@@ -1226,7 +1226,7 @@ from src.domain.bet_approval import BetApprovalService
 from src.database.repositories.audit_repository import AuditRepository
 
 def test_full_approval_flow_with_edits():
-    """Test complete approval flow: incoming → edit → approve → verified."""
+    """Test complete approval flow: incoming â†’ edit â†’ approve â†’ verified."""
     session = get_test_session()
 
     # Create test bet (from Epic 1)
@@ -1278,7 +1278,7 @@ def test_full_approval_flow_with_edits():
     assert any(a['old_value'] == '1.85' for a in audit_trail)
     assert any(a['new_value'] == '1.95' for a in audit_trail)
 
-    print("✅ Full approval flow test passed!")
+    print("âœ… Full approval flow test passed!")
     print(f"   Bet #{bet.bet_id} status: {bet.status}")
     print(f"   Audit trail entries: {len(audit_trail)}")
 ```
@@ -1319,7 +1319,7 @@ Run: `pytest tests/integration/test_approval_flow.py -v`
 
 **Steps**:
 1. Open "Incoming Bets" page
-2. Locate bet with ✅ High badge
+2. Locate bet with âœ… High badge
 3. Review extracted data
 4. Click "Approve" (no edits)
 5. Verify bet disappears from queue
@@ -1336,9 +1336,9 @@ Run: `pytest tests/integration/test_approval_flow.py -v`
 
 **Steps**:
 1. Open "Incoming Bets" page
-2. Locate bet with ⚠️ Low badge
+2. Locate bet with âš ï¸ Low badge
 3. Click "Approve"
-4. Edit odds: change 1.85 → 1.95
+4. Edit odds: change 1.85 â†’ 1.95
 5. Click "Confirm Approval"
 6. Verify bet approved with corrected value
 
@@ -1352,7 +1352,7 @@ Run: `pytest tests/integration/test_approval_flow.py -v`
 1. Have a bet with `is_multi=1`
 
 **Steps**:
-1. Locate bet with 🚫 Accumulator flag
+1. Locate bet with ðŸš« Accumulator flag
 2. Click "Reject"
 3. Enter reason: "Accumulator not supported"
 4. Click "Confirm Rejection"
@@ -1369,7 +1369,7 @@ Run: `pytest tests/integration/test_approval_flow.py -v`
 
 **Steps**:
 1. Click "Approve"
-2. In event dropdown, select "➕ Create New Event"
+2. In event dropdown, select "âž• Create New Event"
 3. Modal opens
 4. Enter: "Barcelona vs Real Madrid", Sport: Soccer, Date: tomorrow
 5. Click "Create Event"
@@ -1498,9 +1498,9 @@ audit_repo.log_multiple_changes(bet_id, {
 ### Epic 3 Preview
 
 Epic 3 (Surebet Matching) depends on:
-- ✅ `status="verified"` bets available
-- ✅ Multiple bets on same event
-- ✅ Opposite sides (OVER/UNDER, YES/NO, TEAM_A/TEAM_B)
+- âœ… `status="verified"` bets available
+- âœ… Multiple bets on same event
+- âœ… Opposite sides (OVER/UNDER, YES/NO, TEAM_A/TEAM_B)
 
 ---
 
