@@ -278,6 +278,7 @@ def create_surebets_table(conn: sqlite3.Connection) -> None:
             total_staked_eur TEXT,
             roi TEXT,
             risk_classification TEXT,
+            coverage_proof_sent_at_utc TEXT,
             created_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
             updated_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
             FOREIGN KEY (canonical_event_id) REFERENCES canonical_events(id),
@@ -294,6 +295,12 @@ def create_surebets_table(conn: sqlite3.Connection) -> None:
         ON surebets(status)
     """
     )
+
+    # Backfill coverage_proof_sent_at_utc column for existing databases
+    cursor = conn.execute("PRAGMA table_info(surebets)")
+    existing = {row[1] for row in cursor.fetchall()}
+    if "coverage_proof_sent_at_utc" not in existing:
+        conn.execute("ALTER TABLE surebets ADD COLUMN coverage_proof_sent_at_utc TEXT")
 
 
 def create_surebet_bets_table(conn: sqlite3.Connection) -> None:
@@ -428,13 +435,16 @@ def create_bookmaker_balance_checks_table(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             associate_id INTEGER NOT NULL,
             bookmaker_id INTEGER NOT NULL,
+            balance_native TEXT NOT NULL,
+            native_currency TEXT NOT NULL,
             balance_eur TEXT NOT NULL,
-            check_date TEXT NOT NULL,
-            notes TEXT,
+            fx_rate_used TEXT NOT NULL,
+            check_date_utc TEXT NOT NULL,
+            note TEXT,
             created_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
             FOREIGN KEY (associate_id) REFERENCES associates(id),
             FOREIGN KEY (bookmaker_id) REFERENCES bookmakers(id),
-            UNIQUE(associate_id, bookmaker_id, check_date)
+            UNIQUE(associate_id, bookmaker_id, check_date_utc)
         )
     """
     )
@@ -443,7 +453,7 @@ def create_bookmaker_balance_checks_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_balance_checks_bookmaker_date 
-        ON bookmaker_balance_checks(bookmaker_id, check_date)
+        ON bookmaker_balance_checks(bookmaker_id, check_date_utc)
     """
     )
 

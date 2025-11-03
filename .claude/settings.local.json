@@ -10,7 +10,13 @@
       "Bash(python:*)",
       "Bash(if not exist \"scripts\" mkdir \"scripts\")",
       "Bash(chcp 65001:*)",
-      "Bash(set:*)"
+      "Bash(set:*)",
+      "Bash(nul)",
+      "Bash(findstr:*)",
+      "SlashCommand(/BMad:agents:dev *help)",
+      "SlashCommand(/BMad:agents:dev:*)",
+      "Bash(if not exist \"tests\\unit\\test_validators.py\" type nul)",
+      "Bash(testsunittest_validators.py)"
     ],
     "deny": [],
     "ask": []

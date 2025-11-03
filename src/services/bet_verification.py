@@ -644,9 +644,6 @@ class BetVerificationService:
         Raises:
             ValueError: If validation fails
         """
-        # Normalize event name for storage
-        event_name = EventNormalizer.normalize_event_name(event_name, sport)
-
         # Validate event_name
         if not event_name or len(event_name) < 5:
             raise ValueError("Event name must be at least 5 characters")
@@ -735,8 +732,11 @@ class BetVerificationService:
         Returns:
             ID of the newly created event
         """
+        normalized_name = EventNormalizer.normalize_event_name(
+            event_name, sport or "football"
+        )
         return self._create_canonical_event(
-            event_name, sport or "football", league, kickoff_time_utc
+            normalized_name, sport or "football", league, kickoff_time_utc
         )
 
     def get_valid_sides_for_market(self, market_code: Optional[str]) -> List[str]:

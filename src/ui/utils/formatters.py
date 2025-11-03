@@ -101,12 +101,12 @@ def format_bet_summary(
     Returns:
         Formatted string like "AUD 100.00 @ 1.90 = AUD 190.00"
     """
-    if not all([stake, odds, payout]):
+    if stake is None or odds is None or payout is None:
         return "Incomplete bet data"
 
     try:
-        s = Decimal(stake) if not isinstance(stake, Decimal) else stake
-        p = Decimal(payout) if not isinstance(payout, Decimal) else payout
+        s = Decimal(str(stake)) if not isinstance(stake, Decimal) else stake
+        p = Decimal(str(payout)) if not isinstance(payout, Decimal) else payout
     except Exception:
         return "Incomplete bet data"
 
@@ -234,3 +234,38 @@ def get_risk_badge_html(risk_classification: Optional[str]) -> str:
                   border: 3px solid #dc3545; border-radius: 5px; text-align: center; font-weight: bold; font-size: 1.1em;">
                   ❌ UNSAFE</div>"""
 
+
+def format_currency_with_symbol(amount: Optional[Decimal], currency: str) -> str:
+    """Format currency amount with currency symbol (e.g., "€1,250.50").
+
+    Args:
+        amount: Decimal amount to format
+        currency: ISO currency code (EUR, GBP, USD, AUD, etc.)
+
+    Returns:
+        Formatted string with currency symbol and thousand separators
+    """
+    if amount is None:
+        return "N/A"
+
+    # Currency symbol mapping
+    symbols = {
+        "EUR": "€",
+        "GBP": "£",
+        "USD": "$",
+        "AUD": "A$",
+        "NZD": "NZ$",
+        "CAD": "C$",
+        "JPY": "¥",
+        "CHF": "CHF ",
+    }
+
+    symbol = symbols.get(currency.upper(), f"{currency.upper()} ")
+
+    if not isinstance(amount, Decimal):
+        try:
+            amount = Decimal(str(amount))
+        except Exception:
+            return f"{symbol}0.00"
+
+    return f"{symbol}{amount:,.2f}"

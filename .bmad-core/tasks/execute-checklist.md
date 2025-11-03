@@ -1,6 +1,6 @@
 <!-- Powered by BMAD™ Core -->
 
-# Checklist Validation Task
+story-draft-checklist
 
 This task provides instructions for validating documentation against checklists. The agent MUST follow these instructions to ensure thorough and systematic validation of documents.
 

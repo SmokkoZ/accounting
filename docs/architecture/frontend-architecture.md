@@ -23,12 +23,14 @@ src/ui/
 │   ├── 3_settlement.py         # FR-6, FR-7: Settlement & corrections
 │   ├── 4_reconciliation.py     # FR-8: Health check, funding events
 │   ├── 5_export.py             # FR-9: Ledger CSV export
-│   └── 6_statements.py         # FR-10: Monthly partner reports
+│   ├── 6_statements.py         # FR-10: Monthly partner reports
+│   └── 7_admin_associates.py   # FR-11: Associate & bookmaker management
 ├── components/
 │   ├── bet_card.py             # Reusable bet display component
 │   ├── surebet_table.py        # Surebet summary table
 │   ├── settlement_preview.py   # Settlement calculation preview
-│   └── reconciliation_card.py  # Per-associate summary card
+│   ├── reconciliation_card.py  # Per-associate summary card
+│   └── associate_forms.py      # Associate/bookmaker form components (FR-11)
 └── utils/
     ├── formatters.py           # EUR formatting, date display
     ├── validators.py           # Input validation helpers
@@ -49,6 +51,7 @@ Each functional requirement maps to one Streamlit page.
 - FR-8 → `4_reconciliation.py`
 - FR-9 → `5_export.py`
 - FR-10 → `6_statements.py`
+- FR-11 → `7_admin_associates.py`
 
 ### 2. Stateless Widgets
 - Streamlit reruns the entire script on every interaction

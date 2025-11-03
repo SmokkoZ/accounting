@@ -22,6 +22,12 @@ class Config:
     # Telegram
     TELEGRAM_BOT_TOKEN: Optional[str] = os.getenv("TELEGRAM_BOT_TOKEN")
     TELEGRAM_ADMIN_CHAT_ID: Optional[str] = os.getenv("TELEGRAM_ADMIN_CHAT_ID")
+    # Comma-separated Telegram user IDs who can run admin commands anywhere
+    TELEGRAM_ADMIN_USER_IDS: set[int] = set(
+        int(x)
+        for x in (os.getenv("TELEGRAM_ADMIN_USER_IDS") or "").replace(" ", "").split(",")
+        if x.isdigit()
+    )
 
     # OpenAI
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")

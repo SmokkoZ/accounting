@@ -9,10 +9,15 @@ This module handles:
 
 import os
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Optional
 
 from src.core.config import Config
+
+
+_SCHEMA_LOCK = threading.Lock()
+_SCHEMA_INITIALIZED = False
 
 
 def ensure_data_directory() -> None:
@@ -51,6 +56,21 @@ def get_db_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous = NORMAL")  # Balance safety vs performance
     conn.execute("PRAGMA cache_size = 10000")  # 10MB cache
     conn.execute("PRAGMA temp_store = MEMORY")  # Store temp tables in memory
+
+    # Ensure schema migrations (e.g., pair_key columns) are applied once per process
+    global _SCHEMA_INITIALIZED
+    if not _SCHEMA_INITIALIZED:
+        with _SCHEMA_LOCK:
+            if not _SCHEMA_INITIALIZED:
+                try:
+                    # Local import avoids circular dependency during module load
+                    from src.core.schema import create_schema
+
+                    create_schema(conn)
+                except Exception as exc:  # pragma: no cover - defensive log path
+                    print(f"WARNING: Failed to ensure schema is current: {exc}")
+                else:
+                    _SCHEMA_INITIALIZED = True
 
     return conn
 

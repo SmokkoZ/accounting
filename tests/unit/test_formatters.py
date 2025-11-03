@@ -13,6 +13,7 @@ from src.ui.utils.formatters import (
     format_percentage,
     format_utc_datetime_local,
     get_risk_badge_html,
+    format_currency_with_symbol,
 )
 
 
@@ -305,3 +306,52 @@ class TestRiskBadgeHTML:
         result = get_risk_badge_html("")
         assert "⚪" in result
         assert "Unknown" in result
+
+
+class TestCurrencyWithSymbol:
+    """Tests for currency symbol formatting."""
+
+    def test_format_currency_with_symbol_eur(self):
+        """Test EUR currency formatting."""
+        formatted = format_currency_with_symbol(Decimal("1250.50"), "EUR")
+        assert formatted == "€1,250.50"
+
+    def test_format_currency_with_symbol_gbp(self):
+        """Test GBP currency formatting."""
+        formatted = format_currency_with_symbol(Decimal("1250.50"), "GBP")
+        assert formatted == "£1,250.50"
+
+    def test_format_currency_with_symbol_usd(self):
+        """Test USD currency formatting."""
+        formatted = format_currency_with_symbol(Decimal("1250.50"), "USD")
+        assert formatted == "$1,250.50"
+
+    def test_format_currency_with_symbol_aud(self):
+        """Test AUD currency formatting."""
+        formatted = format_currency_with_symbol(Decimal("1250.50"), "AUD")
+        assert formatted == "A$1,250.50"
+
+    def test_format_currency_with_symbol_nzd(self):
+        """Test NZD currency formatting."""
+        formatted = format_currency_with_symbol(Decimal("1250.50"), "NZD")
+        assert formatted == "NZ$1,250.50"
+
+    def test_format_currency_with_symbol_unknown_currency(self):
+        """Test unknown currency formatting (fallback to code)."""
+        formatted = format_currency_with_symbol(Decimal("1250.50"), "XYZ")
+        assert formatted == "XYZ 1,250.50"
+
+    def test_format_currency_with_symbol_none_amount(self):
+        """Test formatting with None amount."""
+        formatted = format_currency_with_symbol(None, "EUR")
+        assert formatted == "N/A"
+
+    def test_format_currency_with_symbol_integer(self):
+        """Test formatting integer amount."""
+        formatted = format_currency_with_symbol(Decimal("1000"), "EUR")
+        assert formatted == "€1,000.00"
+
+    def test_format_currency_with_symbol_lowercase_currency(self):
+        """Test formatting with lowercase currency code."""
+        formatted = format_currency_with_symbol(Decimal("100.50"), "eur")
+        assert formatted == "€100.50"

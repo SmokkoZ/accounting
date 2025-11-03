@@ -404,6 +404,43 @@ Display canonical reconciliation fields:
 
 ---
 
+### FR-11: System Administration (Associate & Bookmaker Management)
+
+**Priority**: P1 (Post-MVP Enhancement)
+
+**Description**: Web-based administrative interface for managing associates, bookmakers, and balance checks.
+
+**Acceptance Criteria**:
+- **Associate Management**:
+  - View all associates in sortable table with search/filter
+  - Create new associate (alias, currency, admin flag, multibook chat ID)
+  - Edit existing associate (with unique alias validation)
+  - Delete associate (with validation: prevent if has bets/ledger entries)
+  - Display bookmaker count per associate
+
+- **Bookmaker Management**:
+  - View bookmakers per associate (nested/expandable view)
+  - Create bookmaker (name, parsing profile, active status)
+  - Edit bookmaker (name, profile, active flag)
+  - Delete bookmaker (with warning if has bets)
+  - Display Telegram chat registration status
+
+- **Balance Management**:
+  - View balance check history per bookmaker
+  - Create new balance check (date, amount, currency, note)
+  - Edit existing balance check (recalculates FX conversion)
+  - Delete balance check
+  - Display modeled balance vs. latest balance with delta
+
+- **Integration**:
+  - All operations write to existing database tables (no schema changes)
+  - Telegram bot continues to work alongside web UI
+  - Both systems share single source of truth
+
+**See**: [Epic 7: System Administration](docs/prd/epic-7-system-administration.md) for detailed specifications.
+
+---
+
 ## Data Model
 
 See [Data Model Document](docs/prd/data-model.md) for complete schema specifications.
@@ -555,6 +592,28 @@ See [Data Model Document](docs/prd/data-model.md) for complete schema specificat
   - RAW_PROFIT_EUR
   - Human-readable 50/50 explanation
 - Internal-only: CURRENT_HOLDING_EUR, DELTA
+
+### Page 6: Associate Management (FR-11)
+
+**Tab 1: Associates & Bookmakers**
+- Associate table with:
+  - Columns: Alias, Currency, Admin Flag, Bookmaker Count, Created Date
+  - Actions: Add, Edit, Delete (with validation)
+  - Search/filter by alias
+- Expandable rows showing bookmakers per associate:
+  - Bookmaker name, active status, Telegram chat status
+  - Latest balance (from balance checks)
+  - Actions: Add, Edit, Delete bookmaker
+
+**Tab 2: Balance History**
+- Filters: Associate dropdown, Bookmaker dropdown
+- Current status summary:
+  - Latest balance (from balance checks)
+  - Modeled balance (from ledger entries)
+  - Difference (color-coded)
+- Balance check history table:
+  - Columns: Date, Native Amount, EUR Equivalent, FX Rate, Note
+  - Actions: Add, Edit, Delete balance check
 
 ---
 

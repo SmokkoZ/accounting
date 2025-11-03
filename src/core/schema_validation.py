@@ -224,9 +224,12 @@ def validate_table_structures(conn: sqlite3.Connection) -> List[str]:
             "id": "INTEGER",
             "associate_id": "INTEGER",
             "bookmaker_id": "INTEGER",
+            "balance_native": "TEXT",
+            "native_currency": "TEXT",
             "balance_eur": "TEXT",
-            "check_date": "TEXT",
-            "notes": "TEXT",
+            "fx_rate_used": "TEXT",
+            "check_date_utc": "TEXT",
+            "note": "TEXT",
             "created_at_utc": "TEXT",
         },
         "fx_rates_daily": {
@@ -300,7 +303,7 @@ def validate_constraints(conn: sqlite3.Connection) -> List[str]:
         ("associates", "display_alias"),
         ("bookmakers", "associate_id, bookmaker_name"),
         ("fx_rates_daily", "currency_code, date"),
-        ("bookmaker_balance_checks", "associate_id, bookmaker_id, check_date"),
+        ("bookmaker_balance_checks", "associate_id, bookmaker_id, check_date_utc"),
     ]
 
     for table, columns in unique_constraints:

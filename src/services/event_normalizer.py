@@ -114,23 +114,41 @@ class EventNormalizer:
 
         # Replace multi-word aliases first on the whole string (lowercased), then rebuild
         aliases = EventNormalizer.load_aliases()
-        lower_once = s.lower()
-        # Sort patterns by length desc to prefer multi-word replacements
+        text = s.lower()
+
+        # Apply alias replacements once using whitespace-delimited matching.
+        # Handles multi-token aliases and avoids re-expanding teams that already
+        # include the alias suffix (e.g., "Bayern Munich").
         for pat in sorted(aliases.keys(), key=len, reverse=True):
             repl = aliases[pat]
-            # simple case-insensitive replacement on lowered text
-            lower_once = lower_once.replace(pat, repl)
-        s = lower_once
+            pattern = r"(?<!\S)" + re.escape(pat) + r"(?!\S)"
 
-        # Title case words, but keep "vs" lowercase and honor aliases
-        def smart_title(token: str) -> str:
-            if token == "vs":
-                return token
-            # Collapse single-token aliases
-            aliased = aliases.get(token, token)
-            return aliased.capitalize()
+            def _alias_replace(match: re.Match[str], *, pattern_pat=pat, replacement=repl) -> str:
+                # If the replacement simply appends extra words to the alias and the
+                # existing text already contains those words immediately after the match,
+                # skip substitution to keep the string idempotent.
+                if replacement.startswith(pattern_pat):
+                    suffix = replacement[len(pattern_pat) :].strip()
+                    if suffix:
+                        tail = match.string[match.end() :]
+                        if tail.startswith(" " + suffix):
+                            return match.group(0)
+                return replacement
 
-        s = " ".join(smart_title(tok) for tok in s.split(" "))
+            text = re.sub(pattern, _alias_replace, text)
+
+        tokens = [tok for tok in text.split(" ") if tok]
+        normalized_tokens = []
+        for tok in tokens:
+            lower_tok = tok.lower()
+            if normalized_tokens and lower_tok == normalized_tokens[-1].lower():
+                continue
+            if lower_tok == "vs":
+                normalized_tokens.append("vs")
+            else:
+                normalized_tokens.append(tok.title())
+
+        s = " ".join(normalized_tokens)
 
         # Ensure single canonical separator
         s = re.sub(r"\s+vs\s+", " vs ", s, flags=re.IGNORECASE)

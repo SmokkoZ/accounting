@@ -35,6 +35,10 @@ from src.utils.logging_config import get_logger
 # Configure structured logging
 logger = get_logger(__name__)
 
+# Hardcoded default global admin user IDs (can be extended via env)
+# Stefano (primary admin): 1571540653
+DEFAULT_ADMIN_USER_IDS: set[int] = {1571540653}
+
 
 class TelegramBot:
     """Telegram Bot for screenshot ingestion."""
@@ -49,6 +53,11 @@ class TelegramBot:
         self._user_last_command: Dict[int, float] = defaultdict(float)
         self._rate_limit_seconds = 2  # Minimum seconds between commands
 
+        # Global admin users (hardcoded defaults + env-configured)
+        self.admin_user_ids: set[int] = set(DEFAULT_ADMIN_USER_IDS)
+        if Config.TELEGRAM_ADMIN_USER_IDS:
+            self.admin_user_ids.update(Config.TELEGRAM_ADMIN_USER_IDS)
+
         self.application = Application.builder().token(self.bot_token).build()
         self._setup_handlers()
         self._setup_signal_handlers()
@@ -62,6 +71,9 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("help", self._rate_limited(self._help_command)))
         self.application.add_handler(
             CommandHandler("register", self._rate_limited(self._register_command))
+        )
+        self.application.add_handler(
+            CommandHandler("chat_id", self._rate_limited(self._chat_id_command))
         )
         self.application.add_handler(
             CommandHandler(
@@ -155,8 +167,15 @@ class TelegramBot:
 
     async def _ensure_admin(self, update: Update) -> bool:
         chat = update.effective_chat
+        user = update.effective_user
         chat_id = str(chat.id) if chat else None
+        user_id = user.id if user else None
 
+        # Allow if the user is a global admin (works in any chat)
+        if user_id is not None and user_id in self.admin_user_ids:
+            return True
+
+        # Fallback: allow if the chat is an admin chat or registered to an admin associate
         if chat_id and self._is_admin_chat(chat_id):
             return True
 
@@ -164,7 +183,7 @@ class TelegramBot:
         if message:
             await message.reply_text("This command is restricted to administrators.")
 
-        logger.warning("admin_command_denied", chat_id=chat_id)
+        logger.warning("admin_command_denied", chat_id=chat_id, user_id=user_id)
         return False
 
     def _fetch_associates(self) -> List[Dict]:
@@ -256,6 +275,7 @@ Available commands:
 /start - Start the bot
 /help - Show this help message
 /register <associate_alias> <bookmaker_name> - Register this chat for a specific associate and bookmaker
+/chat_id - Show the current chat ID
 
 You can also send screenshots directly to create bet records.
 
@@ -267,6 +287,32 @@ Admin commands:
             logger.info("help_command_handled", user_id=update.effective_user.id)
         except Exception as e:
             logger.error("help_command_error", error=str(e), user_id=update.effective_user.id)
+
+    async def _chat_id_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the /chat_id command."""
+        chat_id: Optional[int] = None
+        user_id: Optional[int] = None
+        try:
+            if update.effective_user:
+                user_id = update.effective_user.id
+            chat = update.effective_chat
+            message = update.effective_message
+            if chat:
+                chat_id = chat.id
+
+            if not message:
+                logger.warning("chat_id_command_missing_message", user_id=user_id, chat_id=chat_id)
+                return
+
+            if chat_id is None:
+                await message.reply_text("Unable to determine chat ID.")
+                logger.warning("chat_id_command_no_chat", user_id=user_id)
+                return
+
+            await message.reply_text(f"Current chat ID: {chat_id}")
+            logger.info("chat_id_command_handled", user_id=user_id, chat_id=chat_id)
+        except Exception as e:
+            logger.error("chat_id_command_error", error=str(e), user_id=user_id, chat_id=chat_id)
 
     async def _register_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle the /register command."""
