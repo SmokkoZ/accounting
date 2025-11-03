@@ -22,6 +22,7 @@ from src.services.fx_manager import get_fx_rate, convert_to_eur
 from src.integrations.fx_api_client import fetch_daily_fx_rates
 from src.services.surebet_calculator import SurebetRiskCalculator
 from src.services.coverage_proof_service import CoverageProofService
+from src.services.settlement_service import SettlementService, BetOutcome
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -527,8 +528,11 @@ def render_surebet_card(surebet: Dict) -> None:
             # Compute per-side P/L in EUR
             def _stake_eur_for_bet(b):
                 try:
-                    if b.get("stake_eur"):
-                        return Decimal(str(b["stake_eur"]))
+                    raw_eur = b.get("stake_eur")
+                    if raw_eur is not None and str(raw_eur).strip() != "":
+                        stake_eur = Decimal(str(raw_eur))
+                        if stake_eur != 0:
+                            return stake_eur.quantize(Decimal("0.01"))
                     native = (
                         Decimal(str(b["stake_original"]))
                         if b.get("stake_original")
@@ -538,7 +542,7 @@ def render_surebet_card(surebet: Dict) -> None:
                     if native is None or not cur:
                         return None
                     if cur.upper() == "EUR":
-                        return native
+                        return native.quantize(Decimal("0.01"))
                     rate = get_fx_rate(cur, date.today())
                     return convert_to_eur(native, cur, rate)
                 except Exception:
@@ -689,6 +693,106 @@ def render_surebet_card(surebet: Dict) -> None:
                         st.rerun()
 
 
+def render_settlement_preview(preview) -> None:
+    """
+    Render the settlement preview with detailed calculations.
+
+    Args:
+        preview: SettlementPreview object from settlement service
+    """
+    st.markdown("---")
+    st.markdown("### 💰 Equal-Split Settlement Preview")
+
+    # Display warnings first
+    if preview.warnings:
+        for warning in preview.warnings:
+            if "⚠️" in warning:
+                st.warning(warning)
+            else:
+                st.info(warning)
+
+    # Summary metrics
+    st.markdown("#### Settlement Summary")
+    summary_cols = st.columns(3)
+
+    with summary_cols[0]:
+        st.metric(
+            "Surebet Profit/Loss",
+            f"€{preview.surebet_profit_eur:,.2f}",
+            delta=(
+                "Profit"
+                if preview.surebet_profit_eur > 0
+                else "Loss" if preview.surebet_profit_eur < 0 else None
+            ),
+        )
+
+    with summary_cols[1]:
+        st.metric("Participants", preview.num_participants)
+
+    with summary_cols[2]:
+        st.metric("Per-Surebet Share", f"€{preview.per_surebet_share_eur:,.2f}")
+
+    st.markdown("---")
+
+    # Per-bet net gains
+    st.markdown("#### Per-Bet Net Gains")
+    with st.expander("View per-bet calculations", expanded=False):
+        net_gains_data = []
+        for participant in preview.participants:
+            net_gain = preview.per_bet_net_gains[participant.bet_id]
+            net_gains_data.append(
+                {
+                    "Bet ID": participant.bet_id,
+                    "Associate": participant.associate_alias,
+                    "Bookmaker": participant.bookmaker_name,
+                    "Outcome": participant.outcome.value,
+                    "Stake (EUR)": f"€{participant.stake_eur:,.2f}",
+                    "Odds": f"{participant.odds:.2f}",
+                    "Net Gain (EUR)": f"€{net_gain:,.2f}",
+                    "Currency": participant.currency,
+                    "FX Rate": f"{participant.fx_rate:.4f}",
+                }
+            )
+
+        st.dataframe(net_gains_data, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # Participant breakdown
+    st.markdown("#### Participant Settlement Breakdown")
+    ledger_data = []
+    for entry in preview.ledger_entries:
+        ledger_data.append(
+            {
+                "Bet ID": entry.bet_id,
+                "Associate": entry.associate_alias,
+                "Bookmaker": entry.bookmaker_name,
+                "Outcome": entry.outcome,
+                "Principal Returned": f"€{entry.principal_returned_eur:,.2f}",
+                "Per-Surebet Share": f"€{entry.per_surebet_share_eur:,.2f}",
+                "Total Amount": f"€{entry.total_amount_eur:,.2f}",
+                "Currency": entry.currency,
+                "FX Rate": f"{entry.fx_rate:.4f}",
+            }
+        )
+
+    st.dataframe(ledger_data, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # Settlement batch info
+    st.markdown("#### Settlement Batch Details")
+    st.caption(f"**Batch ID:** `{preview.settlement_batch_id}`")
+    st.caption("**Settlement Time:** Preview only (not yet committed)")
+
+    st.markdown("---")
+
+    # Confirm settlement button (placeholder for Story 4.4)
+    st.info(
+        "ℹ️ Settlement confirmation and ledger generation will be implemented in Story 4.4"
+    )
+
+
 def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
     """
     Render a surebet card for settlement with outcome selection.
@@ -741,8 +845,11 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
 
         # Initialize session state for this surebet's outcome selection
         base_outcome_key = f"base_outcome_{surebet_id}_{index}"
+        previous_base_outcome_key = f"{base_outcome_key}_prev"
         if base_outcome_key not in st.session_state:
             st.session_state[base_outcome_key] = None
+        if previous_base_outcome_key not in st.session_state:
+            st.session_state[previous_base_outcome_key] = None
 
         # Base outcome selection
         st.markdown("#### Settlement Outcome")
@@ -768,6 +875,24 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
         default_outcomes = (
             get_default_bet_outcomes(bets, base_outcome) if base_outcome else {}
         )
+
+        previous_base_outcome = st.session_state.get(previous_base_outcome_key)
+
+        # Sync session state when base outcome changes so dropdowns reflect defaults
+        if base_outcome and base_outcome != previous_base_outcome:
+            for side in ("A", "B"):
+                for bet in bets.get(side, []):
+                    bet_id = bet["bet_id"]
+                    outcome_key = f"outcome_{surebet_id}_{bet_id}_{index}"
+                    default_value = default_outcomes.get(
+                        bet_id, "WON" if side == "A" else "LOST"
+                    )
+                    st.session_state[outcome_key] = default_value
+            st.session_state[previous_base_outcome_key] = base_outcome
+            st.rerun()
+        elif base_outcome and previous_base_outcome is None:
+            st.session_state[previous_base_outcome_key] = base_outcome
+            st.rerun()
 
         bet_col_a, bet_col_b = st.columns(2)
 
@@ -799,12 +924,16 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                     st.caption(f"{stake_display} @ {odds_disp}")
 
                     # Outcome dropdown
-                    default_val = default_outcomes.get(bet_id, "WON")
+                    outcome_key = f"outcome_{surebet_id}_{bet_id}_{index}"
+                    options = ["WON", "LOST", "VOID"]
+                    current_value = st.session_state.get(
+                        outcome_key, default_outcomes.get(bet_id, "WON")
+                    )
                     outcome = st.selectbox(
                         "Outcome:",
-                        options=["WON", "LOST", "VOID"],
-                        index=["WON", "LOST", "VOID"].index(default_val),
-                        key=f"outcome_{surebet_id}_{bet_id}_{index}",
+                        options=options,
+                        index=options.index(current_value),
+                        key=outcome_key,
                         label_visibility="collapsed",
                     )
 
@@ -848,12 +977,16 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                     st.caption(f"{stake_display} @ {odds_disp}")
 
                     # Outcome dropdown
-                    default_val = default_outcomes.get(bet_id, "LOST")
+                    outcome_key = f"outcome_{surebet_id}_{bet_id}_{index}"
+                    options = ["WON", "LOST", "VOID"]
+                    current_value = st.session_state.get(
+                        outcome_key, default_outcomes.get(bet_id, "LOST")
+                    )
                     outcome = st.selectbox(
                         "Outcome:",
-                        options=["WON", "LOST", "VOID"],
-                        index=["WON", "LOST", "VOID"].index(default_val),
-                        key=f"outcome_{surebet_id}_{bet_id}_{index}",
+                        options=options,
+                        index=options.index(current_value),
+                        key=outcome_key,
                         label_visibility="collapsed",
                     )
 
@@ -892,17 +1025,32 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
             if not is_valid:
                 st.error(error_msg)
             else:
-                # Check for all VOID warning
-                all_void = all(outcome == "VOID" for outcome in bet_outcomes.values())
-                if all_void:
-                    st.warning(
-                        "⚠️ All bets marked VOID - settlement calculations will reflect zero profit/loss"
+                # Generate settlement preview
+                try:
+                    settlement_service = SettlementService()
+
+                    # Convert outcomes to BetOutcome enum
+                    outcomes_enum = {
+                        int(bet_id): BetOutcome[outcome_str]
+                        for bet_id, outcome_str in bet_outcomes.items()
+                    }
+
+                    # Get preview
+                    preview = settlement_service.preview_settlement(
+                        surebet_id, outcomes_enum
                     )
 
-                st.success(f"✓ Settlement validated for Surebet #{surebet_id}")
-                st.info(
-                    "Settlement preview and calculation (Story 4.3) will appear here"
-                )
+                    # Display preview
+                    render_settlement_preview(preview)
+
+                except Exception as e:
+                    st.error(f"Failed to generate settlement preview: {str(e)}")
+                    logger.error(
+                        "settlement_preview_error",
+                        surebet_id=surebet_id,
+                        error=str(e),
+                        exc_info=True,
+                    )
 
 
 async def process_coverage_proof_send(
