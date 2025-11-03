@@ -140,7 +140,7 @@ def _show_rejection_modal(bet_id: int, verification_service: BetVerificationServ
 
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("❌ Confirm Rejection", type="primary", use_container_width=True, key=f"confirm_reject_{bet_id}"):
+            if st.button("❌ Confirm Rejection", type="primary", width="stretch", key=f"confirm_reject_{bet_id}"):
                 try:
                     verification_service.reject_bet(bet_id, reason if reason else None)
                     # Clean up session state
@@ -154,7 +154,7 @@ def _show_rejection_modal(bet_id: int, verification_service: BetVerificationServ
                     logger.error("bet_rejection_exception", bet_id=bet_id, error=str(e), exc_info=True)
 
         with col2:
-            if st.button("Cancel", use_container_width=False, key=f"cancel_reject_{bet_id}"):
+            if st.button("Cancel", width="content", key=f"cancel_reject_{bet_id}"):
                 # Clean up session state
                 if session_key in st.session_state:
                     del st.session_state[session_key]

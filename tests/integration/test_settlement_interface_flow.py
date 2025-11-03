@@ -79,7 +79,8 @@ class TestSettlementInterfaceFlow:
             """
             CREATE TABLE associates (
                 id INTEGER PRIMARY KEY,
-                display_alias TEXT
+                display_alias TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1
             )
         """
         )

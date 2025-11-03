@@ -47,6 +47,7 @@ def create_associates_table(conn: sqlite3.Connection) -> None:
             display_alias TEXT NOT NULL UNIQUE,
             home_currency TEXT NOT NULL DEFAULT 'EUR',
             multibook_chat_id TEXT,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
             is_admin BOOLEAN NOT NULL DEFAULT FALSE,
             created_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
             updated_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z')
@@ -61,6 +62,14 @@ def create_associates_table(conn: sqlite3.Connection) -> None:
         ON associates(display_alias)
     """
     )
+
+    # Backfill is_active column for existing databases
+    cursor = conn.execute("PRAGMA table_info(associates)")
+    column_names = {row[1] for row in cursor.fetchall()}
+    if "is_active" not in column_names:
+        conn.execute(
+            "ALTER TABLE associates ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT TRUE"
+        )
 
 
 def create_bookmakers_table(conn: sqlite3.Connection) -> None:

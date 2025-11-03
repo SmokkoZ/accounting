@@ -391,7 +391,7 @@ def render_balance_history_tab() -> None:
 
         st.divider()
 
-    if st.button("Add Balance Check", use_container_width=True, disabled=not associates_list):
+    if st.button("Add Balance Check", width="stretch", disabled=not associates_list):
         st.session_state.show_add_balance_check_form = True
         st.rerun()
 
@@ -454,7 +454,7 @@ def render_add_balance_check_form(associates_list: List[Dict]) -> None:
 
         if not bookmakers_list:
             st.warning("No bookmakers for this associate. Add a bookmaker first.")
-            if st.button("Close", key="close_add_balance_form", use_container_width=True):
+            if st.button("Close", key="close_add_balance_form", width="stretch"):
                 st.session_state.show_add_balance_check_form = False
                 st.rerun()
             return
@@ -504,9 +504,9 @@ def render_add_balance_check_form(associates_list: List[Dict]) -> None:
 
             col_cancel, col_save = st.columns([1, 1])
             with col_cancel:
-                cancel = st.form_submit_button("Cancel", use_container_width=True)
+                cancel = st.form_submit_button("Cancel", width="stretch")
             with col_save:
-                submit = st.form_submit_button("Save", type="primary", use_container_width=True)
+                submit = st.form_submit_button("Save", type="primary", width="stretch")
 
             if cancel:
                 st.session_state.show_add_balance_check_form = False
@@ -569,11 +569,11 @@ def render_balance_check_row(check: Dict) -> None:
     with col7:
         col_edit, col_delete = st.columns(2)
         with col_edit:
-            if st.button("Edit", key=f"edit_bc_btn_{check_id}", use_container_width=True):
+            if st.button("Edit", key=f"edit_bc_btn_{check_id}", width="stretch"):
                 st.session_state[f"show_edit_bc_{check_id}"] = True
                 st.rerun()
         with col_delete:
-            if st.button("Delete", key=f"delete_bc_btn_{check_id}", use_container_width=True):
+            if st.button("Delete", key=f"delete_bc_btn_{check_id}", width="stretch"):
                 st.session_state[f"show_delete_bc_{check_id}"] = True
                 st.rerun()
 
@@ -631,11 +631,11 @@ def render_edit_balance_check_modal(check: Dict) -> None:
 
             col_cancel, col_save = st.columns(2)
             with col_cancel:
-                if st.form_submit_button("Cancel", use_container_width=True):
+                if st.form_submit_button("Cancel", width="stretch"):
                     st.session_state[modal_key] = False
                     st.rerun()
             with col_save:
-                submit = st.form_submit_button("Save", type="primary", use_container_width=True)
+                submit = st.form_submit_button("Save", type="primary", width="stretch")
 
             if submit:
                 amount_valid, amount_error = validate_balance_amount(amount_input)
@@ -686,7 +686,7 @@ def render_delete_balance_check_modal(check: Dict) -> None:
 
         col_cancel, col_delete = st.columns([1, 1])
         with col_cancel:
-            if st.button("Cancel", key=f"cancel_delete_bc_{check_id}", use_container_width=True):
+            if st.button("Cancel", key=f"cancel_delete_bc_{check_id}", width="stretch"):
                 st.session_state[modal_key] = False
                 st.rerun()
         with col_delete:
@@ -694,7 +694,7 @@ def render_delete_balance_check_modal(check: Dict) -> None:
                 "Delete",
                 key=f"confirm_delete_bc_{check_id}",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
             ):
                 success, message = delete_balance_check(check_id)
                 if success:

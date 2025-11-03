@@ -9,6 +9,8 @@
 ## Overview
 
 The frontend is a **Streamlit-based web application** running at `localhost:8501`. It provides a simple, operator-focused interface for bet ingestion, surebet management, settlement, and reconciliation.
+Please note: The `use_column_width` parameter has been deprecated and will be removed in a future release. Please utilize the `use_container_width` parameter instead;
+for `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
 
 ---
 
@@ -661,6 +663,10 @@ def validate_positive_amount(value):
 - Keep database queries simple (SQLite is fast for MVP scale)
 - No need for caching (hundreds of records, not thousands)
 
+### Deprecation Warning
+
+- The `use_column_width` parameter has been deprecated and will be removed in a future release. Please utilize the `use_container_width` parameter instead
+- for `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
 ### Image Display
 
 - Screenshots displayed at fixed width (200px thumbnails)

@@ -28,6 +28,7 @@ def test_db() -> Generator[sqlite3.Connection, None, None]:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             display_alias TEXT NOT NULL UNIQUE,
             home_currency TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
             is_admin INTEGER DEFAULT 0,
             multibook_chat_id TEXT,
             created_at_utc TEXT NOT NULL,

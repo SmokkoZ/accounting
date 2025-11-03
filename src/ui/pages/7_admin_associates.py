@@ -580,9 +580,9 @@ def render_add_associate_form() -> None:
 
             col_cancel, col_save = st.columns([1, 1])
             with col_cancel:
-                cancel = st.form_submit_button("Cancel", use_container_width=True)
+                cancel = st.form_submit_button("Cancel", width="stretch")
             with col_save:
-                submit = st.form_submit_button("Save", type="primary", use_container_width=True)
+                submit = st.form_submit_button("Save", type="primary", width="stretch")
 
             if cancel:
                 st.session_state.show_add_form = False
@@ -662,10 +662,10 @@ def render_edit_associate_modal(associate: Dict) -> None:
 
                 col_cancel, col_save = st.columns([1, 1])
                 with col_cancel:
-                    cancel = st.form_submit_button("Cancel", use_container_width=True)
+                    cancel = st.form_submit_button("Cancel", width="stretch")
                 with col_save:
                     submit = st.form_submit_button(
-                        "Save Changes", type="primary", use_container_width=True
+                        "Save Changes", type="primary", width="stretch"
                     )
 
                 if cancel:
@@ -727,7 +727,7 @@ def render_delete_confirmation_modal(associate: Dict) -> None:
             col_cancel, col_delete = st.columns([1, 1])
             with col_cancel:
                 if st.button(
-                    "Cancel", key=f"cancel_delete_{associate_id}", use_container_width=True
+                    "Cancel", key=f"cancel_delete_{associate_id}", width="stretch"
                 ):
                     st.session_state[modal_key] = False
                     st.rerun()
@@ -738,7 +738,7 @@ def render_delete_confirmation_modal(associate: Dict) -> None:
                     key=f"confirm_delete_{associate_id}",
                     type="primary",
                     disabled=not can_delete,
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     success, message = delete_associate(associate_id)
                     if success:
@@ -781,9 +781,9 @@ def render_add_bookmaker_form(associate: Dict) -> None:
 
                 col_cancel, col_save = st.columns([1, 1])
                 with col_cancel:
-                    cancel = st.form_submit_button("Cancel", use_container_width=True)
+                    cancel = st.form_submit_button("Cancel", width="stretch")
                 with col_save:
-                    submit = st.form_submit_button("Save", type="primary", use_container_width=True)
+                    submit = st.form_submit_button("Save", type="primary", width="stretch")
 
                 if cancel:
                     st.session_state[form_key] = False
@@ -849,10 +849,10 @@ def render_edit_bookmaker_modal(bookmaker: Dict, associate_alias: str) -> None:
 
                 col_cancel, col_save = st.columns([1, 1])
                 with col_cancel:
-                    cancel = st.form_submit_button("Cancel", use_container_width=True)
+                    cancel = st.form_submit_button("Cancel", width="stretch")
                 with col_save:
                     submit = st.form_submit_button(
-                        "Save Changes", type="primary", use_container_width=True
+                        "Save Changes", type="primary", width="stretch"
                     )
 
                 if cancel:
@@ -910,7 +910,7 @@ def render_delete_bookmaker_modal(bookmaker: Dict, associate_alias: str) -> None
                 if st.button(
                     "Cancel",
                     key=f"cancel_delete_bm_{bookmaker_id}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     st.session_state[modal_key] = False
                     st.rerun()
@@ -920,7 +920,7 @@ def render_delete_bookmaker_modal(bookmaker: Dict, associate_alias: str) -> None
                     "Delete",
                     key=f"confirm_delete_bm_{bookmaker_id}",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     success, message = delete_bookmaker(bookmaker_id)
                     if success:
@@ -973,7 +973,7 @@ def render_bookmaker_row(bookmaker: Dict, associate_alias: str) -> None:
             if st.button(
                 "Edit",
                 key=f"edit_bm_btn_{bookmaker['id']}",
-                use_container_width=True,
+                width="stretch",
             ):
                 st.session_state[f"show_edit_bookmaker_{bookmaker['id']}"] = True
                 st.rerun()
@@ -982,7 +982,7 @@ def render_bookmaker_row(bookmaker: Dict, associate_alias: str) -> None:
             if st.button(
                 "Delete",
                 key=f"delete_bm_btn_{bookmaker['id']}",
-                use_container_width=True,
+                width="stretch",
             ):
                 st.session_state[f"show_delete_bookmaker_{bookmaker['id']}"] = True
                 st.rerun()
@@ -1004,7 +1004,7 @@ def render_bookmakers_for_associate(associate: Dict) -> None:
         if st.button(
             "➕ Add Bookmaker",
             key=f"add_bm_btn_{associate_id}",
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state[f"show_add_bookmaker_{associate_id}"] = True
             st.rerun()
@@ -1078,7 +1078,7 @@ def render_associates_table(associates: List[Dict]) -> None:
             if st.button(
                 "Edit",
                 key=f"edit_btn_{assoc['id']}",
-                use_container_width=True,
+                width="stretch",
             ):
                 st.session_state[f"show_edit_modal_{assoc['id']}"] = True
                 st.rerun()
@@ -1087,7 +1087,7 @@ def render_associates_table(associates: List[Dict]) -> None:
             if st.button(
                 "Delete",
                 key=f"delete_btn_{assoc['id']}",
-                use_container_width=True,
+                width="stretch",
             ):
                 st.session_state[f"show_delete_modal_{assoc['id']}"] = True
                 st.rerun()
@@ -1123,7 +1123,7 @@ if __name__ != "__main__" or "pytest" not in globals():
             col_add, col_search = st.columns([1, 3])
 
             with col_add:
-                if st.button("➕ Add Associate", use_container_width=True):
+                if st.button("➕ Add Associate", width="stretch"):
                     st.session_state.show_add_form = True
                     st.rerun()
 

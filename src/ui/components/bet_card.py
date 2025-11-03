@@ -68,7 +68,7 @@ def _render_screenshot_preview(bet: Dict[str, Any]) -> None:
 
         # Full-size modal (using expander)
         with st.expander("🔍 View Full Size"):
-            st.image(screenshot_path, use_container_width=True)
+            st.image(screenshot_path, width="stretch")
     else:
         st.warning("Screenshot\nnot found")
 
@@ -160,7 +160,7 @@ def _render_bet_details_editable(bet: Dict[str, Any], verification_service) -> N
         # Check if "Create New Event" was selected
         if selected_event == "[+] Create New Event":
             # Store flag in session state to show modal after form submission
-            if st.form_submit_button("Open Event Creator", use_container_width=True):
+            if st.form_submit_button("Open Event Creator", width="stretch"):
                 st.session_state[f"show_create_event_modal_{bet_id}"] = True
                 st.rerun()
             return  # Exit early to prevent further rendering
@@ -270,12 +270,12 @@ def _render_bet_details_editable(bet: Dict[str, Any], verification_service) -> N
 
         with col_approve:
             approve_submitted = st.form_submit_button(
-                "✅ Approve", type="primary", use_container_width=True
+                "✅ Approve", type="primary", width="stretch"
             )
 
         with col_reject:
             reject_submitted = st.form_submit_button(
-                "❌ Reject", use_container_width=True
+                "❌ Reject", width="stretch"
             )
 
         # Handle form submission
@@ -315,7 +315,7 @@ def _render_bet_actions(
         st.markdown("---")
 
         # Approve button (green)
-        if st.button("✅ Approve", key=f"approve_{bet['bet_id']}", type="primary", use_container_width=True):
+        if st.button("✅ Approve", key=f"approve_{bet['bet_id']}", type="primary", width="stretch"):
             st.session_state[f"approve_bet_{bet['bet_id']}"] = True
             st.rerun()
 
@@ -378,7 +378,7 @@ def show_create_event_modal(bet: Dict[str, Any], verification_service) -> Option
     col1, col2 = st.columns(2)
 
     with col1:
-        if st.button("Create Event", type="primary", use_container_width=True):
+        if st.button("Create Event", type="primary", width="stretch"):
             # Validate inputs
             errors = []
 
@@ -424,5 +424,5 @@ def show_create_event_modal(bet: Dict[str, Any], verification_service) -> Option
                 st.error(f"Failed to create event: {str(e)}")
 
     with col2:
-        if st.button("Cancel", use_container_width=False):
+        if st.button("Cancel", width="content"):
             st.rerun()

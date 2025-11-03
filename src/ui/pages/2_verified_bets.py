@@ -39,6 +39,9 @@ st.title("🎯 Surebets Dashboard")
 if "settlement_success_message" in st.session_state:
     st.success(st.session_state.pop("settlement_success_message"))
 
+if st.session_state.pop("pending_settle_tab_click", False):
+    st.session_state["verified_bets_active_tab"] = "⚖️ Settle"
+
 # ========================================
 # Settlement Interface Helper Functions
 # ========================================
@@ -611,7 +614,7 @@ def render_surebet_card(surebet: Dict) -> None:
                             col.image(
                                 path,
                                 caption=f"Bet #{bet['bet_id']}",
-                                use_column_width=True,
+                                width="stretch",
                             )
                             try:
                                 data = Path(path).read_bytes()
@@ -654,7 +657,7 @@ def render_surebet_card(surebet: Dict) -> None:
                 if st.button(
                     "📤 Send Coverage Proof",
                     key=f"coverage_{surebet['surebet_id']}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     # Store the surebet ID in session state for processing
                     st.session_state[f"send_coverage_{surebet['surebet_id']}"] = True
@@ -666,7 +669,7 @@ def render_surebet_card(surebet: Dict) -> None:
                 if st.button(
                     "🔄 Re-send Coverage Proof",
                     key=f"resend_{surebet['surebet_id']}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     st.session_state[f"confirm_resend_{surebet['surebet_id']}"] = True
                     st.rerun()
@@ -677,9 +680,10 @@ def render_surebet_card(surebet: Dict) -> None:
             if st.button(
                 "⚖️ Settle",
                 key=f"settle_{surebet['surebet_id']}",
-                use_container_width=True,
+                width="stretch",
             ):
-                st.info("Settlement feature coming soon")
+                st.session_state["pending_settle_tab_click"] = True
+                st.rerun()
 
         # Handle confirmation modal for re-send
         if st.session_state.get(f"confirm_resend_{surebet['surebet_id']}", False):
@@ -786,7 +790,7 @@ def render_settlement_preview(
                 }
             )
 
-        st.dataframe(net_gains_data, use_container_width=True, hide_index=True)
+        st.dataframe(net_gains_data, width="stretch", hide_index=True)
 
     st.markdown("---")
 
@@ -808,7 +812,7 @@ def render_settlement_preview(
             }
         )
 
-    st.dataframe(ledger_data, use_container_width=True, hide_index=True)
+    st.dataframe(ledger_data, width="stretch", hide_index=True)
 
     st.markdown("---")
 
@@ -825,7 +829,7 @@ def render_settlement_preview(
         if st.button(
             "✅ Confirm Settlement",
             key=f"confirm_settlement_{surebet_id}_{index}",
-            use_container_width=True,
+            width="stretch",
         ):
             ledger_service = LedgerEntryService()
             try:
@@ -858,7 +862,7 @@ def render_settlement_preview(
         if st.button(
             "🛑 Cancel Preview",
             key=f"cancel_preview_{surebet_id}_{index}",
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state.pop(f"settlement_preview_{surebet_id}", None)
             st.session_state.pop(f"settlement_preview_outcomes_{surebet_id}", None)
@@ -1000,7 +1004,7 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                     if bet.get("screenshot_path"):
                         try:
                             with st.expander("View Screenshot"):
-                                st.image(bet["screenshot_path"], use_column_width=True)
+                                st.image(bet["screenshot_path"], width="stretch")
                         except Exception:
                             st.caption(f"Screenshot: {bet['screenshot_path']}")
 
@@ -1050,7 +1054,7 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                     if bet.get("screenshot_path"):
                         try:
                             with st.expander("View Screenshot"):
-                                st.image(bet["screenshot_path"], use_column_width=True)
+                                st.image(bet["screenshot_path"], width="stretch")
                         except Exception:
                             st.caption(f"Screenshot: {bet['screenshot_path']}")
 
@@ -1062,7 +1066,7 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
         if st.button(
             "🧮 Preview Settlement",
             key=f"settle_btn_{surebet_id}_{index}",
-            use_container_width=True,
+            width="stretch",
         ):
             all_bets = bets["A"] + bets["B"]
             bet_outcomes: Dict[int, str] = {}
@@ -1173,37 +1177,32 @@ for key in list(st.session_state.keys()):
         st.rerun()
 
 
-# Main page layout with tabs
+# Main page layout controls
 st.markdown("Monitor, settle, and manage all open surebets.")
 
-# Create tabs
-tab_overview, tab_settle = st.tabs(["📊 Overview", "⚖️ Settle"])
+tab_options = ["📊 Overview", "⚖️ Settle"]
+current_tab = st.session_state.get("verified_bets_active_tab", tab_options[0])
+selected_tab = st.radio(
+    "View",
+    tab_options,
+    horizontal=True,
+    label_visibility="collapsed",
+    index=tab_options.index(current_tab),
+    key="verified_bets_tab_selector",
+)
+st.session_state["verified_bets_active_tab"] = selected_tab
 
-# ========================================
-# TAB 1: OVERVIEW (Safety Dashboard)
-# ========================================
-with tab_overview:
-    st.markdown(
-        "Monitor all open surebets and identify risky positions requiring attention."
-    )
-
-    # Summary counters
+if selected_tab == "📊 Overview":
+    st.markdown("Monitor all open surebets and identify risky positions requiring attention.")
     st.markdown("### Summary")
     counter_cols = st.columns(2)
     total_open = count_open_surebets()
     total_unsafe = count_unsafe_surebets()
-
     counter_cols[0].metric("Open Surebets", total_open)
-    counter_cols[1].metric(
-        "Unsafe (❌)", total_unsafe, delta=None if total_unsafe == 0 else "⚠️ Attention"
-    )
-
+    counter_cols[1].metric("Unsafe (⚠️)", total_unsafe, delta=None if total_unsafe == 0 else "⚠️ Attention")
     st.markdown("---")
-
-    # Filters and sorting controls
     st.markdown("### Filters & Sorting")
     control_cols = st.columns([2, 2, 2, 2])
-
     with control_cols[0]:
         sort_by = st.selectbox(
             "Sort by",
@@ -1214,17 +1213,14 @@ with tab_overview:
                 "staked": "Total Staked (largest first)",
             }[x],
         )
-
     with control_cols[1]:
-        show_unsafe_only = st.checkbox("Show only unsafe (❌)")
-
+        show_unsafe_only = st.checkbox("Show only unsafe (⚠️)")
     with control_cols[2]:
         associates = ["All"] + load_associates()
         filter_associate = st.selectbox("Filter by associate", associates)
-
     with control_cols[3]:
         st.caption("FX Rates")
-        if st.button("Update FX Rates Now", use_container_width=True):
+        if st.button("Update FX Rates Now", width="stretch"):
             try:
                 with st.spinner("Updating FX rates from API..."):
                     success = asyncio.run(fetch_daily_fx_rates())
@@ -1263,53 +1259,33 @@ with tab_overview:
                     db_fx.close()
                     st.success("Open surebets recalculated. Refresh to view updates.")
                 else:
-                    st.error(
-                        "Failed to update FX rates from API. Check config/network."
-                    )
+                    st.error("Failed to update FX rates from API. Check config/network.")
             except Exception as e:
                 st.error(f"FX update failed: {e}")
-
     st.markdown("---")
-
-    # Load and display surebets
     surebets = load_open_surebets(sort_by, show_unsafe_only, filter_associate)
-
     if not surebets:
         st.info("No surebets found matching your filters.")
     else:
         st.markdown(f"### Surebets ({len(surebets)} found)")
-
         for surebet in surebets:
             render_surebet_card(surebet)
-
-
-# ========================================
-# TAB 2: SETTLE (Settlement Interface)
-# ========================================
-with tab_settle:
+else:
+    st.markdown('<div id="settle-tab-anchor"></div>', unsafe_allow_html=True)
     st.markdown("Settle completed surebets in chronological order by kickoff time.")
-
-    # Settlement counters
     st.markdown("### Summary")
     counter_cols = st.columns(2)
     settled_today = count_settled_today()
     still_open = count_open_surebets()
-
     counter_cols[0].metric("Settled Today", settled_today)
     counter_cols[1].metric("Still Open (Unsettled)", still_open)
-
     st.markdown("---")
-
-    # Load surebets for settlement (sorted by kickoff time)
     st.markdown("### Surebets Ready for Settlement")
     st.caption("Sorted by kickoff time (oldest first)")
-
     settlement_surebets = load_open_surebets_for_settlement()
-
     if not settlement_surebets:
         st.info("No open surebets available for settlement.")
     else:
         st.markdown(f"**{len(settlement_surebets)} open surebet(s)**")
-
         for idx, surebet in enumerate(settlement_surebets):
             render_settlement_surebet_card(surebet, idx)

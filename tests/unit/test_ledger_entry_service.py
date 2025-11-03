@@ -35,7 +35,8 @@ def db_conn() -> sqlite3.Connection:
         """
         CREATE TABLE associates (
             id INTEGER PRIMARY KEY,
-            display_alias TEXT NOT NULL
+            display_alias TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1
         );
 
         CREATE TABLE bookmakers (

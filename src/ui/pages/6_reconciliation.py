@@ -1,0 +1,256 @@
+"""
+Reconciliation Dashboard - Associate balance view for tracking holdings vs entitlements.
+
+Implements Story 5.2: Per-associate reconciliation with DELTA calculations,
+color-coded status indicators, and human-readable explanations.
+"""
+
+import streamlit as st
+import pandas as pd
+from decimal import Decimal
+from datetime import datetime
+from typing import List
+
+from src.core.database import get_db_connection
+from src.services.reconciliation_service import ReconciliationService, AssociateBalance
+from src.utils.logging_config import get_logger
+
+
+logger = get_logger(__name__)
+
+
+# Configure page
+st.set_page_config(
+    page_title="Reconciliation Dashboard",
+    page_icon="💰",
+    layout="wide"
+)
+
+st.title("💰 Reconciliation Dashboard")
+st.markdown("**Track who's overholding group float vs. who's short**")
+
+# ========================================
+# Helper Functions
+# ========================================
+
+
+def format_currency_with_sign(value: Decimal) -> str:
+    """Format currency with explicit + or - sign."""
+    if value > 0:
+        return f"+€{value:,.2f}"
+    elif value < 0:
+        return f"-€{abs(value):,.2f}"
+    else:
+        return f"€{value:,.2f}"
+
+
+def get_status_color(status: str) -> str:
+    """Get background color for status badge."""
+    colors = {
+        "overholder": "#ffebee",  # Light red
+        "balanced": "#e8f5e9",    # Light green
+        "short": "#fff3e0",       # Light orange
+    }
+    return colors.get(status, "#ffffff")
+
+
+def export_to_csv(balances: List[AssociateBalance]) -> str:
+    """
+    Convert balances to CSV format.
+
+    Returns:
+        CSV string ready for download
+    """
+    if not balances:
+        return "No data to export"
+
+    df = pd.DataFrame([
+        {
+            "Associate": b.associate_alias,
+            "NET_DEPOSITS_EUR": float(b.net_deposits_eur),
+            "SHOULD_HOLD_EUR": float(b.should_hold_eur),
+            "CURRENT_HOLDING_EUR": float(b.current_holding_eur),
+            "DELTA": float(b.delta_eur),
+            "Status": b.status,
+        }
+        for b in balances
+    ])
+
+    return df.to_csv(index=False)
+
+
+# ========================================
+# Main Dashboard Layout
+# ========================================
+
+# Top controls
+col1, col2, col3 = st.columns([2, 1, 1])
+
+with col1:
+    st.markdown("### Associate Balance Summary")
+
+with col2:
+    if st.button("🔄 Refresh Balances", width="stretch"):
+        st.rerun()
+
+with col3:
+    # Placeholder for export button (populated after data load)
+    export_placeholder = st.empty()
+
+st.divider()
+
+# Load reconciliation data
+try:
+    db = get_db_connection()
+    service = ReconciliationService(db)
+    balances = service.get_associate_balances()
+    service.close()
+
+    if not balances:
+        st.info("📊 No associate balance data available yet. Add deposits or settle bets to see reconciliation data.")
+        st.stop()
+
+    # Export button
+    csv_data = export_to_csv(balances)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    export_placeholder.download_button(
+        label="📥 Export CSV",
+        data=csv_data,
+        file_name=f"reconciliation_{timestamp}.csv",
+        mime="text/csv",
+        width="stretch",
+    )
+
+    # Summary metrics
+    total_overholders = sum(1 for b in balances if b.status == "overholder")
+    total_short = sum(1 for b in balances if b.status == "short")
+    total_balanced = sum(1 for b in balances if b.status == "balanced")
+
+    metric_col1, metric_col2, metric_col3 = st.columns(3)
+    with metric_col1:
+        st.metric("🔴 Overholders", total_overholders)
+    with metric_col2:
+        st.metric("🟢 Balanced", total_balanced)
+    with metric_col3:
+        st.metric("🟠 Short", total_short)
+
+    st.divider()
+
+    # Associate balance table with expandable details
+    for balance in balances:
+        with st.container():
+            # Main row with status indicator
+            col_icon, col_alias, col_deposits, col_should, col_current, col_delta = st.columns([0.5, 2, 1.5, 1.5, 1.5, 1.5])
+
+            with col_icon:
+                st.markdown(f"<h2 style='margin:0'>{balance.status_icon}</h2>", unsafe_allow_html=True)
+
+            with col_alias:
+                st.markdown(f"**{balance.associate_alias}**")
+                st.caption(balance.status.capitalize())
+
+            with col_deposits:
+                st.metric(
+                    "NET DEPOSITS",
+                    f"€{balance.net_deposits_eur:,.2f}",
+                    help="Cash you put in (deposits - withdrawals)"
+                )
+
+            with col_should:
+                st.metric(
+                    "SHOULD HOLD",
+                    f"€{balance.should_hold_eur:,.2f}",
+                    help="Your share of the pot (entitlement from settled bets)"
+                )
+
+            with col_current:
+                st.metric(
+                    "CURRENT HOLDING",
+                    f"€{balance.current_holding_eur:,.2f}",
+                    help="What you're holding in bookmaker accounts"
+                )
+
+            with col_delta:
+                delta_formatted = format_currency_with_sign(balance.delta_eur)
+                st.metric(
+                    "DELTA",
+                    delta_formatted,
+                    help="Difference between current holdings and entitlement"
+                )
+
+            # Expandable details
+            with st.expander("📋 View Details"):
+                # Background color based on status
+                bg_color = get_status_color(balance.status)
+
+                explanation = service.get_explanation(balance)
+
+                st.markdown(
+                    f"""
+                    <div style='background-color: {bg_color}; padding: 15px; border-radius: 5px; margin: 10px 0;'>
+                        <p style='margin: 0; font-size: 16px;'>{explanation}</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                # Detailed breakdown
+                st.markdown("##### Financial Breakdown")
+
+                breakdown_data = {
+                    "Metric": [
+                        "Personal Funding (NET_DEPOSITS_EUR)",
+                        "Entitlement from Bets (SHOULD_HOLD_EUR)",
+                        "Physical Holdings (CURRENT_HOLDING_EUR)",
+                        "Discrepancy (DELTA)",
+                    ],
+                    "Amount (EUR)": [
+                        f"€{balance.net_deposits_eur:,.2f}",
+                        f"€{balance.should_hold_eur:,.2f}",
+                        f"€{balance.current_holding_eur:,.2f}",
+                        format_currency_with_sign(balance.delta_eur),
+                    ],
+                    "Description": [
+                        "Total deposits minus withdrawals",
+                        "Principal returned + profit/loss share from settled bets",
+                        "Sum of all ledger entries (BET_RESULT + DEPOSIT + WITHDRAWAL + CORRECTIONS)",
+                        "CURRENT_HOLDING - SHOULD_HOLD",
+                    ]
+                }
+
+                df_breakdown = pd.DataFrame(breakdown_data)
+                st.dataframe(df_breakdown, width="stretch", hide_index=True)
+
+            st.divider()
+
+    # Footer with explanation
+    with st.expander("ℹ️ How Reconciliation Works"):
+        st.markdown("""
+        ### Reconciliation Math
+
+        **NET_DEPOSITS_EUR**: Personal funding
+        - Formula: `SUM(DEPOSIT.amount_eur) - SUM(WITHDRAWAL.amount_eur)`
+        - Explanation: "Cash you put in"
+
+        **SHOULD_HOLD_EUR**: Entitlement from settled bets
+        - Formula: `SUM(principal_returned_eur + per_surebet_share_eur)` from all BET_RESULT rows
+        - Explanation: "Your share of the pot"
+
+        **CURRENT_HOLDING_EUR**: Physical bookmaker holdings
+        - Formula: Sum of ALL ledger entries (BET_RESULT + DEPOSIT + WITHDRAWAL + BOOKMAKER_CORRECTION)
+        - Explanation: "What you're holding in bookmaker accounts"
+
+        **DELTA**: Discrepancy
+        - Formula: `CURRENT_HOLDING_EUR - SHOULD_HOLD_EUR`
+        - **🔴 Red (Overholder)**: `DELTA > +€10` - Holding group float (collect from them)
+        - **🟢 Green (Balanced)**: `-€10 <= DELTA <= +€10` - Holdings match entitlement
+        - **🟠 Orange (Short)**: `DELTA < -€10` - Someone else is holding their money
+
+        ### Status Threshold
+        The ±€10 threshold accounts for minor rounding differences and pending transactions.
+        """)
+
+except Exception as e:
+    logger.error("reconciliation_dashboard_error", error=str(e), exc_info=True)
+    st.error(f"❌ Error loading reconciliation data: {str(e)}")
+    st.info("💡 Try refreshing the page or contact support if the issue persists.")

@@ -110,6 +110,7 @@ def validate_table_structures(conn: sqlite3.Connection) -> List[str]:
             "display_alias": "TEXT",
             "home_currency": "TEXT",
             "multibook_chat_id": "TEXT",
+            "is_active": "BOOLEAN",  # SQLite stores BOOLEAN as INTEGER
             "is_admin": "BOOLEAN",  # SQLite stores BOOLEAN as INTEGER
             "created_at_utc": "TEXT",
             "updated_at_utc": "TEXT",
