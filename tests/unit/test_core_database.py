@@ -118,8 +118,8 @@ class TestCoreDatabase(unittest.TestCase):
         self.conn.execute(
             """
             INSERT INTO ledger_entries 
-            (associate_id, type, amount_eur, fx_rate_snapshot)
-            VALUES (1, 'STAKE', '100.00', '1.0')
+            (type, associate_id, amount_native, native_currency, fx_rate_snapshot, amount_eur, settlement_state, principal_returned_eur, per_surebet_share_eur, settlement_batch_id, note)
+            VALUES ('BET_RESULT', 1, '0.00', 'EUR', '1.0', '0.00', 'VOID', '0.00', '0.00', 'test-batch', 'Append-only test entry')
         """
         )
 
@@ -244,8 +244,12 @@ class TestCoreDatabase(unittest.TestCase):
         cursor = self.conn.execute("PRAGMA table_info(ledger_entries)")
         columns = {row[1]: row[2] for row in cursor.fetchall()}
 
+        self.assertEqual(columns["amount_native"], "TEXT")
+        self.assertEqual(columns["native_currency"], "TEXT")
         self.assertEqual(columns["amount_eur"], "TEXT")
         self.assertEqual(columns["fx_rate_snapshot"], "TEXT")
+        self.assertEqual(columns["principal_returned_eur"], "TEXT")
+        self.assertEqual(columns["per_surebet_share_eur"], "TEXT")
 
     def test_timestamp_fields_stored_as_text(self):
         """Test that timestamp fields are stored as TEXT type."""

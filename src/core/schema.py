@@ -5,7 +5,7 @@ This module defines all 11 core tables with proper constraints and indexes.
 """
 
 import sqlite3
-from typing import List
+from typing import List, Set
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
@@ -327,36 +327,56 @@ def create_ledger_entries_table(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS ledger_entries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            associate_id INTEGER NOT NULL,
-            surebet_id INTEGER,
-            bet_id INTEGER,
-            type TEXT NOT NULL,
-            amount_eur TEXT NOT NULL,
+            type TEXT NOT NULL CHECK (type IN ('BET_RESULT', 'DEPOSIT', 'WITHDRAWAL', 'BOOKMAKER_CORRECTION')),
+            associate_id INTEGER NOT NULL REFERENCES associates(id),
+            bookmaker_id INTEGER REFERENCES bookmakers(id),
+            amount_native TEXT NOT NULL,
+            native_currency TEXT NOT NULL,
             fx_rate_snapshot TEXT NOT NULL,
-            balance_after_eur TEXT,
-            reference TEXT,
-            notes TEXT,
-            created_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
-            FOREIGN KEY (associate_id) REFERENCES associates(id),
-            FOREIGN KEY (surebet_id) REFERENCES surebets(id),
-            FOREIGN KEY (bet_id) REFERENCES bets(id),
-            CHECK (type IN ('STAKE', 'WINNINGS', 'REFUND', 'ADJUSTMENT', 'DEPOSIT', 'WITHDRAWAL'))
+            amount_eur TEXT NOT NULL,
+            settlement_state TEXT CHECK (settlement_state IN ('WON', 'LOST', 'VOID') OR settlement_state IS NULL),
+            principal_returned_eur TEXT,
+            per_surebet_share_eur TEXT,
+            surebet_id INTEGER REFERENCES surebets(id),
+            bet_id INTEGER REFERENCES bets(id),
+            settlement_batch_id TEXT,
+            created_at_utc TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            created_by TEXT NOT NULL DEFAULT 'local_user',
+            note TEXT
         )
     """
     )
 
+    # Backfill legacy schemas to match current contract
+    cursor = conn.execute("PRAGMA table_info(ledger_entries)")
+    existing = {row[1] for row in cursor.fetchall()}
+    required = {
+        "type",
+        "associate_id",
+        "bookmaker_id",
+        "amount_native",
+        "native_currency",
+        "fx_rate_snapshot",
+        "amount_eur",
+        "settlement_state",
+        "principal_returned_eur",
+        "per_surebet_share_eur",
+        "surebet_id",
+        "bet_id",
+        "settlement_batch_id",
+        "created_at_utc",
+        "created_by",
+        "note",
+    }
+
+    if not required.issubset(existing):
+        migrate_legacy_ledger_entries(conn, existing)
+
     # Indexes for ledger queries
     conn.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_ledger_associate_id 
+        CREATE INDEX IF NOT EXISTS idx_ledger_associate 
         ON ledger_entries(associate_id)
-    """
-    )
-
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_ledger_created_at 
-        ON ledger_entries(created_at_utc)
     """
     )
 
@@ -365,6 +385,20 @@ def create_ledger_entries_table(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_ledger_type 
         ON ledger_entries(type)
     """
+    )
+
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ledger_date 
+        ON ledger_entries(created_at_utc)
+    """
+    )
+
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ledger_batch 
+        ON ledger_entries(settlement_batch_id)
+        """
     )
 
 
@@ -426,6 +460,109 @@ def create_multibook_message_log_table(conn: sqlite3.Connection) -> None:
     """
     )
 
+
+def migrate_legacy_ledger_entries(conn: sqlite3.Connection, existing_columns: Set[str]) -> None:
+    """Upgrade legacy ledger_entries table to the current schema."""
+    conn.execute("ALTER TABLE ledger_entries RENAME TO ledger_entries_legacy")
+
+    conn.execute(
+        """
+        CREATE TABLE ledger_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT NOT NULL CHECK (type IN ('BET_RESULT', 'DEPOSIT', 'WITHDRAWAL', 'BOOKMAKER_CORRECTION')),
+            associate_id INTEGER NOT NULL REFERENCES associates(id),
+            bookmaker_id INTEGER REFERENCES bookmakers(id),
+            amount_native TEXT NOT NULL,
+            native_currency TEXT NOT NULL,
+            fx_rate_snapshot TEXT NOT NULL,
+            amount_eur TEXT NOT NULL,
+            settlement_state TEXT CHECK (settlement_state IN ('WON', 'LOST', 'VOID') OR settlement_state IS NULL),
+            principal_returned_eur TEXT,
+            per_surebet_share_eur TEXT,
+            surebet_id INTEGER REFERENCES surebets(id),
+            bet_id INTEGER REFERENCES bets(id),
+            settlement_batch_id TEXT,
+            created_at_utc TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            created_by TEXT NOT NULL DEFAULT 'local_user',
+            note TEXT
+        )
+    """
+    )
+
+    # Determine legacy column names for note/created_by if present
+    has_notes = "notes" in existing_columns
+    has_created_by = "created_by" in existing_columns
+
+    conn.execute(
+        f"""
+        INSERT INTO ledger_entries (
+            id,
+            type,
+            associate_id,
+            bookmaker_id,
+            amount_native,
+            native_currency,
+            fx_rate_snapshot,
+            amount_eur,
+            settlement_state,
+            principal_returned_eur,
+            per_surebet_share_eur,
+            surebet_id,
+            bet_id,
+            settlement_batch_id,
+            created_at_utc,
+            created_by,
+            note
+        )
+        SELECT
+            id,
+            type,
+            associate_id,
+            NULL AS bookmaker_id,
+            COALESCE(amount_eur, '0.00') AS amount_native,
+            'EUR' AS native_currency,
+            fx_rate_snapshot,
+            amount_eur,
+            settlement_state,
+            COALESCE(principal_returned_eur, '0.00'),
+            COALESCE(per_surebet_share_eur, '0.00'),
+            surebet_id,
+            bet_id,
+            settlement_batch_id,
+            created_at_utc,
+            { "created_by" if has_created_by else "'local_user'" } AS created_by,
+            { "notes" if has_notes else "note" if "note" in existing_columns else "''" } AS note
+        FROM ledger_entries_legacy
+    """
+    )
+
+    conn.execute("DROP TABLE ledger_entries_legacy")
+
+    # Recreate indexes after migration
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ledger_associate 
+        ON ledger_entries(associate_id)
+    """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ledger_type 
+        ON ledger_entries(type)
+    """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ledger_date 
+        ON ledger_entries(created_at_utc)
+    """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ledger_batch 
+        ON ledger_entries(settlement_batch_id)
+    """
+    )
 
 def create_bookmaker_balance_checks_table(conn: sqlite3.Connection) -> None:
     """Create the bookmaker_balance_checks table."""

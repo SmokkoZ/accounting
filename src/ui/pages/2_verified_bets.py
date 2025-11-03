@@ -7,7 +7,7 @@ to prioritize review and identify potentially unsafe positions.
 
 import streamlit as st
 from decimal import Decimal
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 import asyncio
 from typing import List, Dict, Optional, Literal
@@ -22,6 +22,10 @@ from src.services.fx_manager import get_fx_rate, convert_to_eur
 from src.integrations.fx_api_client import fetch_daily_fx_rates
 from src.services.surebet_calculator import SurebetRiskCalculator
 from src.services.coverage_proof_service import CoverageProofService
+from src.services.ledger_entry_service import (
+    LedgerEntryService,
+    SettlementCommitError,
+)
 from src.services.settlement_service import SettlementService, BetOutcome
 from src.utils.logging_config import get_logger
 
@@ -32,6 +36,8 @@ logger = get_logger(__name__)
 st.set_page_config(page_title="Surebets Dashboard", layout="wide")
 st.title("🎯 Surebets Dashboard")
 
+if "settlement_success_message" in st.session_state:
+    st.success(st.session_state.pop("settlement_success_message"))
 
 # ========================================
 # Settlement Interface Helper Functions
@@ -48,6 +54,8 @@ def calculate_time_since_kickoff(kickoff_time_utc: str) -> Dict[str, any]:  # ty
     Returns:
         Dict with 'elapsed_hours', 'is_past', and 'display_text'
     """
+    if not kickoff_time_utc:
+        return {"elapsed_hours": 0.0, "is_past": False, "display_text": "Unknown"}
     try:
         # Parse UTC timestamp (remove 'Z' suffix for datetime parsing)
         kickoff_dt = datetime.fromisoformat(kickoff_time_utc.replace("Z", "+00:00"))
@@ -156,8 +164,10 @@ def count_settled_today() -> int:
     """Count surebets settled today."""
     db = get_db_connection()
     today_start = (
-        datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        + "Z"
+        datetime.now(timezone.utc)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
     )
 
     count = db.execute(
@@ -693,15 +703,37 @@ def render_surebet_card(surebet: Dict) -> None:
                         st.rerun()
 
 
-def render_settlement_preview(preview) -> None:
-    """
-    Render the settlement preview with detailed calculations.
-
-    Args:
-        preview: SettlementPreview object from settlement service
-    """
+def render_settlement_preview(
+    surebet_id: int,
+    index: int,
+    preview,
+    stored_outcomes: Dict[int, str],
+) -> None:
+    """Render settlement preview with confirmation controls."""
     st.markdown("---")
-    st.markdown("### 💰 Equal-Split Settlement Preview")
+    st.markdown("### 🎯 Equal-Split Settlement Preview")
+
+    # Guard against stale previews
+    base_outcome_key = f"base_outcome_{surebet_id}_{index}"
+    stored_base_key = f"settlement_preview_base_{surebet_id}"
+    stored_base_outcome = st.session_state.get(stored_base_key)
+    current_base_outcome = st.session_state.get(base_outcome_key)
+
+    if stored_base_outcome is not None and current_base_outcome != stored_base_outcome:
+        st.warning(
+            "Base outcome changed since preview. Please regenerate the preview before confirming."
+        )
+        return
+
+    if stored_outcomes:
+        for bet_id, expected_outcome in stored_outcomes.items():
+            outcome_key = f"outcome_{surebet_id}_{bet_id}_{index}"
+            current_outcome = st.session_state.get(outcome_key)
+            if current_outcome is not None and current_outcome != expected_outcome:
+                st.warning(
+                    "Bet outcomes changed since preview. Please regenerate the preview before confirming."
+                )
+                return
 
     # Display warnings first
     if preview.warnings:
@@ -787,21 +819,58 @@ def render_settlement_preview(preview) -> None:
 
     st.markdown("---")
 
-    # Confirm settlement button (placeholder for Story 4.4)
-    st.info(
-        "ℹ️ Settlement confirmation and ledger generation will be implemented in Story 4.4"
-    )
+    confirm_cols = st.columns([3, 2])
+    with confirm_cols[0]:
+        confirmation = None
+        if st.button(
+            "✅ Confirm Settlement",
+            key=f"confirm_settlement_{surebet_id}_{index}",
+            use_container_width=True,
+        ):
+            ledger_service = LedgerEntryService()
+            try:
+                with st.spinner("Writing ledger entries..."):
+                    confirmation = ledger_service.confirm_settlement(
+                        preview.surebet_id,
+                        preview,
+                        created_by="streamlit_ui",
+                    )
+            except SettlementCommitError as error:
+                st.error(f"Settlement failed: {error}")
+            except ValueError as error:
+                st.error(str(error))
+            finally:
+                ledger_service.close()
 
+        if confirmation:
+            st.success(
+                f"Settlement committed. Batch ID: `{confirmation.settlement_batch_id}`"
+            )
+            st.session_state.pop(f"settlement_preview_{surebet_id}", None)
+            st.session_state.pop(f"settlement_preview_outcomes_{surebet_id}", None)
+            st.session_state.pop(f"settlement_preview_base_{surebet_id}", None)
+            st.session_state["settlement_success_message"] = (
+                f"Settlement complete for surebet {surebet_id} · Batch {confirmation.settlement_batch_id}"
+            )
+            st.rerun()
+
+    with confirm_cols[1]:
+        if st.button(
+            "🛑 Cancel Preview",
+            key=f"cancel_preview_{surebet_id}_{index}",
+            use_container_width=True,
+        ):
+            st.session_state.pop(f"settlement_preview_{surebet_id}", None)
+            st.session_state.pop(f"settlement_preview_outcomes_{surebet_id}", None)
+            st.session_state.pop(f"settlement_preview_base_{surebet_id}", None)
+            st.rerun()
 
 def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
-    """
-    Render a surebet card for settlement with outcome selection.
-
-    Args:
-        surebet: Surebet dictionary with all display data
-        index: Index of surebet in list (for unique keys)
-    """
+    """Render a surebet card for settlement with outcome selection."""
     surebet_id = surebet["surebet_id"]
+    preview_key = f"settlement_preview_{surebet_id}"
+    preview_outcomes_key = f"settlement_preview_outcomes_{surebet_id}"
+    preview_base_key = f"settlement_preview_base_{surebet_id}"
     time_info = surebet.get("time_info", {})
 
     with st.container(border=True):
@@ -819,19 +888,17 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
             st.caption(" • ".join(details))
 
         with col2:
-            # Time indicator (highlight if past)
             if time_info.get("is_past", False):
                 elapsed_hours = time_info.get("elapsed_hours", 0)
                 if elapsed_hours > 24:
-                    st.error(f"⏰ {time_info.get('display_text', 'Past')}")
+                    st.error(f"⏱️ {time_info.get('display_text', 'Past')}")
                 else:
-                    st.warning(f"⏰ {time_info.get('display_text', 'Past')}")
+                    st.warning(f"⏱️ {time_info.get('display_text', 'Past')}")
             else:
-                st.info(f"⏰ {time_info.get('display_text', 'Upcoming')}")
+                st.info(f"⏱️ {time_info.get('display_text', 'Upcoming')}")
 
         st.markdown("---")
 
-        # Event info
         col_a, col_b = st.columns(2)
         col_a.metric(
             "Kickoff", format_utc_datetime_local(surebet.get("kickoff_time_utc"))
@@ -843,7 +910,6 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
 
         st.markdown("---")
 
-        # Initialize session state for this surebet's outcome selection
         base_outcome_key = f"base_outcome_{surebet_id}_{index}"
         previous_base_outcome_key = f"{base_outcome_key}_prev"
         if base_outcome_key not in st.session_state:
@@ -851,7 +917,6 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
         if previous_base_outcome_key not in st.session_state:
             st.session_state[previous_base_outcome_key] = None
 
-        # Base outcome selection
         st.markdown("#### Settlement Outcome")
         base_outcome = st.radio(
             "Select base outcome:",
@@ -867,18 +932,15 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
 
         st.markdown("---")
 
-        # Bets with outcome overrides
         st.markdown("#### Bets")
         bets = surebet.get("bets", {"A": [], "B": []})
 
-        # Get default outcomes based on base selection
         default_outcomes = (
             get_default_bet_outcomes(bets, base_outcome) if base_outcome else {}
         )
 
         previous_base_outcome = st.session_state.get(previous_base_outcome_key)
 
-        # Sync session state when base outcome changes so dropdowns reflect defaults
         if base_outcome and base_outcome != previous_base_outcome:
             for side in ("A", "B"):
                 for bet in bets.get(side, []):
@@ -896,7 +958,6 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
 
         bet_col_a, bet_col_b = st.columns(2)
 
-        # Side A bets
         with bet_col_a:
             st.markdown("**Side A Bets**")
             if bets["A"]:
@@ -923,13 +984,12 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                     )
                     st.caption(f"{stake_display} @ {odds_disp}")
 
-                    # Outcome dropdown
                     outcome_key = f"outcome_{surebet_id}_{bet_id}_{index}"
                     options = ["WON", "LOST", "VOID"]
                     current_value = st.session_state.get(
                         outcome_key, default_outcomes.get(bet_id, "WON")
                     )
-                    outcome = st.selectbox(
+                    st.selectbox(
                         "Outcome:",
                         options=options,
                         index=options.index(current_value),
@@ -937,7 +997,6 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                         label_visibility="collapsed",
                     )
 
-                    # Show screenshot link
                     if bet.get("screenshot_path"):
                         try:
                             with st.expander("View Screenshot"):
@@ -949,7 +1008,6 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
             else:
                 st.caption("No bets on Side A")
 
-        # Side B bets
         with bet_col_b:
             st.markdown("**Side B Bets**")
             if bets["B"]:
@@ -976,13 +1034,12 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                     )
                     st.caption(f"{stake_display} @ {odds_disp}")
 
-                    # Outcome dropdown
                     outcome_key = f"outcome_{surebet_id}_{bet_id}_{index}"
                     options = ["WON", "LOST", "VOID"]
                     current_value = st.session_state.get(
                         outcome_key, default_outcomes.get(bet_id, "LOST")
                     )
-                    outcome = st.selectbox(
+                    st.selectbox(
                         "Outcome:",
                         options=options,
                         index=options.index(current_value),
@@ -990,7 +1047,6 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                         label_visibility="collapsed",
                     )
 
-                    # Show screenshot link
                     if bet.get("screenshot_path"):
                         try:
                             with st.expander("View Screenshot"):
@@ -1002,22 +1058,19 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
             else:
                 st.caption("No bets on Side B")
 
-        # Settle button (placeholder for Story 4.3+)
         st.markdown("---")
         if st.button(
-            f"⚖️ Preview Settlement",
+            "🧮 Preview Settlement",
             key=f"settle_btn_{surebet_id}_{index}",
             use_container_width=True,
         ):
-            # Collect all bet outcomes
             all_bets = bets["A"] + bets["B"]
-            bet_outcomes = {}
+            bet_outcomes: Dict[int, str] = {}
             for bet in all_bets:
                 bet_id = bet["bet_id"]
                 outcome_key = f"outcome_{surebet_id}_{bet_id}_{index}"
                 bet_outcomes[bet_id] = st.session_state.get(outcome_key, "WON")
 
-            # Validate
             is_valid, error_msg = validate_settlement_submission(
                 base_outcome, bet_outcomes
             )
@@ -1025,24 +1078,19 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
             if not is_valid:
                 st.error(error_msg)
             else:
-                # Generate settlement preview
                 try:
                     settlement_service = SettlementService()
-
-                    # Convert outcomes to BetOutcome enum
                     outcomes_enum = {
                         int(bet_id): BetOutcome[outcome_str]
                         for bet_id, outcome_str in bet_outcomes.items()
                     }
-
-                    # Get preview
                     preview = settlement_service.preview_settlement(
                         surebet_id, outcomes_enum
                     )
-
-                    # Display preview
-                    render_settlement_preview(preview)
-
+                    st.session_state[preview_key] = preview
+                    st.session_state[preview_outcomes_key] = dict(bet_outcomes)
+                    if base_outcome:
+                        st.session_state[preview_base_key] = base_outcome
                 except Exception as e:
                     st.error(f"Failed to generate settlement preview: {str(e)}")
                     logger.error(
@@ -1051,7 +1099,10 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                         error=str(e),
                         exc_info=True,
                     )
-
+        stored_preview = st.session_state.get(preview_key)
+        if stored_preview is not None:
+            stored_outcomes = st.session_state.get(preview_outcomes_key, {})
+            render_settlement_preview(surebet_id, index, stored_preview, stored_outcomes)
 
 async def process_coverage_proof_send(
     surebet_id: int, resend: bool = False

@@ -37,11 +37,13 @@ class Participant:
     Attributes:
         bet_id: ID of the bet
         associate_id: ID of the associate
+        bookmaker_id: ID of the bookmaker
         associate_alias: Display name of the associate
         bookmaker_name: Name of the bookmaker
         outcome: Bet outcome (WON/LOST/VOID)
         seat_type: Type of seat ("staked" or "non-staked")
         stake_eur: Original stake in EUR
+        stake_native: Original stake in native currency
         odds: Bet odds
         currency: Original currency of the bet
         fx_rate: FX rate used for EUR conversion
@@ -49,11 +51,13 @@ class Participant:
 
     bet_id: int
     associate_id: int
+    bookmaker_id: int
     associate_alias: str
     bookmaker_name: str
     outcome: BetOutcome
     seat_type: str  # "staked" or "non-staked"
     stake_eur: Decimal
+    stake_native: Decimal
     odds: Decimal
     currency: str
     fx_rate: Decimal
@@ -210,6 +214,16 @@ class SettlementService:
             if stake_eur is None:
                 raise ValueError(f"Bet {bet_id} is missing stake information")
 
+            if stake_native is None:
+                rate = fx_rates[bet["currency"]]
+                stake_native = (stake_eur / rate).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+
+            stake_native = stake_native.quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+
             # Determine odds with fallback to original odds when normalized value missing
             odds_value = self._parse_decimal(bet.get("odds"))
             if odds_value is None or odds_value == 0:
@@ -231,11 +245,13 @@ class SettlementService:
             participant = Participant(
                 bet_id=bet_id,
                 associate_id=bet["associate_id"],
+                bookmaker_id=bet["bookmaker_id"],
                 associate_alias=bet["associate_alias"],
                 bookmaker_name=bet["bookmaker_name"],
                 outcome=outcome,
                 seat_type=seat_type,
                 stake_eur=stake_eur,
+                stake_native=stake_native,
                 odds=odds_value,
                 currency=bet["currency"],
                 fx_rate=fx_rates[bet["currency"]],
