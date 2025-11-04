@@ -15,6 +15,7 @@ Epic 5 implements **forward-only error correction** and **real-time financial he
 3. **Bookmaker Balance Drilldown** (Story 5.3): Compare modeled vs. reported balances
 4. **Pending Funding Events** (Story 5.4): Accept/reject deposits and withdrawals
 5. **Associate Operations Hub** (Story 5.5): Manage associates, bookmakers, balances, and funding from one page
+6. **Delta Provenance & Counterparty Links** (Story 5.6): Trace each associate’s delta back to specific surebets and counterparties
 
 **CRITICAL**: All corrections are **forward-only** (System Law #1 preserved). No UPDATE or DELETE on existing ledger entries.
 
@@ -1680,6 +1681,71 @@ class FundingTransactionService:
 
 ---
 
+### Story 5.6: Delta Provenance & Counterparty Links
+
+**Goal**: Tie every associate’s delta back to the specific surebets and counterparties that generated it so operators can reconcile surpluses/shortfalls precisely.
+
+#### Task 5.6.1: Schema & Migration
+**Files**: `src/core/schema.py`, `src/migrations/2025xxxx_add_surebet_links.py`
+
+- Add nullable `opposing_associate_id` to settlement-related ledger entries (BET_RESULT, BOOKMAKER_CORRECTION) so each row records the counterparty.
+- Create `surebet_settlement_links` table storing winner/loser associates, surebet id, amount, linked ledger entry ids, and timestamp.
+- Backfill migration that scans historical settlements to populate the link table, including corrections that adjusted prior surebets.
+
+```sql
+CREATE TABLE surebet_settlement_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    surebet_id INTEGER NOT NULL REFERENCES surebets(id),
+    winner_associate_id INTEGER NOT NULL REFERENCES associates(id),
+    loser_associate_id INTEGER NOT NULL REFERENCES associates(id),
+    amount_eur TEXT NOT NULL,
+    winner_ledger_entry_id INTEGER NOT NULL REFERENCES ledger_entries(id),
+    loser_ledger_entry_id INTEGER NOT NULL REFERENCES ledger_entries(id),
+    created_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z')
+);
+CREATE INDEX idx_surebet_links_winner ON surebet_settlement_links(winner_associate_id);
+CREATE INDEX idx_surebet_links_loser ON surebet_settlement_links(loser_associate_id);
+```
+
+#### Task 5.6.2: Settlement Workflow Updates
+**Files**: `src/services/settlement_service.py`, `src/services/ledger_entry_service.py`, `tests/unit/test_settlement_service.py`
+
+- When settling a surebet, capture both associates involved and persist matched ledger entries (win/loss) along with a link row.
+- Ensure correction flows (Story 5.1) optionally accept the counterparty and create/adjust link rows to keep provenance accurate.
+- Guard against double-linking by enforcing unique constraint on `(surebet_id, winner_ledger_entry_id, loser_ledger_entry_id)`.
+
+#### Task 5.6.3: Delta Provenance Service
+**Files**: `src/services/delta_provenance_service.py`, `tests/unit/test_delta_provenance_service.py`
+
+- Build service APIs to fetch breakdowns for an associate: grouped by surebet, with counterparty alias, signed amount, timestamps, and references to ledger entries.
+- Provide summary helpers (total surplus, total deficit, surebet count) for UI chips.
+- Add structlog tracing (`delta_provenance_viewed`) with query duration and counts.
+
+#### Task 5.6.4: UI Integration
+**Files**: `src/ui/components/associate_hub/drawer.py`, `src/ui/components/associate_hub/listing.py`, `tests/ui/test_associate_hub_delta_breakdown.py`
+
+- Add “Delta Breakdown” tab/section in the associate drawer showing:
+  - Summary chips (surplus, deficit, linked surebets).
+  - Table with columns: Surebet ID (link to Story 5.2 view), Counterparty, Amount (signed & color-coded), Event Timestamp, Details (link to ledger entry modal).
+- Handle empty-state messaging (“No provenance data recorded yet”) and pagination for long histories.
+- Wire refreshes so new settlements/corrections re-query provenance without full page reload.
+
+#### Task 5.6.5: Exports & Reporting
+**Files**: `src/services/reporting_service.py`, `docs/analytics/delta_provenance_examples.sql`
+
+- Extend exports/API endpoints to include optional provenance breakdowns per associate.
+- Document SQL examples analysts can run to audit per-surebet settlements using the new link table.
+
+#### Exit Criteria
+
+- [ ] Schema migration populates `surebet_settlement_links` and adds opposing associate metadata with verification script.
+- [ ] Settlement and correction flows create link rows automatically; duplicate prevention in place.
+- [ ] Delta provenance service returns accurate breakdown that reconciles with associate delta totals.
+- [ ] UI Delta Breakdown renders for sample data, supports empty states, and links to surebet/ledger views.
+- [ ] Telemetry logs query metrics; unit/integration/UI tests cover new functionality.
+
+---
+
 ### Testing
 
 #### Task 5.5.1: Unit Tests for Reconciliation Service
@@ -2090,7 +2156,7 @@ GROUP BY entry_type;
 
 ### Code Deployment
 
-- [ ] All Story 5.1-5.5 files created
+- [ ] All Story 5.1-5.6 files created
 - [ ] Unit tests pass
 - [ ] Integration test passes
 
@@ -2100,7 +2166,7 @@ GROUP BY entry_type;
 - [ ] Reconciliation dashboard calculates correctly
 - [ ] Apply correction successfully
 - [ ] Accept funding event successfully
-- [ ] Associate Operations hub page loads, filters work, and funding actions persist
+- [ ] Associate Operations hub page loads, filters work, delta breakdown tab renders, and funding actions persist
 - [ ] Export CSV works
 
 ---

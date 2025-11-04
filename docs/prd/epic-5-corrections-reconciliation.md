@@ -45,7 +45,7 @@ Traditional systems "reopen" settlements and edit history. **This system uses fo
 
 ### What's Being Built
 
-Five interconnected components:
+Six interconnected components:
 
 1. **Post-Settlement Correction Interface** (Story 5.1)
    - Manual correction form
@@ -70,6 +70,9 @@ Five interconnected components:
    - Single admin surface for associate, bookmaker, and balance operations
    - Inline transactions (deposit/withdraw) with ledger persistence
    - Advanced filtering, sorting, and detail drawers for rapid triage
+6. **Delta Provenance & Counterparty Links** (Story 5.6)
+   - Ledger links that pair surebet winners/losers and amounts
+   - Delta breakdown views that expose surebet-level provenance per associate
 
 ### Integration Points
 
@@ -367,6 +370,28 @@ Five interconnected components:
 
 ---
 
+### Story 5.6: Associate Ownership Attribution
+
+**As the finance operations lead**, I need each associate's delta to clearly show the owning admin so we can prioritise outreach and track accountability.
+
+**Acceptance Criteria:**
+- [ ] `associates` table gains nullable `managed_by_admin_id` FK referencing another associate with `is_admin = 1`, plus index for fast lookup; migration backfills admins to self, others to null, and seeds baseline audit entries.
+- [ ] `AssociateHubRepository.list_associates_with_metrics` joins owner data and returns `owner_admin_id`, `owner_alias`, `owner_chat_id`, and `owner_email`; `AssociateMetrics` updated accordingly.
+- [ ] Filter bar adds multi-select "Owner" control (active admins only) that persists in `st.session_state`, integrates with reset shortcut, and updates listing/pagination.
+- [ ] Associate listing shows new "Owner" column and renders per-owner rollup chips (count + total delta, color-coded) above the table; unassigned rows display muted "Unassigned".
+- [ ] Drawer "Profile" tab includes owner selector limited to active admins, preventing circular/self assignment and saving via new `update_associate_owner` repository method; success triggers toast + rerun.
+- [ ] Drawer "Transactions" (or new "History") tab lists latest 10 ownership changes from `associate_owner_audit` with operator, previous owner, new owner, timestamp, and delta snapshot.
+- [ ] Ownership changes emit structlog event `associate_owner_changed` capturing associate id, previous/new owner ids, operator id, and delta snapshot; analytics export surfaces `owner_alias`.
+- [ ] Unit/integration tests cover owner filtering, rollup calculations, drawer edits, and migration adds regression test for schema changes.
+
+**Technical Notes:**
+- Schema migration lives alongside Story 5.5 migrations; add helper to repositories for fetching active admins.
+- Owner rollups reuse repository aggregate query; delta totals split into overholding vs short buckets for color cues.
+- Audit table writes occur inside the same transaction as ownership updates to guarantee consistency.
+- Telemetry integrates with existing logging config; include correlation id for easier tracing.
+
+---
+
 ## User Acceptance Testing Scenarios
 
 ### Scenario 1: Late VOID Correction
@@ -452,6 +477,18 @@ Five interconnected components:
 7. Operator edits Partner A's alias via the "Profile" tab, saves, and the list reflects the change while retaining current filters.
 
 **Expected Result**: Operator performs balance update, funding entry, and profile edit on one page without navigation.
+
+---
+
+### Scenario 6: Attribute Owner and Review Rollups
+1. Finance lead opens the Associate Operations Hub after migration.
+2. Uses the new "Owner" filter to select "Admin Team" (an active admin) and sees only their associates.
+3. Observes owner rollup chips showing `Admin Team — 4 associates — +€1,200 delta`.
+4. Opens the drawer for Partner A, changes owner to "Finance Ops" and saves.
+5. Toast confirms success, rollup chips refresh (Admin Team count drops, Finance Ops increases), and Ownership History shows the change with timestamp and operator id.
+6. Clears owner filter and verifies that unassigned associates display "Unassigned" text in the Owner column.
+
+**Expected Result**: Owner assignment is editable, rollups update immediately, and audit trail captures the change.
 
 ---
 
@@ -543,7 +580,7 @@ DELTA = CURRENT_HOLDING_EUR - SHOULD_HOLD_EUR
 Epic 5 is complete when ALL of the following are verified:
 
 ### Functional Validation
-- [ ] All 5 stories (5.1-5.5) marked complete with passing acceptance criteria
+- [ ] All 6 stories (5.1-5.6) marked complete with passing acceptance criteria
 - [ ] Corrections apply forward-only (no UPDATE/DELETE on ledger)
 - [ ] Reconciliation dashboard calculates DELTA correctly
 - [ ] Bookmaker balance mismatches identifiable
@@ -557,7 +594,7 @@ Epic 5 is complete when ALL of the following are verified:
 - [ ] No float rounding errors (all Decimal)
 
 ### User Testing
-- [ ] All 5 UAT scenarios pass
+- [ ] All 6 UAT scenarios pass
 - [ ] Operator can identify overholders/short associates in <30 seconds
 - [ ] Corrections applied successfully
 
