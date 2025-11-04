@@ -118,6 +118,37 @@ def format_correction_row(correction: Dict) -> Dict:
 # Correction Form
 # ========================================
 
+prefill_payload = st.session_state.get("correction_prefill")
+if prefill_payload and not st.session_state.get("correction_prefill_applied"):
+    raw_native = prefill_payload.get("amount_native")
+    raw_eur = prefill_payload.get("amount_eur")
+    prefill_amount = ""
+
+    for candidate in (raw_native, raw_eur):
+        if candidate is None:
+            continue
+        try:
+            dec_value = Decimal(str(candidate))
+        except (InvalidOperation, TypeError):
+            continue
+        else:
+            prefill_amount = f"{dec_value:+.2f}"
+            break
+
+    st.session_state["correction_amount"] = prefill_amount
+    st.session_state["correction_note"] = prefill_payload.get("note", "")
+    st.session_state["correction_currency"] = prefill_payload.get("native_currency", "EUR")
+    st.session_state["correction_prefill_associate_id"] = prefill_payload.get("associate_id")
+    st.session_state["correction_prefill_bookmaker_id"] = prefill_payload.get("bookmaker_id")
+    st.session_state["correction_prefill_applied"] = True
+
+if prefill_payload:
+    st.info("Bookmaker Drilldown pre-filled the correction form. Review and submit.")
+else:
+    st.session_state.setdefault("correction_amount", "")
+    st.session_state.setdefault("correction_note", "")
+    st.session_state.setdefault("correction_currency", "EUR")
+
 st.header("Apply Correction")
 
 # Associate selection (outside form to allow dynamic updates)
@@ -130,6 +161,15 @@ associate_options = {
     f"{a['display_alias']} ({a['home_currency']})": a["id"]
     for a in associates
 }
+prefill_associate_id = st.session_state.get("correction_prefill_associate_id")
+if prefill_associate_id is not None:
+    for option_label, option_id in associate_options.items():
+        if option_id == prefill_associate_id:
+            st.session_state.setdefault("associate_selection", option_label)
+            break
+else:
+    st.session_state.setdefault("associate_selection", next(iter(associate_options.keys())))
+
 selected_associate = st.selectbox(
     "Associate *",
     options=list(associate_options.keys()),
@@ -167,41 +207,57 @@ with st.form("correction_form", clear_on_submit=True):
                 ]
                 for b in bookmakers
             }
+            prefill_bookmaker_id = st.session_state.get("correction_prefill_bookmaker_id")
+            if prefill_bookmaker_id is not None:
+                for option_label, option_id in bookmaker_options.items():
+                    if option_id == prefill_bookmaker_id:
+                        st.session_state.setdefault("bookmaker_selection", option_label)
+                        break
+            else:
+                st.session_state.setdefault(
+                    "bookmaker_selection", next(iter(bookmaker_options.keys()))
+                )
             selected_bookmaker = st.selectbox(
                 "Bookmaker *",
                 options=list(bookmaker_options.keys()),
                 help="Select the bookmaker account to correct",
+                key="bookmaker_selection",
             )
             bookmaker_id = bookmaker_options[selected_bookmaker]
 
         # Currency selection (default to associate's home currency)
         currency_options = ["EUR", "USD", "GBP", "AUD", "CAD"]
-        default_currency_index = (
-            currency_options.index(associate_home_currency)
-            if associate_home_currency in currency_options
-            else 0
-        )
+        current_currency = st.session_state.get("correction_currency", associate_home_currency)
+        if current_currency not in currency_options:
+            current_currency = associate_home_currency if associate_home_currency in currency_options else "EUR"
+            st.session_state["correction_currency"] = current_currency
+        default_currency_index = currency_options.index(current_currency)
         currency = st.selectbox(
             "Currency *",
             options=currency_options,
             index=default_currency_index,
             help="Select the currency for this correction (defaults to associate's home currency)",
+            key="correction_currency",
         )
 
     with col2:
         # Amount input
         amount_str = st.text_input(
             "Correction Amount *",
+            value=st.session_state.get("correction_amount", ""),
             placeholder="e.g., +100.50 or -25.00",
             help="Positive = increase holdings, Negative = decrease holdings",
+            key="correction_amount",
         )
 
     # Note field (full width)
     note = st.text_area(
         "Explanatory Note *",
+        value=st.session_state.get("correction_note", ""),
         placeholder="e.g., Late VOID correction for Bet #123",
         help="Required: Explain why this correction is being applied",
         max_chars=500,
+        key="correction_note",
     )
 
     # Submit button
@@ -255,6 +311,12 @@ with st.form("correction_form", clear_on_submit=True):
                     f"✅ Correction applied successfully! "
                     f"Ledger Entry ID: {entry_id}"
                 )
+                st.session_state.pop("correction_prefill", None)
+                st.session_state.pop("correction_prefill_applied", None)
+                st.session_state.pop("correction_prefill_associate_id", None)
+                st.session_state.pop("correction_prefill_bookmaker_id", None)
+                st.session_state["correction_amount"] = ""
+                st.session_state["correction_note"] = ""
                 st.rerun()
 
             except CorrectionError as e:

@@ -449,12 +449,26 @@ None (this is the foundation)
 - "Reject" button discards entry
 - Accepted events immediately update NET_DEPOSITS_EUR and CURRENT_HOLDING_EUR
 
+#### 5.5 Associate Operations Hub
+**As the operator**, I want a single operations hub to manage associates, bookmakers, balances, and funding actions without bouncing between pages.
+
+**Acceptance Criteria:**
+- "Associate Operations" admin page with persistent filter bar (search, admin flag, active status, currency, sort controls).
+- Associate summary rows display admin badge, home currency, bookmaker count, NET_DEPOSITS_EUR, SHOULD_HOLD_EUR, CURRENT_HOLDING_EUR, and DELTA with color-coded status.
+- Expanding an associate shows bookmaker table including modeled vs reported balance, latest balance check timestamp, mismatch badge, and action buttons (Edit, Manage Balance, Deposit, Withdraw).
+- Detail drawer enables:
+  - Editing associate/bookmaker metadata with existing validation rules.
+  - Managing balance checks (list, add, edit, delete) via Story 5.3 components.
+  - Recording deposits and withdrawals through a shared flow that writes ledger entries instantly.
+- Session state preserves filters and current selection so actions refresh metrics without losing context.
+
 ### Success Criteria
 - ✅ Corrections can be applied without reopening settlements
 - ✅ All corrections logged with notes and frozen FX
 - ✅ Reconciliation dashboard shows DELTA with color coding
 - ✅ Bookmaker balance mismatches visible and correctable
 - ✅ Deposits/withdrawals update entitlement math correctly
+- ✅ Associate operations hub consolidates CRUD, balance, and funding workflows
 
 ### Dependencies
 - Phase 4 complete (ledger entries being created)

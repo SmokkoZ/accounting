@@ -14,6 +14,7 @@ Epic 5 implements **forward-only error correction** and **real-time financial he
 2. **Reconciliation Dashboard** (Story 5.2): See who's overholding vs. who's short
 3. **Bookmaker Balance Drilldown** (Story 5.3): Compare modeled vs. reported balances
 4. **Pending Funding Events** (Story 5.4): Accept/reject deposits and withdrawals
+5. **Associate Operations Hub** (Story 5.5): Manage associates, bookmakers, balances, and funding from one page
 
 **CRITICAL**: All corrections are **forward-only** (System Law #1 preserved). No UPDATE or DELETE on existing ledger entries.
 
@@ -1524,6 +1525,161 @@ def get_funding_events_since(self, cutoff_date_utc: str, event_type: str) -> Lis
 
 ---
 
+### Story 5.5: Associate Operations Hub
+
+**Goal**: Deliver a unified Streamlit workspace where operators can search, audit, and act on associates, bookmakers, balances, and funding transactions without navigation hops.
+
+#### Task 5.5.1: Associate Operations Page Shell
+**File**: `src/ui/pages/8_associate_operations.py`
+
+```python
+import streamlit as st
+
+from src.services.bookmaker_balance_service import BookmakerBalanceService
+from src.services.funding_transaction_service import FundingTransactionService
+from src.ui.components.associate_hub.filters import render_filter_bar
+from src.ui.components.associate_hub.listing import render_associate_listing
+from src.ui.components.associate_hub.drawer import render_detail_drawer
+
+def render_page() -> None:
+    """Entry point for the associate operations hub."""
+    st.set_page_config(page_title="Associate Operations", layout="wide")
+    st.title("Associate Operations Hub")
+
+    if "associate_hub_state" not in st.session_state:
+        st.session_state.associate_hub_state = {
+            "filters": {},
+            "selected_associate_id": None,
+            "selected_bookmaker_id": None,
+        }
+
+    filters = render_filter_bar(st.session_state.associate_hub_state)
+
+    with BookmakerBalanceService() as balance_service:
+        balances = balance_service.get_bookmaker_balances()
+
+    funding_service = FundingTransactionService()
+    render_associate_listing(
+        balances=balances,
+        hub_state=st.session_state.associate_hub_state,
+        funding_service=funding_service,
+        filters=filters,
+    )
+
+    render_detail_drawer(
+        balances=balances,
+        hub_state=st.session_state.associate_hub_state,
+        funding_service=funding_service,
+    )
+```
+
+- Register the page within `src/ui/app.py` to expose it in the navigation (e.g., `"8_Associate_Operations"` route).
+- Use cached queries or memoized services so that filter changes do not execute redundant SQL.
+- Provide empty-state messaging (e.g., "No associates match your filters") when result sets are empty.
+
+#### Task 5.5.2: Filter, Listing, and Drawer Components
+**Files**: `src/ui/components/associate_hub/filters.py`, `src/ui/components/associate_hub/listing.py`, `src/ui/components/associate_hub/drawer.py`
+
+- `filters.render_filter_bar(state)` renders:
+  - Text search for alias/bookmaker/chat id
+  - Multi-select toggles for admin flag, associate active status, bookmaker active status, and currency
+  - Sort dropdown (alias, DELTA, last activity) with ascending/descending switch
+  - Persists selections back into `state["filters"]`
+- `listing.render_associate_listing(...)` aggregates balances per associate, renders summary rows with badges, and exposes expandable bookmaker tables including modeled vs reported balance, DELTA, last balance check, and action buttons (Edit, Manage Balance, Deposit, Withdraw).
+- `drawer.render_detail_drawer(...)` displays when `state["selected_associate_id"]` is set and contains tabs:
+  - **Profile**: edit associate + bookmaker metadata using validators from Stories 7.1-7.3.
+  - **Balances**: embed Story 5.3 balance history helper with CRUD actions scoped to the selection.
+  - **Transactions**: show deposit/withdraw modals and recent ledger activity (Story 5.4 data).
+- Ensure Streamlit callbacks mutate state then call `st.rerun()` to refresh the UI without losing filters.
+
+#### Task 5.5.3: Funding Transaction Service
+**File**: `src/services/funding_transaction_service.py`
+
+```python
+from decimal import Decimal
+from typing import Optional
+
+from src.core.database import get_db_connection
+from src.services.fx_manager import get_fx_rate, convert_to_eur
+from src.utils.database_utils import transactional
+
+class FundingTransactionService:
+    """Write DEPOSIT/WITHDRAWAL ledger entries originated from the hub."""
+
+    def record_transaction(
+        self,
+        *,
+        associate_id: int,
+        amount_native: Decimal,
+        native_currency: str,
+        event_type: str,
+        created_by: str = "local_user",
+        bookmaker_id: Optional[int] = None,
+        note: Optional[str] = None,
+    ) -> int:
+        if event_type not in {"DEPOSIT", "WITHDRAWAL"}:
+            raise ValueError("Unsupported funding event type")
+
+        with transactional(get_db_connection()) as conn:
+            fx_rate = get_fx_rate(native_currency, None)
+            amount_eur = convert_to_eur(amount_native, native_currency, fx_rate)
+            cursor = conn.execute(
+                """
+                INSERT INTO ledger_entries (
+                    entry_type,
+                    associate_id,
+                    bookmaker_id,
+                    amount_native,
+                    native_currency,
+                    fx_rate_snapshot,
+                    amount_eur,
+                    note,
+                    created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_type,
+                    associate_id,
+                    bookmaker_id,
+                    str(amount_native),
+                    native_currency,
+                    str(fx_rate),
+                    str(amount_eur),
+                    note,
+                    created_by,
+                ),
+            )
+            return cursor.lastrowid
+```
+
+- Return the inserted ledger entry id so the UI can display confirmation metadata.
+- Include helper methods for fetching recent transactions per associate/bookmaker.
+
+#### Task 5.5.4: Hub Repository Layer
+**File**: `src/repositories/associate_hub_repository.py`
+
+- Create SQL helpers that join associates, bookmakers, latest balance checks, and ledger aggregates.
+- Key methods:
+  - `list_associates_with_metrics(filters)` → returns admin flag, currency, bookmaker count, NET_DEPOSITS_EUR, SHOULD_HOLD_EUR, CURRENT_HOLDING_EUR, DELTA, last activity timestamp.
+  - `list_bookmakers_for_associate(associate_id)` → returns parsing profile, modeled vs reported balance, latest balance check, active status.
+- Use the same connection + dict-row pattern as other repositories for consistency.
+
+#### Task 5.5.5: Navigation and Legacy Alignment
+
+- Update navigation registry (`src/ui/app.py`) so the new hub is discoverable.
+- Refactor existing admin/balance pages to consume the shared components (filters, modals) to avoid divergence.
+- Feature flag access (e.g., `st.session_state.get("feature_enable_associate_hub", True)`) until parity is confirmed.
+- Add toast helpers for deposit/withdraw success/failure and ensure metrics re-compute after each transaction.
+
+#### Validation Checklist
+- Hub loads with same associate/bookmaker counts as legacy pages.
+- Filters adjust listing without clearing the open drawer.
+- Deposit/withdraw actions create ledger entries and refresh NET_DEPOSITS/DELTA badges instantly.
+- Balance check CRUD executes end-to-end from the drawer.
+- Profile edits persist and reflect in the listing/search results.
+
+---
+
 ### Testing
 
 #### Task 5.5.1: Unit Tests for Reconciliation Service
@@ -1934,7 +2090,7 @@ GROUP BY entry_type;
 
 ### Code Deployment
 
-- [ ] All Story 5.1-5.4 files created
+- [ ] All Story 5.1-5.5 files created
 - [ ] Unit tests pass
 - [ ] Integration test passes
 
@@ -1944,6 +2100,7 @@ GROUP BY entry_type;
 - [ ] Reconciliation dashboard calculates correctly
 - [ ] Apply correction successfully
 - [ ] Accept funding event successfully
+- [ ] Associate Operations hub page loads, filters work, and funding actions persist
 - [ ] Export CSV works
 
 ---

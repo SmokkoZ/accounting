@@ -5,14 +5,19 @@ Implements Story 5.2: Per-associate reconciliation with DELTA calculations,
 color-coded status indicators, and human-readable explanations.
 """
 
+import sqlite3
 import streamlit as st
 import pandas as pd
 from decimal import Decimal
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from src.core.database import get_db_connection
 from src.services.reconciliation_service import ReconciliationService, AssociateBalance
+from src.services.bookmaker_balance_service import BookmakerBalanceService
+from src.ui.components.reconciliation.bookmaker_drilldown import (
+    render_bookmaker_drilldown,
+)
 from src.utils.logging_config import get_logger
 
 
@@ -100,14 +105,21 @@ with col3:
 st.divider()
 
 # Load reconciliation data
+db: Optional[sqlite3.Connection] | None = None
+reconciliation_service: Optional[ReconciliationService] = None
+bookmaker_service: Optional[BookmakerBalanceService] = None
+
 try:
     db = get_db_connection()
-    service = ReconciliationService(db)
-    balances = service.get_associate_balances()
-    service.close()
+    reconciliation_service = ReconciliationService(db)
+    bookmaker_service = BookmakerBalanceService(db)
+    balances = reconciliation_service.get_associate_balances()
+    bookmaker_balances = bookmaker_service.get_bookmaker_balances()
 
     if not balances:
-        st.info("📊 No associate balance data available yet. Add deposits or settle bets to see reconciliation data.")
+        st.info(
+            "📊 No associate balance data available yet. Add deposits or settle bets to populate this view."
+        )
         st.stop()
 
     # Export button
@@ -183,7 +195,7 @@ try:
                 # Background color based on status
                 bg_color = get_status_color(balance.status)
 
-                explanation = service.get_explanation(balance)
+                explanation = reconciliation_service.get_explanation(balance)
 
                 st.markdown(
                     f"""
@@ -223,6 +235,54 @@ try:
 
             st.divider()
 
+    # Bookmaker drilldown section
+    st.divider()
+
+    def update_balance_callback(
+        associate_id: int,
+        bookmaker_id: int,
+        amount_native: Decimal,
+        currency: str,
+        check_date_utc: str,
+        note: Optional[str],
+    ) -> None:
+        with BookmakerBalanceService() as service:
+            service.update_reported_balance(
+                associate_id=associate_id,
+                bookmaker_id=bookmaker_id,
+                balance_native=amount_native,
+                native_currency=currency,
+                check_date_utc=check_date_utc,
+                note=note,
+            )
+
+    def prefill_correction(balance) -> None:
+        with BookmakerBalanceService() as service:
+            payload = service.get_correction_prefill(balance)
+
+        if not payload:
+            st.info("No mismatch detected for this bookmaker; correction not required.")
+            return
+
+        st.session_state["correction_prefill"] = {
+            "source": "bookmaker_drilldown",
+            "associate_id": payload["associate_id"],
+            "bookmaker_id": payload["bookmaker_id"],
+            "native_currency": payload["native_currency"],
+            "amount_native": str(payload["amount_native"])
+            if payload["amount_native"] is not None
+            else None,
+            "amount_eur": str(payload["amount_eur"]),
+            "note": payload["note"],
+            "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        }
+
+    render_bookmaker_drilldown(
+        bookmaker_balances,
+        on_update_balance=update_balance_callback,
+        on_prefill_correction=prefill_correction,
+    )
+
     # Footer with explanation
     with st.expander("ℹ️ How Reconciliation Works"):
         st.markdown("""
@@ -254,3 +314,11 @@ except Exception as e:
     logger.error("reconciliation_dashboard_error", error=str(e), exc_info=True)
     st.error(f"❌ Error loading reconciliation data: {str(e)}")
     st.info("💡 Try refreshing the page or contact support if the issue persists.")
+
+finally:
+    if bookmaker_service is not None:
+        bookmaker_service.close()
+    if reconciliation_service is not None:
+        reconciliation_service.close()
+    if db is not None:
+        db.close()

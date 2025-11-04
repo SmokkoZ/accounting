@@ -45,7 +45,7 @@ Traditional systems "reopen" settlements and edit history. **This system uses fo
 
 ### What's Being Built
 
-Four interconnected components:
+Five interconnected components:
 
 1. **Post-Settlement Correction Interface** (Story 5.1)
    - Manual correction form
@@ -65,6 +65,11 @@ Four interconnected components:
    - Manual entry for deposit/withdrawal
    - Accept → writes `DEPOSIT`/`WITHDRAWAL` ledger rows
    - Reject → discards draft
+
+5. **Associate Operations Hub** (Story 5.5)
+   - Single admin surface for associate, bookmaker, and balance operations
+   - Inline transactions (deposit/withdraw) with ledger persistence
+   - Advanced filtering, sorting, and detail drawers for rapid triage
 
 ### Integration Points
 
@@ -330,6 +335,38 @@ Four interconnected components:
 
 ---
 
+### Story 5.5: Associate Operations Hub
+
+**As the operator**, I want a single hub for all associate, bookmaker, balance, and funding actions so I can administer the network without bouncing across multiple pages.
+
+**Acceptance Criteria:**
+- [ ] "Associate Operations" page available from the admin navigation and preloaded with associates (`associates` table) and their bookmakers.
+- [ ] Persistent filter/sort bar anchored at the top with:
+  - Text search (matches associate alias, bookmaker name, chat id).
+  - Multi-select filters: Associate status (admin vs non-admin, active vs inactive), bookmaker active state, currency.
+  - Sorting controls for alias A→Z/Z→A, DELTA high→low, last-activity newest→oldest.
+- [ ] Associate rows/cards display at-a-glance metrics: admin badge, home currency, bookmaker count, NET_DEPOSITS_EUR, SHOULD_HOLD_EUR, CURRENT_HOLDING_EUR, DELTA with status badge colors reused from Story 5.2.
+- [ ] Expanding an associate reveals a bookmaker table with columns for name, active status, parsing profile snippet, modeled vs reported balance, DELTA, latest balance check timestamp, and action buttons (Edit, Manage Balance, Deposit, Withdraw).
+- [ ] "Manage Balance" action opens a drawer/modal that:
+  - Shows latest reported vs modeled balance with delta badges.
+  - Lists historical balance checks with CRUD operations (reuse validators from Story 5.3).
+  - Surfaces ledger history for the associate/bookmaker pair for quick auditing.
+- [ ] "Deposit" and "Withdraw" actions trigger a shared modal capturing amount, currency, optional bookmaker override, and note. On submit the flow:
+  - Validates using existing funding rules (amount > 0, currency allowed, note optional).
+  - Calls a new service helper that writes `DEPOSIT`/`WITHDRAWAL` ledger rows with FX snapshot and associates optional bookmaker linkage.
+  - Updates aggregate metrics and activity tables without a full Streamlit rerun (session-state diff).
+- [ ] Drawer includes "Profile" tab for editing associate metadata (alias, currency, admin flag, chat id) and per-bookmaker fields (name, parsing profile, active flag) with validations reused from Story 5.1/7.x components.
+- [ ] Lists support column sorting and pagination for rosters > 25 entities, with sticky headers on scroll.
+- [ ] Graceful empty states and inline alerts explain when no associates/bookmakers match the filters.
+
+**Technical Notes:**
+- Centralize shared loaders/actions in `src/ui/components/associate_hub/` so legacy pages (Stories 7.1-7.3) can gradually adopt them.
+- Reuse `BookmakerBalanceService` for modeled vs reported numbers and Story 5.3 balance check helpers.
+- Maintain selected associate/bookmaker and filters in `st.session_state` to prevent losing context on reruns.
+- Gate the new page behind a config flag until parity with existing Admin/Balance pages is validated.
+
+---
+
 ## User Acceptance Testing Scenarios
 
 ### Scenario 1: Late VOID Correction
@@ -402,6 +439,19 @@ Four interconnected components:
    - DELTA: worsens (now more short)
 
 **Expected Result**: Deposits tracked separately from bookmaker holdings.
+
+---
+
+### Scenario 5: Operate Entirely from the Associate Hub
+1. Operator launches the "Associate Operations" page from the sidebar.
+2. Uses the search filter to locate "Partner A" and toggles the status filter to show active associates only.
+3. Expands Partner A's row to review bookmaker cards and sees mismatch badge on Bet365.
+4. Clicks "Manage Balance" for Bet365, reviews history, and adds a new balance check with €1,200 reported balance.
+5. Without leaving the drawer, switches to the "Transactions" tab, selects "Deposit", and submits a €300 EUR deposit with note "Top-up before weekend".
+6. Confirmation toast appears, NET_DEPOSITS_EUR and DELTA metrics refresh, and the transaction appears in recent ledger activity.
+7. Operator edits Partner A's alias via the "Profile" tab, saves, and the list reflects the change while retaining current filters.
+
+**Expected Result**: Operator performs balance update, funding entry, and profile edit on one page without navigation.
 
 ---
 
@@ -493,11 +543,12 @@ DELTA = CURRENT_HOLDING_EUR - SHOULD_HOLD_EUR
 Epic 5 is complete when ALL of the following are verified:
 
 ### Functional Validation
-- [ ] All 4 stories (5.1-5.4) marked complete with passing acceptance criteria
+- [ ] All 5 stories (5.1-5.5) marked complete with passing acceptance criteria
 - [ ] Corrections apply forward-only (no UPDATE/DELETE on ledger)
 - [ ] Reconciliation dashboard calculates DELTA correctly
 - [ ] Bookmaker balance mismatches identifiable
 - [ ] Deposits/withdrawals update NET_DEPOSITS_EUR correctly
+- [ ] Associate Operations hub provides unified CRUD, balance checks, and funding actions with real-time metric refresh
 
 ### Technical Validation
 - [ ] Reconciliation math verified with calculator
@@ -506,7 +557,7 @@ Epic 5 is complete when ALL of the following are verified:
 - [ ] No float rounding errors (all Decimal)
 
 ### User Testing
-- [ ] All 4 UAT scenarios pass
+- [ ] All 5 UAT scenarios pass
 - [ ] Operator can identify overholders/short associates in <30 seconds
 - [ ] Corrections applied successfully
 
@@ -530,7 +581,7 @@ Epic 5 is complete when ALL of the following are verified:
 ## Success Metrics
 
 ### Completion Criteria
-- All 4 stories delivered with passing acceptance criteria
+- All 5 stories delivered with passing acceptance criteria
 - Epic 5 "Definition of Done" checklist 100% complete
 - Zero blockers for Epic 6 (Reporting)
 
