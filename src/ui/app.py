@@ -30,6 +30,7 @@ def main() -> None:
         "Select a page:",
         [
             "Dashboard",
+            "Associate Operations Hub",
             "Incoming Bets",
             "Surebets",
             "Settlement",
@@ -43,6 +44,38 @@ def main() -> None:
     if page == "Dashboard":
         st.header("Dashboard")
         st.info("Dashboard page - To be implemented")
+
+    elif page == "Associate Operations Hub":
+        # Import and render the associate operations page
+        try:
+            import sys
+            import os
+            
+            # Add pages directory to path
+            current_dir = os.path.dirname(__file__)
+            pages_dir = os.path.join(current_dir, 'pages')
+            if pages_dir not in sys.path:
+                sys.path.insert(0, pages_dir)
+            
+            # Import and run the associate operations page
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "associate_operations", 
+                os.path.join(pages_dir, "8_associate_operations.py")
+            )
+            associate_ops = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(associate_ops)
+            
+            # Call the main function if it exists
+            if hasattr(associate_ops, 'main'):
+                associate_ops.main()
+            else:
+                st.error("Associate Operations Hub page structure incorrect")
+                
+        except ImportError as e:
+            st.error(f"Associate Operations Hub page not found: {e}")
+        except Exception as e:
+            st.error(f"Error loading Associate Operations Hub: {e}")
 
     elif page == "Incoming Bets":
         st.header("Incoming Bets")

@@ -1,13 +1,13 @@
 # Frontend Architecture
 
-**Version:** v5
-**Last Updated:** 2025-11-04
+**Version:** v5  
+**Last Updated:** 2025-11-04  
 **Parent Document:** [Architecture Overview](../architecture.md)
 
 ---
 
 ## Changelog (from v4 → v5)
-- **Navigation:** Adopt Streamlit's declarative navigation (`st.navigation`, `st.Page`) and page links.  
+- **Navigation:** Adopt Streamlit’s declarative navigation (`st.navigation`, `st.Page`) and page links.  
 - **Rerun control:** Use `@st.fragment` for partial reruns; switch confirm flows to `@st.dialog`.  
 - **Inline actions:** Introduce `st.popover` for compact per-row actions.  
 - **Tables/CRUD:** Standardize on `st.data_editor` with `column_config`, selection return data, and controlled edit modes.  
@@ -15,6 +15,16 @@
 - **PDF slips:** Use `st.pdf` for in-app bet slip/statement preview.  
 - **Deprecations:** Replace all `use_column_width=` with `use_container_width=True` (and `width='stretch'` semantics).  
 - **Version-gating:** Add feature flags and fallbacks so the app runs on older Streamlit if needed.
+
+> This document **keeps all v4 content** and augments it with recommended patterns and examples using recent Streamlit features. It’s written so agents can refactor incrementally.
+
+---
+
+## Overview
+The frontend is a **Streamlit-based web application** running at `localhost:8501`. It provides a simple, operator‑focused interface for bet ingestion, surebet management, settlement, and reconciliation.
+
+**Deprecation note**: `use_column_width` is deprecated. Use `use_container_width=True`.  
+When you need layout hints, prefer `width='stretch'` for full-width containers and `width='content'` for compact elements (where supported by the specific API).
 
 ---
 
@@ -25,7 +35,7 @@ Recommended baseline: **Streamlit ≥ 1.46**. The app includes fallbacks for ≥
 # src/ui/utils/feature_flags.py
 import streamlit as st
 
-FEATURES = {
+FEATURES = {{
     "fragment": hasattr(st, "fragment"),
     "dialog": hasattr(st, "dialog"),
     "popover": hasattr(st, "popover"),
@@ -33,7 +43,7 @@ FEATURES = {
     "page_link": hasattr(st, "page_link"),
     "write_stream": hasattr(st, "write_stream"),
     "pdf": hasattr(st, "pdf"),
-}
+}}
 
 def has(name: str) -> bool:
     return bool(FEATURES.get(name, False))
@@ -53,15 +63,8 @@ else:
 
 ---
 
-## Overview
-
-The frontend is a **Streamlit-based web application** running at `localhost:8501`. It provides a simple, operator-focused interface for bet ingestion, surebet management, settlement, and reconciliation.
-Please note: The `use_column_width` parameter has been deprecated and will be removed in a future release. Please utilize the `use_container_width` parameter instead;
-for `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
-
----
-
 ## Streamlit Application Structure
+*(unchanged from v4, keep files and responsibilities — add helper modules below)*
 
 ```
 src/ui/
@@ -151,7 +154,7 @@ else:
 You can also auto-rerun fragments (`run_every=5`) for polling job progress.
 
 ### B. Dialogs for confirm/override
-Use `@st.dialog` for: SETTLE confirm, "Create canonical event", "Apply correction".
+Use `@st.dialog` for: SETTLE confirm, “Create canonical event”, “Apply correction”.
 
 ```python
 # src/ui/helpers/dialogs.py
@@ -182,7 +185,7 @@ def confirm_settlement(on_confirm):
 ```
 
 ### C. Popovers for compact per-row actions
-Great for small action menus on each row (e.g., "Deactivate", "Override fixture", "Copy").
+Great for small action menus on each row (e.g., “Deactivate”, “Override fixture”, “Copy”).
 
 ```python
 if hasattr(st, "popover"):
@@ -235,7 +238,7 @@ sel = st.dataframe(
 # sel may return a dict with selected rows/cols in supported versions
 ```
 
-If selection events aren't available, keep the explicit `CheckboxColumn("✓")` pattern.
+If selection events aren’t available, keep the explicit `CheckboxColumn("✓")` pattern.
 
 ---
 
@@ -304,12 +307,12 @@ else:
 
 ### Page 1: Incoming Bets (FR‑1, FR‑2)
 - Manual upload form in an `st.form` to avoid mid-typing reruns.  
-- "Create canonical event" → `@st.dialog`.  
+- “Create canonical event” → `@st.dialog`.  
 - OCR/progress output → `st.write_stream` (or fragment with `run_every`).
 
 ### Page 2: Surebets (FR‑3, FR‑4, FR‑5)
-- "Open & Coverage" tab shows metrics and cards.  
-- Add a **fragment** around the live table so filtering doesn't rerun the whole page.  
+- “Open & Coverage” tab shows metrics and cards.  
+- Add a **fragment** around the live table so filtering doesn’t rerun the whole page.  
 - For per-row actions (copy, send coverage), use `st.popover` menus.
 
 ### Page 3: Settlement (FR‑6, FR‑7)
@@ -319,7 +322,7 @@ else:
 
 ### Page 4: Reconciliation (FR‑8)
 - Per-associate summary cards remain.  
-- "Apply Correction" uses a dialog.  
+- “Apply Correction” uses a dialog.  
 - Bookmaker drilldown table uses `st.data_editor` with read-only IDs.
 
 ### Page 5: Export (FR‑9)
@@ -356,7 +359,7 @@ else:
 
 ---
 
-## Training Appendix: "New Streamlit Features" (for agents)
+## Training Appendix: “New Streamlit Features” (for agents)
 
 **1) `@st.fragment` (partial reruns)**  
 - Encapsulate a section so widget interactions rerun only that function.  
@@ -364,12 +367,12 @@ else:
 **When to use:** review queues, job logs, large tables.
 
 **2) `@st.dialog` (modal interactions)**  
-- Build confirm/override flows in a modal that doesn't disrupt the page.  
+- Build confirm/override flows in a modal that doesn’t disrupt the page.  
 - Close by calling `st.rerun()` after success.  
 **When to use:** SETTLE confirm, manual event creation, applying corrections.
 
 **3) `st.popover` (compact menus)**  
-- Small action menus attached to rows/buttons; opening/closing doesn't rerun the app.  
+- Small action menus attached to rows/buttons; opening/closing doesn’t rerun the app.  
 **When to use:** per-row actions: copy, edit, deactivate.
 
 **4) `st.data_editor` enhancements**  
@@ -380,7 +383,7 @@ else:
 
 **5) `st.dataframe` selections**  
 - In newer versions, enable selection events and treat the return as input for bulk actions.  
-**When to use:** bulk confirm/deactivate flows when you don't need an editable grid.
+**When to use:** bulk confirm/deactivate flows when you don’t need an editable grid.
 
 **6) `st.write_stream` (stream logs/LLMs)**  
 - Emit incremental output with typewriter effect; avoids manual placeholder juggling.  
@@ -392,7 +395,7 @@ else:
 
 **8) Navigation helpers**  
 - `st.navigation` + `st.Page` to define top-level pages in code.  
-- `st.page_link` for inline "go to …" links in success messages and dashboards.
+- `st.page_link` for inline “go to …” links in success messages and dashboards.
 
 **9) Layout hygiene**  
 - Always call `st.set_page_config(layout="wide")`.  
@@ -433,412 +436,6 @@ confirm_settlement(on_confirm)
 - Avoid storing large DataFrames in `st.session_state` (memory bloat and pickling costs).  
 - Keep dialogs short-lived; call `st.rerun()` on success to close them.  
 - Be careful with fragments: widgets must live **inside** the fragment body.
-
----
-
-## Modern UI & Streamlit Features Addendum (v5.1)
-
-**Last Updated:** 2025-11-04  
-**Applies to:** Streamlit ≥ 1.30 (with graceful fallbacks)
-
-This addendum augments the existing frontend architecture with practical, operator-first UX patterns and a concise guide to newer Streamlit features you can adopt incrementally.
-
-### A) Styling: Quick, Modern Baseline
-
-#### 1) Theme (Dark, High-Contrast)
-
-Create `.streamlit/config.toml`:
-
-```toml
-[theme]
-base = "dark"
-primaryColor = "#22c55e"
-backgroundColor = "#0b1220"
-secondaryBackgroundColor = "#101826"
-textColor = "#e5e7eb"
-font = "sans serif"
-```
-
-#### 2) Global CSS Primitives (Cards, Pills, Toolbar, Compact Tables)
-
-Create `src/ui/ui_styles.css` and load it at the top of each page:
-
-```python
-import streamlit as st, pathlib
-st.set_page_config(layout="wide")
-st.markdown(pathlib.Path("src/ui/ui_styles.css").read_text(), unsafe_allow_html=True)
-```
-
-**Suggested CSS (minimal but effective):**
-
-```css
-:root{
-  --bg:#0b1220;
-  --panel:#101826;
-  --panel2:#0e1726;
-  --text:#e5e7eb;
-  --muted:#94a3b8;
-  --border:#1f2937;
-  --radius:14px;
-  --shadow:0 6px 20px rgba(0,0,0,.35)
-}
-html,body{background:var(--bg)!important}
-.card{
-  background:linear-gradient(180deg,var(--panel),var(--panel2));
-  border:1px solid var(--border);
-  border-radius:var(--radius);
-  box-shadow:var(--shadow);
-  padding:16px 18px;
-  margin-bottom:14px
-}
-.pill{
-  display:inline-flex;
-  gap:.4rem;
-  border:1px solid var(--border);
-  background:rgba(255,255,255,.05);
-  color:var(--text);
-  border-radius:999px;
-  padding:.25rem .6rem;
-  font-size:.85rem
-}
-.toolbar{
-  display:flex;
-  flex-wrap:wrap;
-  gap:10px;
-  align-items:center;
-  background:var(--panel);
-  border:1px solid var(--border);
-  border-radius:10px;
-  padding:10px 12px;
-  margin-bottom:12px
-}
-.stDataEditor table thead tr th{
-  position:sticky;
-  top:0;
-  background:var(--panel);
-  border-bottom:1px solid var(--border)
-}
-.stDataEditor table tbody tr{height:34px}
-```
-
-#### 3) Optional Helpers for Consistency
-
-Create `src/ui/ui_components.py`:
-
-```python
-import streamlit as st
-from contextlib import contextmanager
-
-def metric_compact(label: str, value: str):
-    st.markdown(
-        '<div style="display:flex;gap:.6rem;color:#94a3b8">'
-        f'<span>{label}</span><span style="color:#e5e7eb;font-weight:600">{value}</span>'
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-@contextmanager
-def card(title: str | None = None, subtitle: str | None = None):
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    if title: 
-        st.markdown(f"### {title}")
-    if subtitle: 
-        st.caption(subtitle)
-    try:
-        yield
-    finally:
-        st.markdown("</div>", unsafe_allow_html=True)
-```
-
-**Usage:**
-
-```python
-from src.ui.ui_components import card, metric_compact
-
-metric_compact("Open Surebets", "12")
-metric_compact("Unsafe", "2")
-
-with card("Resolve Events", "Low-confidence matches shown first"):
-    # content here
-    pass
-```
-
-### B) Navigation & Page Structure
-
-#### Declarative Multipage (Preferred if Available)
-
-Define pages in `app.py` with `st.Page` + `st.navigation`:
-
-```python
-import streamlit as st
-st.set_page_config(page_title="Surebet Ops", layout="wide")
-
-pages = [
-    st.Page("pages/1_incoming_bets.py", title="Incoming Bets", icon="📥"),
-    st.Page("pages/2_surebets.py",      title="Surebets",      icon="🎯"),
-    st.Page("pages/3_settlement.py",    title="Settlement",    icon="⚖️"),
-    st.Page("pages/4_reconciliation.py",title="Reconciliation",icon="🏥"),
-    st.Page("pages/5_export.py",        title="Export",        icon="📦"),
-    st.Page("pages/6_statements.py",    title="Statements",    icon="📊"),
-    st.Page("pages/7_admin_associates.py", title="Admin",      icon="⚙️"),
-]
-
-if hasattr(st, "navigation"):
-    current = st.navigation(pages, position="sidebar")
-    current.run()
-else:
-    st.title("Surebet Ops Console")
-    if hasattr(st, "page_link"):
-        st.page_link("pages/2_surebets.py", label="Go to Surebets", icon="🎯")
-        st.page_link("pages/3_settlement.py", label="Go to Settlement", icon="⚖️")
-```
-
-#### Quick Cross-Links:
-
-```python
-st.page_link("pages/3_settlement.py", label="Go to Settlement", icon="⚖️")
-```
-
-### C) Rerun Control & Interactions
-
-#### Fragments = Partial Reruns
-
-Isolate heavy sections (queues/tables/logs) with `@st.fragment`. Widgets must live inside fragment.
-
-```python
-import streamlit as st
-
-@st.fragment(run_every=10)  # optional polling
-def review_queue():
-    st.write("Refreshing every 10s…")
-    # render big table here
-
-review_queue()
-```
-
-#### Dialogs = Safe Confirmations/Overrides
-
-Use `@st.dialog` for irreversible actions (e.g., SETTLE). Call `st.rerun()` on success to close the modal.
-
-```python
-import streamlit as st
-
-@st.dialog("Confirm settlement")
-def confirm_settle(surebet_id: int):
-    st.warning("This action is PERMANENT.")
-    if st.button("Confirm"):
-        settle(surebet_id)
-        st.rerun()
-
-if st.button("⚠️ Settle"):
-    confirm_settle(42)
-```
-
-#### Popovers = Compact Per-Row Menus
-
-Use `st.popover` for small menus (Deactivate / Override / Copy). Avoid putting popovers inside `st.data_editor` cells.
-
-```python
-with st.popover("Actions"):
-    st.button("Deactivate")
-    st.button("Copy link")
-```
-
-### D) Tables & CRUD (Typed, Safe)
-
-Standardize on `st.data_editor` with `column_config` for type-aware editors and read-only IDs:
-
-```python
-import streamlit as st, pandas as pd
-
-df = pd.DataFrame([{
-    "id":"a1",
-    "name":"Alice",
-    "default_ccy":"EUR",
-    "share_pct":50.0,
-    "active":True
-}])
-
-edited = st.data_editor(
-    df, 
-    use_container_width=True, 
-    hide_index=True, 
-    num_rows="fixed",
-    column_config={
-        "id":           st.column_config.TextColumn("ID", disabled=True),
-        "name":         st.column_config.TextColumn("Name", required=True),
-        "default_ccy":  st.column_config.SelectboxColumn("CCY", options=["EUR","AUD","GBP","RON"]),
-        "share_pct":    st.column_config.NumberColumn("Share %", min_value=0, max_value=100, step=0.5, format="%.1f"),
-        "active":       st.column_config.CheckboxColumn("Active"),
-    }
-)
-```
-
-If your version supports table selections in `st.dataframe`, you can use those for bulk actions; otherwise keep a `CheckboxColumn("✓")`.
-
-### E) Streaming, Progress, and Documents
-
-#### Stream Logs / LLM Output
-
-Use `st.write_stream` for typewriter-style incremental output:
-
-```python
-def gen():
-    for i in range(5):
-        yield f"Step {i+1}/5…\n"
-st.write_stream(gen())
-```
-
-#### Status Blocks & Toasts
-
-```python
-with st.status("Exporting CSV…", expanded=True) as s:
-    st.write("Reading ledger…")
-    st.write("Writing file…")
-    s.update(label="Done!", state="complete")
-
-st.toast("Coverage proof sent ✅")
-```
-
-#### PDF Previews
-
-If you install `streamlit-pdf`, preview slips/statements inline:
-
-```python
-import streamlit as st
-if hasattr(st, "pdf"):
-    st.pdf("data/statements/alice_2025_10.pdf", height=600)
-```
-
-### F) URL State, Caching, Connections, Secrets
-
-#### Query Parameters
-
-Prefer `st.query_params` (not experimental get/set):
-
-```python
-import streamlit as st
-q = st.query_params
-if "associate" in q: 
-    st.write("Selected:", q["associate"])
-q["associate"] = "Alice"  # write back to URL
-```
-
-#### Caching Patterns
-
-- **Data (read-only results):** `@st.cache_data(ttl=60)`
-- **Resources (connections/models):** `@st.cache_resource`
-
-```python
-@st.cache_data(ttl=60)
-def load_aliases(): 
-    return fetch_aliases()
-
-@st.cache_resource
-def get_sql_conn():
-    import sqlite3
-    return sqlite3.connect("data/app.db")
-```
-
-#### Connections & Secrets
-
-Use `st.connection("sql")` (or your provider) if available.
-
-Store credentials only in `.streamlit/secrets.toml` (never in code).
-
-### G) Deprecations & Guardrails
-
-- **Images/tables:** Replace all `use_column_width=` with `use_container_width=True`.
-- **Query params:** Use `st.query_params` (migrate away from experimental APIs).
-- **Feature-gating:** Wrap newer APIs with `hasattr(st, "fragment")`, `hasattr(st, "dialog")`, `hasattr(st, "navigation")`.
-- **Popovers vs data editor:** Avoid popovers inside `st.data_editor` cells; use a separate actions column.
-
-### H) Page-by-Page Adoption Plan
-
-#### Incoming Bets (FR-1, FR-2):
-- Wrap incoming queue in `@st.fragment(run_every=10)`
-- Show OCR pipeline logs via `st.write_stream`
-- "Create canonical event" → `@st.dialog`
-
-#### Surebets (FR-3, FR-4, FR-5):
-- Use `st.data_editor` for open positions
-- Per-row Actions via `st.popover`
-- Add cross-page quick jump with `st.page_link`
-
-#### Settlement (FR-6, FR-7):
-- Replace two-click confirm with `@st.dialog` modal
-- Keep preview inside a `.card`
-- Notify success with `st.toast`
-
-#### Reconciliation (FR-8):
-- Use `st.status` for per-associate balance checks
-- Corrections pipeline uses `@st.dialog`
-
-#### Export (FR-9) & Statements (FR-10):
-- Stream build logs via `st.write_stream`
-- Inline previews with `st.pdf` (if installed)
-
-#### Admin → Associates & Bookmakers (FR-11):
-- Master → Detail pattern: top associates grid, bottom bookmakers filtered by selected associate
-- Typed `column_config`, IDs read-only, `num_rows="fixed"`
-
-### I) UX & Workflow Improvements — Consolidated (Adopted in v5)
-
-#### Global Patterns
-
-- One primary action per page; secondary features under `st.expander("Advanced")`
-- Wide layout + `use_container_width=True` everywhere
-- Wrap input flows in `st.form` + `form_submit_button`
-- Bulk actions: table selection or `CheckboxColumn("✓")` + explicit buttons
-- Long tasks: `st.status` + `st.write_stream`; short notices: `st.toast`
-- Minimal `st.session_state`: only selection, filters, dialog flags
-- Dangerous ops behind `@st.dialog` confirms
-- Feature flags for new APIs (fragment, dialog, navigation, popover)
-
-#### Resolve Events Triage
-
-- Statuses: Auto-OK, Needs Review, Unresolved; default to Needs Review
-- Show confidence, alias evidence, time deltas; bulk confirm ≥ threshold
-- Overrides via `@st.dialog`; queue rendered in a `@st.fragment`
-
-#### Master → Detail CRUD
-
-- Associates (master) above; Bookmakers (detail) filtered by selection
-- `st.data_editor` with typed `column_config` and read-only IDs; `num_rows="fixed"`
-
-#### Timezone & Datetime
-
-- Store in UTC (ISO 8601 Z); display in Australia/Perth at render time
-- Provide a helper like `format_utc_datetime()` for consistency
-
-#### "Reset Page State" Helper
-
-```python
-def reset_page_state(prefixes=("resolve_", "filters_", "dialog_")):
-    for k in list(st.session_state.keys()):
-        if any(k.startswith(p) for p in prefixes):
-            del st.session_state[k]
-
-if st.button("Reset page state"):
-    reset_page_state()
-    st.rerun()
-```
-
-#### Diagnostics Hygiene
-
-- Health/debug under Admin → Advanced
-- Secrets only in `.streamlit/secrets.toml`
-
-### J) QA Checklist (Pre-Merge)
-
-- `st.set_page_config(layout="wide")` on each page
-- All images/tables use `use_container_width=True`
-- No experimental_get/set_query_params (use `st.query_params`)
-- Confirm modals use `@st.dialog`
-- Heavy sections isolated in `@st.fragment` (with `run_every` where useful)
-- `@st.cache_data` for read-only fetches (short TTL) and `@st.cache_resource` for connections
-- Admin → Advanced hosts debug/health tools
-- Secrets live only in `.streamlit/secrets.toml`
 
 ---
 

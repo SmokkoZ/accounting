@@ -1,72 +1,191 @@
 # Technology Stack
 
-**Version:** v4
-**Last Updated:** 2025-10-29
+**Version:** v5  
+**Last Updated:** 2025-11-04  
 **Parent Document:** [Architecture Overview](../architecture.md)
 
 ---
 
 ## Overview
 
-The Surebet Accounting System uses a **Python-first, local-first** technology stack optimized for rapid development, data integrity, and single-operator deployment.
+The Surebet Accounting System uses a **Python‑first, local‑first** stack optimized for rapid development, precise money math, and single‑operator deployment. This v5 update documents Streamlit’s newer capabilities (fragments, dialogs, navigation, streaming, PDF) and introduces small guardrails for reliability.
 
 ---
 
 ## Core Technologies
 
-### Programming Language
+### Language & Tooling
+- **Python 3.12+**
+  - Precise currency math via `decimal.Decimal`
+  - Type checking with **mypy** (strict-ish defaults)
+  - Formatting & linting: **ruff** (pep8/pyflakes/isort), optional **black**
+  - Packaging: **pip** + `requirements.txt` (or **uv/poetry** optional)
+  - Virtual env: `python -m venv .venv`
 
-**Python 3.12+**
+**Why Python?**
+- Rich ecosystem for OCR, data processing, and small backends
+- Fast to prototype; easy to ship a portable single-binary if needed (PyInstaller/Briefcase)
 
-**Justification:**
-- Rich ecosystem for data processing, decimal math, and API integrations
-- Built-in `Decimal` type for currency precision (no float rounding errors)
-- Excellent libraries for Telegram, OpenAI, and web frameworks
-- Rapid prototyping and iterative development
-- Strong typing support via `mypy`
-
-**Alternatives Considered:**
-- Node.js: Rejected due to float precision issues with currency
-- Go: Rejected due to slower prototyping speed for MVP
-- C#: Rejected due to platform lock-in (Windows-centric)
+**Alternatives (revisited):**
+- Node.js / TS: strong tooling, but currency precision/Decimal ergonomics weaker
+- Go: great for services; slower iteration for OCR/LLM glue
+- C#: Windows-friendly; cross‑platform distribution heavier for this use case
 
 ---
 
 ## Frontend Stack
 
 ### UI Framework
+- **Streamlit (recommended ≥ 1.46; compatible ≥ 1.30)**
 
-**Streamlit 1.30+**
+**Benefits**
+- Zero-frontend boilerplate, reactive UIs with Python only
+- Great for single-operator tools and ops consoles
+- Strong table editing (`st.data_editor`) and status/log primitives
 
-**Justification:**
-- Zero frontend boilerplate (no HTML/CSS/JavaScript required)
-- Built-in widgets for forms, tables, file uploads
-- Fast iteration cycle (hot reload on save)
-- Perfect for single-operator internal tools
-- Native support for dataframes, charts, and metrics
+**Limits**
+- Single‑threaded rerun model per session; not ideal for multi‑user concurrency
+- Custom theming via CSS is limited (but enough for operator apps)
 
-**Limitations:**
-- Not suitable for multi-user production apps (no session isolation)
-- Limited customization compared to React/Vue
-- Sequential execution model (reruns entire script on interaction)
+#### New/Relevant Features to Adopt
+- **`@st.fragment`** – partial reruns for heavy sections (queues/tables/logs)
+- **`@st.dialog`** – safe confirmation & override modals (settlement, corrections)
+- **`st.navigation` + `st.Page`** – declarative multipage definition (code‑driven nav)
+- **`st.page_link`** – quick cross‑page actions
+- **`st.data_editor`** – typed editing via `st.column_config.*` (Text/Number/Select/Checkbox/Link)
+- **`st.write_stream`** – incremental streaming logs/LLM output
+- **`st.status` / `st.toast`** – long‑run status blocks, short notifications
+- **`st.pdf`** – inline PDF preview for slips/statements (via `streamlit-pdf`)
+- **`st.popover`** – compact per‑row action menus (avoid inside `st.data_editor` cells)
+- **`st.query_params`** – URL state read/write (replace experimental APIs)
+- **`use_container_width=True`** – replace deprecated `use_column_width`
 
-**Future Migration Path:** If multi-operator support needed, migrate to FastAPI backend + React frontend
-
-### UI Components
-
+#### Minimal Feature Flags
 ```python
-# Core Streamlit widgets used
-st.selectbox()          # Dropdowns (associate, bookmaker, event selection)
-st.file_uploader()      # Screenshot upload
-st.button()             # Actions (Approve, Reject, Settle)
-st.dataframe()          # Bet tables, ledger views
-st.metric()             # Counters (Waiting review, Settled today)
-st.expander()           # Collapsible sections
-st.form()               # Input forms with submit
-st.image()              # Screenshot previews
+import streamlit as st
+HAS = {k: hasattr(st, k) for k in [
+    "fragment","dialog","navigation","page_link","write_stream","pdf","popover"
+]}
+```
+
+#### Snippets
+**Fragments (partial reruns)**
+```python
+import streamlit as st
+@st.fragment(run_every=10)
+def render_queue():
+    st.write("Auto-refreshing…")
+    # table/logs here
+render_queue()
+```
+
+**Dialogs (irreversible actions)**
+```python
+@st.dialog("Confirm settlement")
+def confirm(surebet_id: int):
+    st.warning("PERMANENT action")
+    if st.button("Confirm"):
+        settle(surebet_id)
+        st.rerun()
+```
+
+**Data editor (typed CRUD)**
+```python
+import pandas as pd, streamlit as st
+df = pd.DataFrame([{"id":"a1","name":"Alice","share_pct":50.0,"active":True}])
+edited = st.data_editor(
+    df, use_container_width=True, hide_index=True, num_rows="fixed",
+    column_config={
+        "id": st.column_config.TextColumn("ID", disabled=True),
+        "name": st.column_config.TextColumn("Name", required=True),
+        "share_pct": st.column_config.NumberColumn("Share %", min_value=0, max_value=100, step=0.5),
+        "active": st.column_config.CheckboxColumn("Active"),
+    }
+)
+```
+
+**Streaming logs**
+```python
+def gen(): 
+    for i in range(3): 
+        yield f"Step {i+1}/3…\n"
+st.write_stream(gen())
+```
+
+**PDF preview**
+```python
+# pip install streamlit-pdf
+import streamlit as st
+if hasattr(st, "pdf"):
+    st.pdf("data/statements/alice_2025_10.pdf", height=600)
 ```
 
 ---
+
+## Backend & Services
+
+### Local Database
+- **SQLite 3** (file‑backed, ACID, zero‑ops)
+  - Decimal storage as strings; convert at boundaries
+  - WAL mode recommended for stability
+  - Exports via CSV for audits
+
+**Optional Future:** PostgreSQL if multi‑operator or remote access is required.
+
+### Optional Local API Layer
+- **FastAPI** (only if you outgrow Streamlit’s direct‑DB calls)
+  - Endpoints for OCR queueing, settlement, statements, and audit exports
+  - Makes it easier to swap the frontend later (e.g., React desktop)
+
+### OCR & Normalization
+- **OCR choices (pluggable):** Tesseract, PaddleOCR; Cloud OCR if needed
+- **LLM Normalization:** OpenAI GPT‑4o (or local LLM) post‑processing with strict schemas
+- **Alias Normalization:** JSON dictionaries + fuzzy matching (Levenshtein/Jaro‑Winkler)
+
+### Messaging & Bots
+- **Telegram bot** via `python-telegram-bot` (webhook or polling)
+- Rate‑limit and provenance tags on messages (batch_id, source, timestamp)
+
+### FX & Time
+- **FX snapshots** via chosen API (store rate + provider id per operation)
+- All times stored as **UTC ISO‑8601 Z**, rendered in **Australia/Perth** for operator
+
+---
+
+## Packaging & Distribution
+
+- **Run from source** (dev): `streamlit run src/ui/app.py`
+- **Portable app (optional):** PyInstaller one‑file binary (Windows/macOS)
+- **Config**: `.env` + `.streamlit/secrets.toml` (keys/DSN only here)
+- **Logging**: `logging` stdlib or **structlog**; write app logs to `logs/`
+
+---
+
+## Testing & QA
+
+- **Unit tests**: `pytest`
+- **Type checks**: `mypy`
+- **Lint**: `ruff`
+- **Golden samples**: OCR fixtures; normalization contracts
+- **Manual UX checklist** (pre-merge):
+  - `st.set_page_config(layout="wide")` on each page
+  - All tables/images `use_container_width=True`
+  - Heavy sections isolated in `@st.fragment`
+  - Dangerous actions behind `@st.dialog`
+  - URL state via `st.query_params`
+  - `@st.cache_data` for read‑only fetches (short TTL), `@st.cache_resource` for connections
+  - Secrets only in `.streamlit/secrets.toml`
+
+---
+
+## Migration Notes (1.30 → 1.46+)
+- Replace **`use_column_width`** with **`use_container_width=True`**
+- Prefer **`st.data_editor`** over `st.dataframe` when editing is needed
+- Move two‑click confirms to **`@st.dialog`**
+- Wrap busy areas in **`@st.fragment`** (+ optional `run_every`)
+- Adopt **`st.navigation` + `st.Page`** for code‑defined multipage nav
+- Use **`st.write_stream`** for incremental logs
+- Adopt **`st.query_params`** for URL state
 
 ## Backend Stack
 

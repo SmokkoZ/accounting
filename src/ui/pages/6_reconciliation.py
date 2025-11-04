@@ -18,6 +18,9 @@ from src.services.bookmaker_balance_service import BookmakerBalanceService
 from src.ui.components.reconciliation.bookmaker_drilldown import (
     render_bookmaker_drilldown,
 )
+from src.ui.components.reconciliation.pending_funding import (
+    render_pending_funding_section,
+)
 from src.utils.logging_config import get_logger
 
 
@@ -146,6 +149,11 @@ try:
     with metric_col3:
         st.metric("🟠 Short", total_short)
 
+    st.divider()
+
+    # Pending Funding Events Section (Story 5.4)
+    render_pending_funding_section()
+    
     st.divider()
 
     # Associate balance table with expandable details

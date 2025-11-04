@@ -156,3 +156,36 @@ def validate_balance_amount(amount_str: str) -> Tuple[bool, str]:
         return False, "Max 2 decimal places"
 
     return True, ""
+
+
+def validate_currency_code(currency_code: str) -> bool:
+    """Simple currency code validation for drawer components.
+    
+    Args:
+        currency_code: Currency code to validate
+        
+    Returns:
+        True if valid, False otherwise
+    """
+    is_valid, _ = validate_currency(currency_code)
+    return is_valid
+
+
+def validate_decimal_input(amount_str: str) -> Optional[object]:
+    """Validate and convert decimal string input.
+    
+    Args:
+        amount_str: String representation of decimal amount
+        
+    Returns:
+        Decimal object if valid, None otherwise
+    """
+    from decimal import Decimal, InvalidOperation
+    
+    if not amount_str or not amount_str.strip():
+        return None
+        
+    try:
+        return Decimal(amount_str.strip())
+    except (InvalidOperation, ValueError):
+        return None
