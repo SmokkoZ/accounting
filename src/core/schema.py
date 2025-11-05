@@ -179,14 +179,20 @@ def create_bets_table(conn: sqlite3.Connection) -> None:
             bookmaker_id INTEGER NOT NULL,
             canonical_event_id INTEGER,
             canonical_market_id INTEGER,
+            event_id INTEGER,
+            market_type TEXT,
+            selection TEXT,
             status TEXT NOT NULL DEFAULT 'incoming',
-            stake_eur TEXT NOT NULL,
+            stake_eur TEXT DEFAULT '0.00',
+            stake_amount TEXT,
+            stake_currency TEXT,
             odds TEXT NOT NULL,
             currency TEXT NOT NULL DEFAULT 'EUR',
             fx_rate_to_eur TEXT DEFAULT '1.0',
             stake_original TEXT,
             odds_original TEXT,
             payout TEXT,
+            confidence_score REAL DEFAULT 0.0,
             selection_text TEXT,
             market_code TEXT,
             period_scope TEXT,
@@ -273,10 +279,10 @@ def create_surebets_table(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS surebets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            canonical_event_id INTEGER NOT NULL,
+            canonical_event_id INTEGER,
             canonical_market_id INTEGER,
-            market_code TEXT NOT NULL,
-            period_scope TEXT NOT NULL,
+            market_code TEXT,
+            period_scope TEXT,
             line_value TEXT,
             status TEXT NOT NULL DEFAULT 'open',
             total_stake_eur TEXT,
@@ -319,7 +325,7 @@ def create_surebet_bets_table(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS surebet_bets (
             surebet_id INTEGER NOT NULL,
             bet_id INTEGER NOT NULL,
-            side TEXT NOT NULL,
+            side TEXT DEFAULT 'A',
             created_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
             PRIMARY KEY (surebet_id, bet_id),
             FOREIGN KEY (surebet_id) REFERENCES surebets(id) ON DELETE CASCADE,
@@ -347,7 +353,7 @@ def create_ledger_entries_table(conn: sqlite3.Connection) -> None:
             principal_returned_eur TEXT,
             per_surebet_share_eur TEXT,
             surebet_id INTEGER REFERENCES surebets(id),
-            bet_id INTEGER REFERENCES bets(id),
+            bet_id INTEGER,
             settlement_batch_id TEXT,
             created_at_utc TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
             created_by TEXT NOT NULL DEFAULT 'local_user',
@@ -489,7 +495,7 @@ def migrate_legacy_ledger_entries(conn: sqlite3.Connection, existing_columns: Se
             principal_returned_eur TEXT,
             per_surebet_share_eur TEXT,
             surebet_id INTEGER REFERENCES surebets(id),
-            bet_id INTEGER REFERENCES bets(id),
+            bet_id INTEGER,
             settlement_batch_id TEXT,
             created_at_utc TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
             created_by TEXT NOT NULL DEFAULT 'local_user',
@@ -711,3 +717,5 @@ def get_all_table_names(conn: sqlite3.Connection) -> List[str]:
     )
 
     return [row[0] for row in cursor.fetchall()]
+
+

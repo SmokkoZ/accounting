@@ -370,25 +370,23 @@ Six interconnected components:
 
 ---
 
-### Story 5.6: Associate Ownership Attribution
+### Story 5.6: Delta Provenance & Counterparty Links
 
-**As the finance operations lead**, I need each associate's delta to clearly show the owning admin so we can prioritise outreach and track accountability.
+**As the finance operator**, I need every associate’s delta to be traceable to the counterparty and surebet that created it so I can reconcile surpluses/shortfalls precisely.
 
 **Acceptance Criteria:**
-- [ ] `associates` table gains nullable `managed_by_admin_id` FK referencing another associate with `is_admin = 1`, plus index for fast lookup; migration backfills admins to self, others to null, and seeds baseline audit entries.
-- [ ] `AssociateHubRepository.list_associates_with_metrics` joins owner data and returns `owner_admin_id`, `owner_alias`, `owner_chat_id`, and `owner_email`; `AssociateMetrics` updated accordingly.
-- [ ] Filter bar adds multi-select "Owner" control (active admins only) that persists in `st.session_state`, integrates with reset shortcut, and updates listing/pagination.
-- [ ] Associate listing shows new "Owner" column and renders per-owner rollup chips (count + total delta, color-coded) above the table; unassigned rows display muted "Unassigned".
-- [ ] Drawer "Profile" tab includes owner selector limited to active admins, preventing circular/self assignment and saving via new `update_associate_owner` repository method; success triggers toast + rerun.
-- [ ] Drawer "Transactions" (or new "History") tab lists latest 10 ownership changes from `associate_owner_audit` with operator, previous owner, new owner, timestamp, and delta snapshot.
-- [ ] Ownership changes emit structlog event `associate_owner_changed` capturing associate id, previous/new owner ids, operator id, and delta snapshot; analytics export surfaces `owner_alias`.
-- [ ] Unit/integration tests cover owner filtering, rollup calculations, drawer edits, and migration adds regression test for schema changes.
+- [ ] Settlement ledger entries store the opposing associate (`counterparty_associate_id`) alongside the standard fields so each win/loss is explicitly paired.
+- [ ] `surebet_settlement_links` table records `surebet_id`, `winner_associate_id`, `loser_associate_id`, `amount_eur`, linked ledger entry ids, and timestamps for every settlement or corrective adjustment.
+- [ ] Migration backfills historical settlements: for each surebet, pair positive and negative ledger amounts into link rows; discrepancies > €0.01 are logged for manual review.
+- [ ] Provenance service/API returns, per associate, the breakdown of counterparties and surebets contributing to their delta (signed amounts, timestamps, ledger references).
+- [ ] Associate drawer exposes a “Delta Breakdown” section with summary chips (surplus/deficit, linked surebets) and a table listing surebet id, counterparty alias, amount, event time, and “view ledger” actions.
+- [ ] Telemetry emits `delta_provenance_viewed` with associate id, surebet count, and query duration; exports optionally include provenance detail.
+- [ ] Tests cover link creation, migration backfill, provenance aggregation, and UI rendering (including empty states and pagination).
 
 **Technical Notes:**
-- Schema migration lives alongside Story 5.5 migrations; add helper to repositories for fetching active admins.
-- Owner rollups reuse repository aggregate query; delta totals split into overholding vs short buckets for color cues.
-- Audit table writes occur inside the same transaction as ownership updates to guarantee consistency.
-- Telemetry integrates with existing logging config; include correlation id for easier tracing.
+- Settlement and correction services must create link rows in the same transaction as ledger writes; guard with a uniqueness constraint on `(surebet_id, winner_ledger_entry_id, loser_ledger_entry_id)`.
+- Index `surebet_settlement_links` by winner and loser associate for fast lookup; offer helper queries so reconciliation logic can fetch both sides efficiently.
+- Provenance queries should complete in <500 ms; surface warnings in the UI if any ledger rows lack counterparty attribution.
 
 ---
 

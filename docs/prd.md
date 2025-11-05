@@ -348,6 +348,12 @@ Display canonical reconciliation fields:
   - `DELTA < 0`: Short / someone else holding their money (orange)
 - Human explanation string: "Holding +€800 more than entitlement (group float you should collect)"
 
+#### Delta Provenance (Story 5.6)
+- Every settlement `BET_RESULT` row stores the opposing associate via new `counterparty_associate_id`.
+- `surebet_settlement_links` table captures winner/loser associate pairs, surebet id, signed EUR amount, source ledger entry ids, and timestamps (populated on settlement and correction flows).
+- Provenance service aggregates those links so the Associate Hub can render a “Delta Breakdown” tab (per surebet, counterparty, amount, event time) and exports include an itemised trail.
+- Validation guarantees that the sum of provenance rows reconciles with each associate’s delta; if anything is unlinked, the UI surfaces a warning banner.
+
 #### Per Bookmaker Drilldown
 - Modeled balance (native + EUR)
 - Reported live balance (from `bookmaker_balance_checks`)

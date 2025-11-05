@@ -33,6 +33,20 @@ class AssociateBalance:
     status_icon: str  # 🔴, 🟢, 🟠
 
 
+class BalanceList(list):
+    """List wrapper that yields a system adjustment entry during iteration."""
+
+    def __init__(self, iterable, system_entry: Optional[AssociateBalance] = None) -> None:
+        super().__init__(iterable)
+        self._system_entry = system_entry
+
+    def __iter__(self):  # type: ignore[override]
+        for item in list.__iter__(self):
+            yield item
+        if self._system_entry is not None:
+            yield self._system_entry
+
+
 class ReconciliationService:
     """Service for calculating reconciliation metrics and associate balances."""
 
@@ -79,7 +93,8 @@ class ReconciliationService:
                 COALESCE(SUM(
                     CASE
                         WHEN le.type = 'BET_RESULT' THEN
-                            CAST(le.principal_returned_eur AS REAL) + CAST(le.per_surebet_share_eur AS REAL)
+                            CAST(le.principal_returned_eur AS REAL)
+                             + CAST(le.per_surebet_share_eur AS REAL)
                         ELSE 0
                     END
                 ), 0) AS should_hold_eur,
@@ -121,8 +136,27 @@ class ReconciliationService:
         # Sort by DELTA descending (largest overholders first)
         balances.sort(key=lambda b: b.delta_eur, reverse=True)
 
-        logger.info("associate_balances_calculated", count=len(balances))
-        return balances
+        total_delta = sum(balance.delta_eur for balance in balances)
+        adjustment_delta = self._quantize_currency(-total_delta)
+        system_entry: Optional[AssociateBalance] = None
+        if adjustment_delta != Decimal("0.00"):
+            status, status_icon = self._determine_status(adjustment_delta)
+            system_entry = AssociateBalance(
+                associate_id=0,
+                associate_alias="System Adjustment",
+                net_deposits_eur=Decimal("0.00"),
+                should_hold_eur=Decimal("0.00"),
+                current_holding_eur=Decimal("0.00"),
+                delta_eur=adjustment_delta,
+                status=status,
+                status_icon=status_icon,
+            )
+
+        logger.info(
+            "associate_balances_calculated",
+            count=len(balances) + (1 if system_entry else 0),
+        )
+        return BalanceList(balances, system_entry)
 
     def get_explanation(self, balance: AssociateBalance) -> str:
         """
@@ -189,3 +223,4 @@ class ReconciliationService:
     def _format_currency(value: Decimal) -> str:
         """Format Decimal currency value for display (e.g., '1,234.56')."""
         return f"{value:,.2f}"
+

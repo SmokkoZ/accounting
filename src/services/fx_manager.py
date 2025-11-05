@@ -17,13 +17,16 @@ from src.utils.datetime_helpers import utc_now_iso, get_date_string
 logger = structlog.get_logger()
 
 
-def get_fx_rate(currency: str, date: date) -> Decimal:
+def get_fx_rate(
+    currency: str, rate_date: date | None = None, conn: Optional[sqlite3.Connection] = None
+) -> Decimal:
     """
     Get the FX rate for a currency on a specific date.
 
     Args:
         currency: ISO currency code (e.g., "AUD", "GBP", "USD")
-        date: Date for which to get the rate
+        rate_date: Date for which to get the rate. Defaults to today.
+        conn: Optional database connection to reuse (not closed by this function).
 
     Returns:
         Decimal representing the rate to EUR (how many EUR per 1 unit of currency)
@@ -35,7 +38,14 @@ def get_fx_rate(currency: str, date: date) -> Decimal:
         # EUR to EUR is always 1.0
         return Decimal("1.0")
 
-    conn = get_db_connection()
+    should_close = False
+    if conn is None:
+        conn = get_db_connection()
+        should_close = True
+
+    target_date = rate_date or date.today()
+    target_date_str = target_date.strftime("%Y-%m-%d")
+
     try:
         # Try to get rate for the specific date
         cursor = conn.execute(
@@ -45,7 +55,7 @@ def get_fx_rate(currency: str, date: date) -> Decimal:
             ORDER BY date DESC, fetched_at_utc DESC
             LIMIT 1
         """,
-            (currency.upper(), date.strftime("%Y-%m-%d")),
+            (currency.upper(), target_date_str),
         )
 
         row = cursor.fetchone()
@@ -72,7 +82,7 @@ def get_fx_rate(currency: str, date: date) -> Decimal:
             logger.warning(
                 "fx_rate_fallback_used",
                 currency=currency,
-                requested_date=date.strftime("%Y-%m-%d"),
+                requested_date=target_date_str,
                 used_date=row["date"],
             )
             return Decimal(row["rate_to_eur"])
@@ -81,7 +91,8 @@ def get_fx_rate(currency: str, date: date) -> Decimal:
         raise ValueError(f"No FX rate found for currency: {currency}")
 
     finally:
-        conn.close()
+        if should_close:
+            conn.close()
 
 
 def convert_to_eur(amount: Decimal, currency: str, fx_rate: Decimal) -> Decimal:
@@ -178,12 +189,15 @@ def store_fx_rate(
             conn.close()
 
 
-def get_latest_fx_rate(currency: str) -> Optional[tuple[Decimal, str]]:
+def get_latest_fx_rate(
+    currency: str, conn: Optional[sqlite3.Connection] = None
+) -> Optional[tuple[Decimal, str]]:
     """
     Get the most recent FX rate for a currency.
 
     Args:
         currency: ISO currency code
+        conn: Optional database connection to reuse (not closed by this function).
 
     Returns:
         Tuple of (rate_to_eur, date) or None if no rate exists
@@ -191,7 +205,11 @@ def get_latest_fx_rate(currency: str) -> Optional[tuple[Decimal, str]]:
     if currency.upper() == "EUR":
         return Decimal("1.0"), get_date_string()
 
-    conn = get_db_connection()
+    should_close = False
+    if conn is None:
+        conn = get_db_connection()
+        should_close = True
+
     try:
         cursor = conn.execute(
             """
@@ -211,7 +229,8 @@ def get_latest_fx_rate(currency: str) -> Optional[tuple[Decimal, str]]:
         return None
 
     finally:
-        conn.close()
+        if should_close:
+            conn.close()
 
 
 def parse_utc_iso(iso_string: str) -> datetime:

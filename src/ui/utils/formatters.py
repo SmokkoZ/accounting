@@ -6,7 +6,35 @@ EUR-specific helpers also use the code format ("EUR 100.00").
 
 from datetime import datetime
 from typing import Optional, Tuple
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+
+CURRENCY_SYMBOLS = {
+    "EUR": "€",
+    "GBP": "£",
+    "USD": "$",
+    "AUD": "$",
+    "CAD": "C$",
+    "NZD": "NZ$",
+    "JPY": "¥",
+    "CHF": "CHF ",
+}
+
+CURRENCY_SYMBOLS_WITH_PREFIX = {
+    **CURRENCY_SYMBOLS,
+    "AUD": "A$",
+}
+
+
+def _to_decimal(value: Optional[Decimal | float | str]) -> Optional[Decimal]:
+    """Safely coerce a value to Decimal, returning None on failure."""
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
 
 
 def format_timestamp_relative(timestamp_utc: str) -> str:
@@ -63,25 +91,22 @@ def format_confidence_badge(confidence: Optional[float]) -> Tuple[str, str, str]
 
 
 def format_currency_amount(amount: Optional[Decimal], currency: str) -> str:
-    """Format currency amount using ISO code (e.g., "AUD 100.00").
-
-    Args:
-        amount: Decimal amount to format
-        currency: Currency code (AUD, GBP, EUR, USD, etc.)
-
-    Returns:
-        Formatted string like "AUD 100.00" or "EUR 1,000.00"
-    """
+    """Format a monetary amount using the appropriate currency symbol."""
     if amount is None:
         return "N/A"
 
-    code = (currency or "").upper() if currency else "CUR"
-    if not isinstance(amount, Decimal):
-        try:
-            amount = Decimal(str(amount))
-        except Exception:
-            return f"{code} 0.00"
-    return f"{code} {amount:,.2f}"
+    value = _to_decimal(amount)
+    if value is None:
+        return "N/A"
+
+    code = (currency or "CUR").upper()
+    symbol = CURRENCY_SYMBOLS.get(code)
+    formatted = f"{value:,.2f}"
+
+    if symbol:
+        return f"{symbol}{formatted}"
+
+    return f"{code}{formatted}"
 
 
 def format_bet_summary(
@@ -110,8 +135,13 @@ def format_bet_summary(
     except Exception:
         return "Incomplete bet data"
 
-    code = (currency or "").upper() if currency else "CUR"
-    return f"{code} {s:,.2f} @ {odds} = {code} {p:,.2f}"
+    stake_str = format_currency_amount(s, currency)
+    payout_str = format_currency_amount(p, currency)
+
+    if stake_str == "N/A" or payout_str == "N/A":
+        return "Incomplete bet data"
+
+    return f"{stake_str} @ {odds} = {payout_str}"
 
 
 def format_market_display(market_code: Optional[str]) -> str:
@@ -151,23 +181,11 @@ def format_market_display(market_code: Optional[str]) -> str:
 
 
 def format_eur(amount: Optional[Decimal]) -> str:
-    """Format amount as EUR using ISO code (e.g., "EUR 100.00").
-
-    Args:
-        amount: Decimal amount to format
-
-    Returns:
-        Formatted string like "EUR 100.00" or "EUR 1,000.00"
-    """
-    if amount is None:
-        return "EUR 0.00"
-
-    try:
-        if isinstance(amount, str):
-            amount = Decimal(amount)
-        return f"EUR {amount:,.2f}"
-    except (ValueError, TypeError, Exception):
-        return "EUR 0.00"
+    """Format an amount with the Euro symbol."""
+    value = _to_decimal(amount)
+    if value is None:
+        return "€0.00"
+    return format_currency_amount(value, "EUR")
 
 
 def format_percentage(value: Optional[Decimal]) -> str:
@@ -245,27 +263,11 @@ def format_currency_with_symbol(amount: Optional[Decimal], currency: str) -> str
     Returns:
         Formatted string with currency symbol and thousand separators
     """
-    if amount is None:
+    value = _to_decimal(amount)
+    if value is None:
         return "N/A"
 
-    # Currency symbol mapping
-    symbols = {
-        "EUR": "€",
-        "GBP": "£",
-        "USD": "$",
-        "AUD": "A$",
-        "NZD": "NZ$",
-        "CAD": "C$",
-        "JPY": "¥",
-        "CHF": "CHF ",
-    }
+    code = (currency or "CUR").upper()
+    symbol = CURRENCY_SYMBOLS_WITH_PREFIX.get(code, f"{code} ")
 
-    symbol = symbols.get(currency.upper(), f"{currency.upper()} ")
-
-    if not isinstance(amount, Decimal):
-        try:
-            amount = Decimal(str(amount))
-        except Exception:
-            return f"{symbol}0.00"
-
-    return f"{symbol}{amount:,.2f}"
+    return f"{symbol}{value:,.2f}"

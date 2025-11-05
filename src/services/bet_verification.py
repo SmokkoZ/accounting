@@ -298,6 +298,9 @@ class BetVerificationService:
         # Validate required fields
         if not event_name or len(event_name) < 5:
             raise ValueError("Event name is required (minimum 5 characters)")
+
+        if not kickoff_time_utc or not self._validate_iso8601_utc(kickoff_time_utc):
+            raise ValueError("Kickoff time is required")
         # Try exact pair_key match first
         if pair:
             team1_slug, team2_slug, pair_key = pair
@@ -313,76 +316,6 @@ class BetVerificationService:
                     pair_key=pair_key,
                 )
                 return int(row[0])
-
-        # If kickoff is missing or invalid, try a relaxed path to reduce operator workload
-        if not kickoff_time_utc or not self._validate_iso8601_utc(kickoff_time_utc):
-            # Exact lookup by normalized event name (case-insensitive), optionally by sport
-            params: List[Any] = []  # type: ignore[name-defined]
-            where = "LOWER(normalized_event_name) = LOWER(?)"
-            params.append(EventNormalizer.normalize_event_name(event_name, sport))
-            if sport:
-                where += " AND sport = ?"
-                params.append(sport.lower())
-
-            row = self.db.execute(
-                f"SELECT id FROM canonical_events WHERE {where} ORDER BY id DESC LIMIT 1",
-                tuple(params),
-            ).fetchone()
-            if row:
-                logger.info(
-                    "canonical_event_matched_relaxed",
-                    bet_id=bet_id,
-                    event_id=row[0],
-                    event_name=event_name,
-                )
-                return int(row[0])
-
-            # Try fuzzy name-only matching across existing canonical events for this sport
-            try:
-                cursor = self.db.execute(
-                    "SELECT id, normalized_event_name FROM canonical_events WHERE (? IS NULL OR sport = ?)",
-                    (sport.lower() if sport else None, sport.lower() if sport else None),
-                )
-                best_id: Optional[int] = None
-                best_score = 0.0
-                target = EventNormalizer.normalize_event_name(event_name, sport) or event_name
-                for row in cursor.fetchall():
-                    cand_id, cand_name = row[0], row[1]
-                    score = float(fuzz.ratio(
-                        EventNormalizer.normalize_event_name(cand_name, sport) or cand_name,
-                        target,
-                    ))
-                    if score > best_score:
-                        best_score = score
-                        best_id = cand_id
-                if best_id is not None and best_score >= 90.0:
-                    logger.info(
-                        "canonical_event_matched_relaxed_fuzzy",
-                        bet_id=bet_id,
-                        event_id=best_id,
-                        similarity=best_score,
-                        event_name=event_name,
-                    )
-                    return int(best_id)
-            except Exception:
-                # Non-fatal; fall back to create
-                pass
-
-            # Create a relaxed event without kickoff time
-            event_id = self._create_canonical_event_relaxed(
-                event_name=event_name,
-                sport=sport or "football",
-                competition=competition,
-                kickoff_time_utc=None,
-            )
-            logger.info(
-                "canonical_event_auto_created_relaxed",
-                bet_id=bet_id,
-                event_id=event_id,
-                event_name=event_name,
-                reason="missing_or_invalid_kickoff",
-            )
-            return event_id
 
         # Try fuzzy matching first; if it fails, as a safety net try pair_key reuse again
         if sport and kickoff_time_utc:

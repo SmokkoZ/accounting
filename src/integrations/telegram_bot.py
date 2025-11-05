@@ -9,6 +9,7 @@ This module handles:
 """
 
 import asyncio
+import inspect
 import os
 import platform
 import sys
@@ -16,7 +17,7 @@ import time
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from telegram import Update, __version__ as telegram_version
 from telegram.ext import (
@@ -61,6 +62,25 @@ class TelegramBot:
         self.application = Application.builder().token(self.bot_token).build()
         self._setup_handlers()
         self._setup_signal_handlers()
+
+    @staticmethod
+    async def _invoke(func: Callable[..., Any], *args, **kwargs):
+        """Invoke a callable and await the result if it is awaitable."""
+        result = func(*args, **kwargs)
+        if inspect.isawaitable(result):
+            await result
+        return result
+
+    @staticmethod
+    def _get_effective_message(update: Update):
+        """Safely extract the effective message from an update."""
+        primary = getattr(update, "message", None)
+        if primary is not None and hasattr(primary, "reply_text"):
+            return primary
+        message = getattr(update, "effective_message", None)
+        if message is not None and hasattr(message, "reply_text"):
+            return message
+        return primary or message
 
     def _setup_handlers(self) -> None:
         """Set up command and message handlers."""
@@ -138,9 +158,9 @@ class TelegramBot:
                 delta = current_time - self._user_last_command[user_id]
                 if delta < self._rate_limit_seconds:
                     remaining = self._rate_limit_seconds - delta
-                    message = update.effective_message
+                    message = self._get_effective_message(update)
                     if message:
-                        await message.reply_text(
+                        await self._invoke(message.reply_text, 
                             f"Rate limit exceeded. Please wait {remaining:.1f} seconds before trying again."
                         )
                     elif update.callback_query:
@@ -179,9 +199,9 @@ class TelegramBot:
         if chat_id and self._is_admin_chat(chat_id):
             return True
 
-        message = update.effective_message
+        message = self._get_effective_message(update)
         if message:
-            await message.reply_text("This command is restricted to administrators.")
+            await self._invoke(message.reply_text, "This command is restricted to administrators.")
 
         logger.warning("admin_command_denied", chat_id=chat_id, user_id=user_id)
         return False
@@ -261,7 +281,7 @@ class TelegramBot:
     async def _start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle the /start command."""
         try:
-            await update.message.reply_text("Surebet Bot Ready")
+            await self._invoke(update.message.reply_text, "Surebet Bot Ready")
             print(f"📨 /start command from user {update.effective_user.id}")
             logger.info("start_command_handled", user_id=update.effective_user.id)
         except Exception as e:
@@ -283,7 +303,7 @@ Admin commands:
 /list_associates, /list_bookmakers, /add_associate, /add_bookmaker,
 /list_chats, /unregister_chat, /broadcast, /version, /health
             """.strip()
-            await update.message.reply_text(help_text)
+            await self._invoke(update.message.reply_text, help_text)
             logger.info("help_command_handled", user_id=update.effective_user.id)
         except Exception as e:
             logger.error("help_command_error", error=str(e), user_id=update.effective_user.id)
@@ -296,7 +316,7 @@ Admin commands:
             if update.effective_user:
                 user_id = update.effective_user.id
             chat = update.effective_chat
-            message = update.effective_message
+            message = self._get_effective_message(update)
             if chat:
                 chat_id = chat.id
 
@@ -305,11 +325,11 @@ Admin commands:
                 return
 
             if chat_id is None:
-                await message.reply_text("Unable to determine chat ID.")
+                await self._invoke(message.reply_text, "Unable to determine chat ID.")
                 logger.warning("chat_id_command_no_chat", user_id=user_id)
                 return
 
-            await message.reply_text(f"Current chat ID: {chat_id}")
+            await self._invoke(message.reply_text, f"Current chat ID: {chat_id}")
             logger.info("chat_id_command_handled", user_id=user_id, chat_id=chat_id)
         except Exception as e:
             logger.error("chat_id_command_error", error=str(e), user_id=user_id, chat_id=chat_id)
@@ -323,7 +343,7 @@ Admin commands:
             # Parse command arguments
             args = context.args
             if len(args) != 2:
-                await update.message.reply_text(
+                await self._invoke(update.message.reply_text, 
                     "Usage: /register <associate_alias> <bookmaker_name>\n"
                     "Example: /register Alice Bet365"
                 )
@@ -338,7 +358,7 @@ Admin commands:
 
             # Validate associate and bookmaker exist
             if not self._validate_associate_and_bookmaker(associate_alias, bookmaker_name):
-                await update.message.reply_text(
+                await self._invoke(update.message.reply_text, 
                     f"Invalid associate '{associate_alias}' or bookmaker '{bookmaker_name}'. "
                     "Please check the names and try again."
                 )
@@ -352,12 +372,12 @@ Admin commands:
 
             # Store registration in database
             if self._store_registration(chat_id, associate_alias, bookmaker_name):
-                await update.message.reply_text(
+                await self._invoke(update.message.reply_text, 
                     f"Chat {chat_id} successfully registered for {associate_alias} at {bookmaker_name}"
                 )
                 print(f"✅ Chat {chat_id} registered: {associate_alias} @ {bookmaker_name}")
             else:
-                await update.message.reply_text(
+                await self._invoke(update.message.reply_text, 
                     "Failed to store registration. Please try again later."
                 )
 
@@ -372,7 +392,7 @@ Admin commands:
         except Exception as e:
             logger.error("register_command_error", error=str(e), user_id=update.effective_user.id)
             try:
-                await update.message.reply_text("An error occurred during registration.")
+                await self._invoke(update.message.reply_text, "An error occurred during registration.")
             except Exception as reply_error:
                 logger.error(
                     "register_command_reply_error",
@@ -387,10 +407,10 @@ Admin commands:
             return
 
         associates = self._fetch_associates()
-        message = update.effective_message
+        message = self._get_effective_message(update)
         if not associates:
             if message:
-                await message.reply_text("No associates configured yet.")
+                await self._invoke(message.reply_text, "No associates configured yet.")
             return
 
         lines = ["Associates:"]
@@ -401,7 +421,7 @@ Admin commands:
             )
 
         if message:
-            await message.reply_text("\n".join(lines))
+            await self._invoke(message.reply_text, "\n".join(lines))
 
     async def _list_bookmakers_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -409,14 +429,14 @@ Admin commands:
         if not await self._ensure_admin(update):
             return
 
-        message = update.effective_message
+        message = self._get_effective_message(update)
         alias_filter = " ".join(context.args) if context.args else None
 
         if alias_filter:
             bookmakers = self._fetch_bookmakers_for_associate(alias_filter)
             if not bookmakers:
                 if message:
-                    await message.reply_text(
+                    await self._invoke(message.reply_text, 
                         f"No bookmakers found for associate '{alias_filter}'."
                     )
                 return
@@ -427,7 +447,7 @@ Admin commands:
             bookmakers = self._fetch_all_bookmakers()
             if not bookmakers:
                 if message:
-                    await message.reply_text("No bookmakers configured yet.")
+                    await self._invoke(message.reply_text, "No bookmakers configured yet.")
                 return
             lines = ["Bookmakers:"]
             for bookmaker in bookmakers:
@@ -436,7 +456,7 @@ Admin commands:
                 )
 
         if message:
-            await message.reply_text("\n".join(lines))
+            await self._invoke(message.reply_text, "\n".join(lines))
 
     async def _add_associate_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -444,11 +464,11 @@ Admin commands:
         if not await self._ensure_admin(update):
             return
 
-        message = update.effective_message
+        message = self._get_effective_message(update)
         args = context.args
         if not args:
             if message:
-                await message.reply_text("Usage: /add_associate <alias> [currency]")
+                await self._invoke(message.reply_text, "Usage: /add_associate <alias> [currency]")
             return
 
         alias = args[0]
@@ -492,7 +512,7 @@ Admin commands:
             conn.close()
 
             if message:
-                await message.reply_text(
+                await self._invoke(message.reply_text, 
                     f"Associate '{alias}' {action} with currency {currency}."
                 )
             logger.info("associate_saved", alias=alias, currency=currency, action=action)
@@ -500,7 +520,7 @@ Admin commands:
         except Exception as e:
             logger.error("add_associate_error", alias=alias, error=str(e), exc_info=True)
             if message:
-                await message.reply_text("Failed to save associate. See logs for details.")
+                await self._invoke(message.reply_text, "Failed to save associate. See logs for details.")
 
     async def _add_bookmaker_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -508,11 +528,11 @@ Admin commands:
         if not await self._ensure_admin(update):
             return
 
-        message = update.effective_message
+        message = self._get_effective_message(update)
         args = context.args
         if len(args) < 2:
             if message:
-                await message.reply_text(
+                await self._invoke(message.reply_text, 
                     "Usage: /add_bookmaker <associate_alias> <bookmaker_name>"
                 )
             return
@@ -533,7 +553,7 @@ Admin commands:
             if not associate:
                 conn.close()
                 if message:
-                    await message.reply_text(
+                    await self._invoke(message.reply_text, 
                         f"Associate '{associate_alias}' not found."
                     )
                 return
@@ -556,7 +576,7 @@ Admin commands:
             conn.close()
 
             if message:
-                await message.reply_text(
+                await self._invoke(message.reply_text, 
                     f"Bookmaker '{bookmaker_name}' saved for {associate_alias}."
                 )
             logger.info(
@@ -572,7 +592,7 @@ Admin commands:
                 exc_info=True,
             )
             if message:
-                await message.reply_text("Failed to save bookmaker. See logs for details.")
+                await self._invoke(message.reply_text, "Failed to save bookmaker. See logs for details.")
 
     async def _list_chats_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -580,7 +600,7 @@ Admin commands:
         if not await self._ensure_admin(update):
             return
 
-        message = update.effective_message
+        message = self._get_effective_message(update)
         try:
             conn = get_db_connection()
             rows = conn.execute(
@@ -601,12 +621,12 @@ Admin commands:
         except Exception as e:
             logger.error("list_chats_error", error=str(e), exc_info=True)
             if message:
-                await message.reply_text("Failed to load chat registrations.")
+                await self._invoke(message.reply_text, "Failed to load chat registrations.")
             return
 
         if not rows:
             if message:
-                await message.reply_text("No chat registrations found.")
+                await self._invoke(message.reply_text, "No chat registrations found.")
             return
 
         lines = ["Chat registrations:"]
@@ -617,7 +637,7 @@ Admin commands:
             )
 
         if message:
-            await message.reply_text("\n".join(lines))
+            await self._invoke(message.reply_text, "\n".join(lines))
 
     async def _unregister_chat_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -625,16 +645,16 @@ Admin commands:
         if not await self._ensure_admin(update):
             return
 
-        message = update.effective_message
+        message = self._get_effective_message(update)
         target_chat = context.args[0] if context.args else str(update.effective_chat.id)
 
         if self._deactivate_registration(target_chat):
             if message:
-                await message.reply_text(f"Chat {target_chat} unregistered.")
+                await self._invoke(message.reply_text, f"Chat {target_chat} unregistered.")
             logger.info("chat_unregistered", chat_id=target_chat)
         else:
             if message:
-                await message.reply_text(
+                await self._invoke(message.reply_text, 
                     f"No active registration found for chat {target_chat}."
                 )
 
@@ -644,17 +664,17 @@ Admin commands:
         if not await self._ensure_admin(update):
             return
 
-        message = update.effective_message
+        message = self._get_effective_message(update)
         if not context.args:
             if message:
-                await message.reply_text("Usage: /broadcast <message>")
+                await self._invoke(message.reply_text, "Usage: /broadcast <message>")
             return
 
         text = " ".join(context.args)
         chat_ids = self._get_active_chat_ids()
         if not chat_ids:
             if message:
-                await message.reply_text("No active chats to broadcast to.")
+                await self._invoke(message.reply_text, "No active chats to broadcast to.")
             return
 
         sent = 0
@@ -667,7 +687,7 @@ Admin commands:
                 except ValueError:
                     target_chat = chat_id
 
-                await context.bot.send_message(chat_id=target_chat, text=text)
+                await self._invoke(context.bot.send_message, chat_id=target_chat, text=text)
                 sent += 1
             except Exception as e:
                 failures.append((chat_id, str(e)))
@@ -678,7 +698,7 @@ Admin commands:
             summary.append(f"Failed: {len(failures)}")
 
         if message:
-            await message.reply_text("\n".join(summary))
+            await self._invoke(message.reply_text, "\n".join(summary))
 
     async def _version_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -686,7 +706,7 @@ Admin commands:
         if not await self._ensure_admin(update):
             return
 
-        message = update.effective_message
+        message = self._get_effective_message(update)
         info_lines = [
             "Surebet Telegram Bot",
             f"• python-telegram-bot: {telegram_version}",
@@ -697,7 +717,7 @@ Admin commands:
         ]
 
         if message:
-            await message.reply_text("\n".join(info_lines))
+            await self._invoke(message.reply_text, "\n".join(info_lines))
 
     async def _health_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -705,7 +725,7 @@ Admin commands:
         if not await self._ensure_admin(update):
             return
 
-        message = update.effective_message
+        message = self._get_effective_message(update)
         issues: List[str] = []
 
         screenshot_dir = Path(Config.SCREENSHOT_DIR)
@@ -724,10 +744,10 @@ Admin commands:
 
         if issues:
             if message:
-                await message.reply_text("\n".join(["Health check issues:"] + issues))
+                await self._invoke(message.reply_text, "\n".join(["Health check issues:"] + issues))
         else:
             if message:
-                await message.reply_text("All systems nominal.")
+                await self._invoke(message.reply_text, "All systems nominal.")
 
 
     def _validate_associate_and_bookmaker(self, associate_alias: str, bookmaker_name: str) -> bool:
@@ -897,7 +917,7 @@ Admin commands:
                     "bookmaker_id": result["bookmaker_id"],
                     "associate_alias": result["associate_alias"],
                     "bookmaker_name": result["bookmaker_name"],
-                    "associate_is_admin": bool(result["associate_is_admin"]),
+                    "associate_is_admin": bool(result.get("associate_is_admin", False)),
                 }
             return None
 
@@ -936,7 +956,7 @@ Admin commands:
 
             # Reject unknown chat IDs
             if not registration:
-                await update.message.reply_text(
+                await self._invoke(update.message.reply_text, 
                     "This chat is not registered. Please use /register <associate_alias> <bookmaker_name> first."
                 )
                 logger.warning(
@@ -992,7 +1012,7 @@ Admin commands:
             await self._trigger_ocr_pipeline(bet_id)
 
             # Reply to sender
-            await update.message.reply_text("Processing screenshot...")
+            await self._invoke(update.message.reply_text, "Processing screenshot...")
 
             print(f"📸 Screenshot received from user {user_id} | Bet ID: {bet_id}")
             print(f"   Saved to: {screenshot_path.name}")
@@ -1009,7 +1029,7 @@ Admin commands:
         except Exception as e:
             logger.error("photo_message_error", error=str(e), user_id=update.effective_user.id)
             try:
-                await update.message.reply_text(
+                await self._invoke(update.message.reply_text, 
                     "An error occurred while processing your screenshot. Please try again."
                 )
             except Exception as reply_error:

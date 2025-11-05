@@ -195,7 +195,8 @@ class BetIngestionService:
         stake = str(extraction_result["stake"]) if extraction_result.get("stake") else None
         odds = str(extraction_result["odds"]) if extraction_result.get("odds") else None
         payout = str(extraction_result["payout"]) if extraction_result.get("payout") else None
-        confidence = str(extraction_result["confidence"])
+        confidence_value = extraction_result.get("confidence")
+        confidence = str(confidence_value) if confidence_value is not None else "0.0"
 
         # Build dynamic update to support minimal test schemas
         columns = self._get_table_columns("bets")
@@ -219,8 +220,14 @@ class BetIngestionService:
         add("line_value", extraction_result.get("line_value"))
         add("side", extraction_result.get("side"))
         add("stake_original", stake)
+        add("stake_amount", stake)
         add("odds_original", odds)
         add("payout", payout)
+        add("stake_currency", extraction_result.get("currency"))
+        add("confidence_score", confidence)
+        add("event_id", extraction_result.get("canonical_event_id"))
+        add("market_type", extraction_result.get("market_code"))
+        add("selection", extraction_result.get("side"))
         # Enforce currency from associate's home currency, do not trust OCR
         try:
             cur = self.db.execute(

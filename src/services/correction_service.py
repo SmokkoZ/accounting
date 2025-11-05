@@ -177,7 +177,7 @@ class CorrectionService:
             query += " AND le.associate_id = ?"
             params.append(associate_id)
 
-        query += " ORDER BY le.created_at_utc DESC"
+        query += " ORDER BY le.created_at_utc DESC, le.id DESC"
 
         cursor = self.db.execute(query, params)
         rows = cursor.fetchall()
@@ -271,7 +271,7 @@ class CorrectionService:
             return Decimal("1.00")
 
         # Get the most recent FX rate
-        result = get_latest_fx_rate(currency.upper())
+        result = get_latest_fx_rate(currency.upper(), conn=self.db)
 
         if result is None:
             raise CorrectionError(

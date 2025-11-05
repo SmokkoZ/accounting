@@ -194,15 +194,22 @@ class SettlementService:
         for bet in bets:
             bet_id = bet["id"]
             outcome = outcomes[bet_id]
+            currency = (
+                (bet.get("currency") or bet.get("stake_currency") or "EUR")
+                .upper()
+                .strip()
+            )
 
             # Convert stake to EUR (prefer native stake when available)
             stake_eur = None
-            stake_native = self._parse_decimal(bet.get("stake_original"))
+            stake_native = None
+            for key in ("stake_original", "stake_amount", "stake"):
+                stake_native = self._parse_decimal(bet.get(key))
+                if stake_native is not None:
+                    break
 
             if stake_native is not None:
-                stake_eur = self._convert_to_eur(
-                    stake_native, bet["currency"], fx_rates
-                )
+                stake_eur = self._convert_to_eur(stake_native, currency, fx_rates)
 
             if stake_eur is None:
                 stake_eur_value = self._parse_decimal(bet.get("stake_eur"))
@@ -215,7 +222,7 @@ class SettlementService:
                 raise ValueError(f"Bet {bet_id} is missing stake information")
 
             if stake_native is None:
-                rate = fx_rates[bet["currency"]]
+                rate = fx_rates[currency]
                 stake_native = (stake_eur / rate).quantize(
                     Decimal("0.01"), rounding=ROUND_HALF_UP
                 )
@@ -253,8 +260,8 @@ class SettlementService:
                 stake_eur=stake_eur,
                 stake_native=stake_native,
                 odds=odds_value,
-                currency=bet["currency"],
-                fx_rate=fx_rates[bet["currency"]],
+                currency=currency,
+                fx_rate=fx_rates[currency],
             )
             participants.append(participant)
 
@@ -380,11 +387,31 @@ class SettlementService:
                     (currency.upper(),),
                 ).fetchone()
 
-                if row and row["rate_to_eur"] is not None:
-                    fx_rates[currency] = Decimal(str(row["rate_to_eur"]))
-                    continue
+                rate_value = None
+                if row is not None:
+                    if hasattr(row, "__getitem__"):
+                        try:
+                            rate_value = row["rate_to_eur"]  # type: ignore[index]
+                        except (KeyError, TypeError):
+                            rate_value = None
+                    if rate_value is None and hasattr(row, "rate_to_eur"):
+                        rate_value = getattr(row, "rate_to_eur")
 
-                rate = get_fx_rate(currency, settlement_date)
+                if isinstance(rate_value, (Decimal, int, float, str)):
+                    try:
+                        fx_rates[currency] = Decimal(str(rate_value))
+                        continue
+                    except (InvalidOperation, ValueError):
+                        rate_value = None
+                else:
+                    rate_value = None
+
+                try:
+                    rate = get_fx_rate(
+                        currency, rate_date=settlement_date, conn=self.db
+                    )
+                except TypeError:
+                    rate = get_fx_rate(currency)
                 if rate is None:
                     raise ValueError(f"FX rate not available for currency: {currency}")
                 fx_rates[currency] = Decimal(str(rate))

@@ -38,13 +38,15 @@ def insert_associates(conn: sqlite3.Connection) -> Dict[str, int]:
     """
     associates = [
         {
+            "id": 1,
             "display_alias": "Admin",
             "home_currency": "EUR",
             "is_admin": True,
             "created_at_utc": utc_now_iso(),
         },
         {
-            "display_alias": "Partner A",
+            "id": 2,
+            "display_alias": "Seed Partner",
             "home_currency": "EUR",
             "is_admin": False,
             "created_at_utc": utc_now_iso(),
@@ -57,10 +59,11 @@ def insert_associates(conn: sqlite3.Connection) -> Dict[str, int]:
         cursor = conn.execute(
             """
             INSERT OR IGNORE INTO associates 
-            (display_alias, home_currency, is_admin, created_at_utc)
-            VALUES (?, ?, ?, ?)
+            (id, display_alias, home_currency, is_admin, created_at_utc)
+            VALUES (?, ?, ?, ?, ?)
         """,
             (
+                associate["id"],
                 associate["display_alias"],
                 associate["home_currency"],
                 associate["is_admin"],
@@ -68,8 +71,8 @@ def insert_associates(conn: sqlite3.Connection) -> Dict[str, int]:
             ),
         )
 
-        if cursor.lastrowid:
-            associate_ids[associate["display_alias"]] = cursor.lastrowid
+        if cursor.rowcount:
+            associate_ids[associate["display_alias"]] = associate["id"]
         else:
             # If already exists, get the ID
             cursor = conn.execute(
@@ -96,31 +99,31 @@ def insert_bookmakers(conn: sqlite3.Connection, associate_ids: Dict[str, int]) -
     """
     bookmakers = [
         {
-            "associate_id": associate_ids["Admin"],
+            "id": 1,
+            "associate_key": "Admin",
             "bookmaker_name": "Bet365",
             "parsing_profile": "bet365_standard",
-            "is_admin": True,
             "created_at_utc": utc_now_iso(),
         },
         {
-            "associate_id": associate_ids["Admin"],
+            "id": 2,
+            "associate_key": "Admin",
             "bookmaker_name": "Pinnacle",
             "parsing_profile": "pinnacle_standard",
-            "is_admin": True,
             "created_at_utc": utc_now_iso(),
         },
         {
-            "associate_id": associate_ids["Partner A"],
+            "id": 3,
+            "associate_key": "Seed Partner",
             "bookmaker_name": "Bet365",
             "parsing_profile": "bet365_standard",
-            "is_admin": False,
             "created_at_utc": utc_now_iso(),
         },
         {
-            "associate_id": associate_ids["Partner A"],
+            "id": 4,
+            "associate_key": "Seed Partner",
             "bookmaker_name": "Pinnacle",
             "parsing_profile": "pinnacle_standard",
-            "is_admin": False,
             "created_at_utc": utc_now_iso(),
         },
     ]
@@ -128,23 +131,28 @@ def insert_bookmakers(conn: sqlite3.Connection, associate_ids: Dict[str, int]) -
     bookmaker_ids = {}
 
     for bookmaker in bookmakers:
+        associate_key = bookmaker["associate_key"]
+        if associate_key not in associate_ids:
+            continue
+
         cursor = conn.execute(
             """
             INSERT OR IGNORE INTO bookmakers 
-            (associate_id, bookmaker_name, parsing_profile, created_at_utc)
-            VALUES (?, ?, ?, ?)
+            (id, associate_id, bookmaker_name, parsing_profile, created_at_utc)
+            VALUES (?, ?, ?, ?, ?)
         """,
             (
-                bookmaker["associate_id"],
+                bookmaker["id"],
+                associate_ids[associate_key],
                 bookmaker["bookmaker_name"],
                 bookmaker["parsing_profile"],
                 bookmaker["created_at_utc"],
             ),
         )
 
-        if cursor.lastrowid:
-            key = f"{bookmaker['bookmaker_name']} ({'Admin' if bookmaker['is_admin'] else 'Partner A'})"
-            bookmaker_ids[key] = cursor.lastrowid
+        key = f"{bookmaker['bookmaker_name']} ({associate_key})"
+        if cursor.rowcount:
+            bookmaker_ids[key] = bookmaker["id"]
         else:
             # If already exists, get the ID
             cursor = conn.execute(
@@ -152,9 +160,8 @@ def insert_bookmakers(conn: sqlite3.Connection, associate_ids: Dict[str, int]) -
                 SELECT id FROM bookmakers 
                 WHERE associate_id = ? AND bookmaker_name = ?
             """,
-                (bookmaker["associate_id"], bookmaker["bookmaker_name"]),
+                (associate_ids[associate_key], bookmaker["bookmaker_name"]),
             )
-            key = f"{bookmaker['bookmaker_name']} ({'Admin' if bookmaker['is_admin'] else 'Partner A'})"
             bookmaker_ids[key] = cursor.fetchone()[0]
 
     return bookmaker_ids
@@ -283,3 +290,4 @@ def get_seed_data_summary(conn: sqlite3.Connection) -> Dict[str, int]:
             summary[table] = 0
 
     return summary
+

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Dict, List, Optional
 
@@ -176,7 +176,7 @@ class FundingService:
         try:
             with transactional(self.db) as conn:
                 # Get current FX rate
-                fx_rate = get_fx_rate(draft.currency, date.today())
+                fx_rate = get_fx_rate(draft.currency, datetime.now(timezone.utc).date())
                 
                 # Calculate amount (negative for withdrawals)
                 amount_native = draft.amount_native
