@@ -835,6 +835,80 @@ class TestApprovalWithAutoEventCreation:
         assert event is not None
         assert event["normalized_event_name"] == "Arsenal vs Chelsea"
 
+    def test_approve_creates_event_without_kickoff(
+        self, verification_service, test_db
+    ):
+        """Approval should auto-create event even when kickoff time missing."""
+        cursor = test_db.execute(
+            """
+            INSERT INTO bets (
+                associate_id, bookmaker_id, status, stake_eur, odds, currency,
+                selection_text, kickoff_time_utc, canonical_event_id, ingestion_source
+            ) VALUES (?, ?, 'incoming', '100.00', '1.90', 'AUD',
+                      'Manchester United vs Everton', NULL, NULL, 'manual_upload')
+            """,
+            (1, 1),
+        )
+        test_db.commit()
+        bet_id = cursor.lastrowid
+
+        # Act
+        verification_service.approve_bet(bet_id)
+
+        # Assert
+        bet = test_db.execute("SELECT * FROM bets WHERE id = ?", (bet_id,)).fetchone()
+        assert bet["canonical_event_id"] is not None
+        assert bet["status"] == "verified"
+
+        event = test_db.execute(
+            "SELECT * FROM canonical_events WHERE id = ?", (bet["canonical_event_id"],)
+        ).fetchone()
+        assert event is not None
+        assert event["normalized_event_name"] == "Manchester United vs Everton"
+        assert event["kickoff_time_utc"] is None
+
+    def test_approve_reuses_existing_event_without_kickoff(
+        self, verification_service, test_db
+    ):
+        """Approval should reuse existing event when kickoff missing but names match."""
+        cursor = test_db.execute(
+            """
+            INSERT INTO canonical_events (
+                normalized_event_name, sport, league, team1_slug, team2_slug, pair_key, kickoff_time_utc
+            ) VALUES ('Juventus vs Ac Milan', 'football', 'Serie A', 'juventus', 'ac-milan', 'ac-milan|juventus', NULL)
+            """
+        )
+        existing_event_id = cursor.lastrowid
+        test_db.commit()
+
+        cursor = test_db.execute(
+            """
+            INSERT INTO bets (
+                associate_id, bookmaker_id, status, stake_eur, odds, currency,
+                selection_text, kickoff_time_utc, canonical_event_id, ingestion_source
+            ) VALUES (?, ?, 'incoming', '100.00', '1.90', 'AUD',
+                      'Juventus vs Milan', NULL, NULL, 'manual_upload')
+            """,
+            (1, 1),
+        )
+        test_db.commit()
+        bet_id = cursor.lastrowid
+
+        # Act
+        verification_service.approve_bet(bet_id)
+
+        # Assert
+        bet = test_db.execute("SELECT * FROM bets WHERE id = ?", (bet_id,)).fetchone()
+        assert bet["canonical_event_id"] == existing_event_id
+        assert bet["status"] == "verified"
+
+        event = test_db.execute(
+            "SELECT * FROM canonical_events WHERE id = ?", (existing_event_id,)
+        ).fetchone()
+        assert event is not None
+        assert event["normalized_event_name"] == "Juventus vs Ac Milan"
+        assert event["kickoff_time_utc"] is None
+
     def test_approve_logs_auto_event_creation_to_audit(
         self, verification_service, bet_without_event, test_db
     ):

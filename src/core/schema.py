@@ -1,7 +1,7 @@
 """
 Database schema definition for the Surebet Accounting System.
 
-This module defines all 11 core tables with proper constraints and indexes.
+This module defines all 12 core tables with proper constraints and indexes.
 """
 
 import sqlite3
@@ -24,6 +24,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
     create_extraction_log_table(conn)
     create_surebets_table(conn)
     create_surebet_bets_table(conn)
+    create_surebet_settlement_links_table(conn)
     create_ledger_entries_table(conn)
     create_verification_audit_table(conn)
     create_multibook_message_log_table(conn)
@@ -336,6 +337,51 @@ def create_surebet_bets_table(conn: sqlite3.Connection) -> None:
     )
 
 
+def create_surebet_settlement_links_table(conn: sqlite3.Connection) -> None:
+    """Create the surebet_settlement_links table for delta provenance tracking."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS surebet_settlement_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            surebet_id INTEGER NOT NULL,
+            winner_associate_id INTEGER NOT NULL,
+            loser_associate_id INTEGER NOT NULL,
+            amount_eur TEXT NOT NULL,
+            winner_ledger_entry_id INTEGER NOT NULL,
+            loser_ledger_entry_id INTEGER NOT NULL,
+            created_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
+            FOREIGN KEY (surebet_id) REFERENCES surebets(id),
+            FOREIGN KEY (winner_associate_id) REFERENCES associates(id),
+            FOREIGN KEY (loser_associate_id) REFERENCES associates(id),
+            FOREIGN KEY (winner_ledger_entry_id) REFERENCES ledger_entries(id),
+            FOREIGN KEY (loser_ledger_entry_id) REFERENCES ledger_entries(id)
+        )
+    """
+    )
+
+    # Indexes for quick lookups by associate
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_surebet_links_winner 
+        ON surebet_settlement_links(winner_associate_id)
+    """
+    )
+
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_surebet_links_loser 
+        ON surebet_settlement_links(loser_associate_id)
+    """
+    )
+
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_surebet_links_surebet 
+        ON surebet_settlement_links(surebet_id)
+    """
+    )
+
+
 def create_ledger_entries_table(conn: sqlite3.Connection) -> None:
     """Create the ledger_entries table."""
     conn.execute(
@@ -354,6 +400,7 @@ def create_ledger_entries_table(conn: sqlite3.Connection) -> None:
             per_surebet_share_eur TEXT,
             surebet_id INTEGER REFERENCES surebets(id),
             bet_id INTEGER,
+            opposing_associate_id INTEGER REFERENCES associates(id),
             settlement_batch_id TEXT,
             created_at_utc TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
             created_by TEXT NOT NULL DEFAULT 'local_user',
@@ -386,6 +433,10 @@ def create_ledger_entries_table(conn: sqlite3.Connection) -> None:
 
     if not required.issubset(existing):
         migrate_legacy_ledger_entries(conn, existing)
+
+    # Backfill opposing_associate_id column for existing databases
+    if "opposing_associate_id" not in existing:
+        conn.execute("ALTER TABLE ledger_entries ADD COLUMN opposing_associate_id INTEGER REFERENCES associates(id)")
 
     # Indexes for ledger queries
     conn.execute(
@@ -496,6 +547,7 @@ def migrate_legacy_ledger_entries(conn: sqlite3.Connection, existing_columns: Se
             per_surebet_share_eur TEXT,
             surebet_id INTEGER REFERENCES surebets(id),
             bet_id INTEGER,
+            opposing_associate_id INTEGER REFERENCES associates(id),
             settlement_batch_id TEXT,
             created_at_utc TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
             created_by TEXT NOT NULL DEFAULT 'local_user',
@@ -717,5 +769,3 @@ def get_all_table_names(conn: sqlite3.Connection) -> List[str]:
     )
 
     return [row[0] for row in cursor.fetchall()]
-
-

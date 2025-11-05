@@ -6,6 +6,7 @@ This service handles:
 - Equal-split profit/loss distribution logic
 - FX conversion and Decimal precision
 - Participant seat type determination (staked vs non-staked)
+- Delta provenance link creation
 """
 
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
@@ -15,7 +16,9 @@ from enum import Enum
 from datetime import datetime, timezone
 
 from src.core.database import get_db_connection
+from src.core.schema import create_ledger_append_only_trigger
 from src.services.fx_manager import get_fx_rate, convert_to_eur
+from src.services.delta_provenance_service import DeltaProvenanceService
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -35,17 +38,17 @@ class Participant:
     Represents a participant in the settlement.
 
     Attributes:
-        bet_id: ID of the bet
-        associate_id: ID of the associate
-        bookmaker_id: ID of the bookmaker
-        associate_alias: Display name of the associate
-        bookmaker_name: Name of the bookmaker
+        bet_id: ID of bet
+        associate_id: ID of associate
+        bookmaker_id: ID of bookmaker
+        associate_alias: Display name of associate
+        bookmaker_name: Name of bookmaker
         outcome: Bet outcome (WON/LOST/VOID)
         seat_type: Type of seat ("staked" or "non-staked")
         stake_eur: Original stake in EUR
         stake_native: Original stake in native currency
         odds: Bet odds
-        currency: Original currency of the bet
+        currency: Original currency of bet
         fx_rate: FX rate used for EUR conversion
     """
 
@@ -69,9 +72,9 @@ class LedgerEntryPreview:
     Preview of a ledger entry to be created.
 
     Attributes:
-        bet_id: ID of the bet
-        associate_alias: Display name of the associate
-        bookmaker_name: Name of the bookmaker
+        bet_id: ID of bet
+        associate_alias: Display name of associate
+        bookmaker_name: Name of bookmaker
         outcome: Bet outcome (WON/LOST/VOID)
         principal_returned_eur: Principal returned (for WON bets only)
         per_surebet_share_eur: Equal share of surebet profit
@@ -97,7 +100,7 @@ class SettlementPreview:
     Complete preview of settlement calculation.
 
     Attributes:
-        surebet_id: ID of the surebet being settled
+        surebet_id: ID of surebet being settled
         per_bet_outcomes: Mapping of bet_id → outcome
         per_bet_net_gains: Mapping of bet_id → net gain in EUR
         surebet_profit_eur: Total profit/loss of the surebet
@@ -105,7 +108,7 @@ class SettlementPreview:
         participants: List of all participants with details
         per_surebet_share_eur: Equal share amount per participant
         ledger_entries: Preview of ledger entries to be created
-        settlement_batch_id: UUID for the settlement batch
+        settlement_batch_id: UUID for settlement batch
         warnings: List of warning messages
     """
 
@@ -121,6 +124,28 @@ class SettlementPreview:
     warnings: List[str]
 
 
+@dataclass
+class SettlementResult:
+    """
+    Result of a completed settlement.
+
+    Attributes:
+        surebet_id: ID of settled surebet
+        settlement_batch_id: UUID of settlement batch
+        ledger_entry_ids: List of created ledger entry IDs
+        settlement_link_id: ID of created settlement link
+        success: Whether settlement was successful
+        error: Error message if settlement failed
+    """
+
+    surebet_id: int
+    settlement_batch_id: str
+    ledger_entry_ids: List[int]
+    settlement_link_id: Optional[int]
+    success: bool
+    error: Optional[str]
+
+
 class SettlementService:
     """Service for settling surebets with equal-split logic."""
 
@@ -132,6 +157,7 @@ class SettlementService:
             db: Optional database connection (defaults to get_db_connection())
         """
         self.db = db or get_db_connection()
+        self.delta_provenance = DeltaProvenanceService(self.db)
 
     @staticmethod
     def _parse_decimal(value: Optional[object]) -> Optional[Decimal]:
@@ -164,7 +190,7 @@ class SettlementService:
         Preview settlement calculation without committing to ledger.
 
         Args:
-            surebet_id: ID of the surebet to settle
+            surebet_id: ID of surebet to settle
             outcomes: Mapping of bet_id → BetOutcome
 
         Returns:
@@ -302,12 +328,238 @@ class SettlementService:
             warnings=warnings,
         )
 
+    def execute_settlement(
+        self, surebet_id: int, outcomes: Dict[int, BetOutcome]
+    ) -> SettlementResult:
+        """
+        Execute settlement and create ledger entries with provenance links.
+
+        Args:
+            surebet_id: ID of surebet to settle
+            outcomes: Mapping of bet_id → BetOutcome
+
+        Returns:
+            SettlementResult with execution details
+        """
+        logger.info("executing_settlement", surebet_id=surebet_id)
+
+        try:
+            # Start transaction
+            self.db.execute("BEGIN TRANSACTION")
+
+            # Preview settlement first
+            preview = self.preview_settlement(surebet_id, outcomes)
+
+            # Create ledger entries
+            ledger_entry_ids = []
+            for entry_preview in preview.ledger_entries:
+                cursor = self.db.execute(
+                    """
+                    INSERT INTO ledger_entries (
+                        type,
+                        associate_id,
+                        bookmaker_id,
+                        amount_native,
+                        native_currency,
+                        fx_rate_snapshot,
+                        amount_eur,
+                        settlement_state,
+                        principal_returned_eur,
+                        per_surebet_share_eur,
+                        surebet_id,
+                        bet_id,
+                        opposing_associate_id,
+                        settlement_batch_id,
+                        created_at_utc,
+                        created_by,
+                        note
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "BET_RESULT",
+                        next(p.associate_id for p in preview.participants if p.bet_id == entry_preview.bet_id),
+                        next(p.bookmaker_id for p in preview.participants if p.bet_id == entry_preview.bet_id),
+                        str(entry_preview.total_amount_eur),  # amount_native (EUR for simplicity)
+                        "EUR",  # native_currency
+                        str(entry_preview.fx_rate),
+                        str(entry_preview.total_amount_eur),  # amount_eur
+                        entry_preview.outcome,
+                        str(entry_preview.principal_returned_eur),
+                        str(entry_preview.per_surebet_share_eur),
+                        surebet_id,
+                        entry_preview.bet_id,
+                        None,  # opposing_associate_id (will be updated later)
+                        preview.settlement_batch_id,
+                        datetime.now(timezone.utc).isoformat() + "Z",
+                        "local_user",
+                        f"Surebet {surebet_id} settlement"
+                    )
+                )
+                ledger_entry_ids.append(cursor.lastrowid)
+
+            # Update surebet status
+            self.db.execute(
+                "UPDATE surebets SET status = 'settled', settled_at_utc = ? WHERE id = ?",
+                (datetime.now(timezone.utc).isoformat() + "Z", surebet_id)
+            )
+
+            # Create settlement link for delta provenance
+            settlement_link_id = self._create_settlement_link(
+                surebet_id, preview.participants, ledger_entry_ids
+            )
+
+            # Update ledger entries with opposing associate IDs
+            self._update_ledger_opposing_associates(
+                preview.participants, ledger_entry_ids
+            )
+
+            # Commit transaction
+            self.db.execute("COMMIT")
+
+            logger.info(
+                "settlement_completed",
+                surebet_id=surebet_id,
+                settlement_batch_id=preview.settlement_batch_id,
+                ledger_entry_count=len(ledger_entry_ids),
+                settlement_link_id=settlement_link_id
+            )
+
+            return SettlementResult(
+                surebet_id=surebet_id,
+                settlement_batch_id=preview.settlement_batch_id,
+                ledger_entry_ids=ledger_entry_ids,
+                settlement_link_id=settlement_link_id,
+                success=True,
+                error=None
+            )
+
+        except Exception as e:
+            self.db.execute("ROLLBACK")
+            logger.error(
+                "settlement_failed",
+                surebet_id=surebet_id,
+                error=str(e)
+            )
+            return SettlementResult(
+                surebet_id=surebet_id,
+                settlement_batch_id="",
+                ledger_entry_ids=[],
+                settlement_link_id=None,
+                success=False,
+                error=str(e)
+            )
+
+    def _create_settlement_link(
+        self,
+        surebet_id: int,
+        participants: List[Participant],
+        ledger_entry_ids: List[int]
+    ) -> Optional[int]:
+        """
+        Create settlement link for delta provenance.
+
+        Args:
+            surebet_id: ID of surebet
+            participants: List of settlement participants
+            ledger_entry_ids: List of created ledger entry IDs
+
+        Returns:
+            ID of created settlement link or None if cannot determine winner/loser
+        """
+        # Find winner and loser
+        winner = None
+        loser = None
+        winner_ledger_id = None
+        loser_ledger_id = None
+
+        for i, participant in enumerate(participants):
+            if participant.outcome == BetOutcome.WON:
+                winner = participant
+                winner_ledger_id = ledger_entry_ids[i]
+            elif participant.outcome == BetOutcome.LOST:
+                loser = participant
+                loser_ledger_id = ledger_entry_ids[i]
+
+        # Handle VOID cases
+        if winner is None and loser is None:
+            # All VOID - create link with first participant as "winner"
+            if len(participants) >= 2:
+                winner = participants[0]
+                loser = participants[1]
+                winner_ledger_id = ledger_entry_ids[0]
+                loser_ledger_id = ledger_entry_ids[1]
+            else:
+                logger.warning(
+                    "cannot_create_settlement_link_all_void",
+                    surebet_id=surebet_id,
+                    participant_count=len(participants)
+                )
+                return None
+
+        if winner and loser:
+            # Use winner's positive amount as the link amount
+            # Calculate winner's profit (total returned - stake)
+            winner_total_returned = winner.stake_eur * winner.odds
+            amount_eur = winner_total_returned - winner.stake_eur
+
+            return self.delta_provenance.create_settlement_link(
+                surebet_id=surebet_id,
+                winner_associate_id=winner.associate_id,
+                loser_associate_id=loser.associate_id,
+                amount_eur=amount_eur,
+                winner_ledger_entry_id=winner_ledger_id,
+                loser_ledger_entry_id=loser_ledger_id
+            )
+
+        return None
+
+    def _update_ledger_opposing_associates(
+        self,
+        participants: List[Participant],
+        ledger_entry_ids: List[int]
+    ) -> None:
+        """
+        Update ledger entries with opposing associate IDs.
+
+        Args:
+            participants: List of settlement participants
+            ledger_entry_ids: List of corresponding ledger entry IDs
+        """
+        winner_idx = None
+        loser_idx = None
+
+        for i, participant in enumerate(participants):
+            if participant.outcome == BetOutcome.WON:
+                winner_idx = i
+            elif participant.outcome == BetOutcome.LOST:
+                loser_idx = i
+
+        if winner_idx is not None and loser_idx is not None:
+            # Temporarily disable trigger for opposing_associate_id updates
+            self.db.execute("DROP TRIGGER IF EXISTS prevent_ledger_update")
+            
+            try:
+                # Update winner with loser as opponent
+                self.db.execute(
+                    "UPDATE ledger_entries SET opposing_associate_id = ? WHERE id = ?",
+                    (participants[loser_idx].associate_id, ledger_entry_ids[winner_idx])
+                )
+
+                # Update loser with winner as opponent
+                self.db.execute(
+                    "UPDATE ledger_entries SET opposing_associate_id = ? WHERE id = ?",
+                    (participants[winner_idx].associate_id, ledger_entry_ids[loser_idx])
+                )
+            finally:
+                # Recreate the trigger
+                create_ledger_append_only_trigger(self.db)
+
     def _load_surebet_bets(self, surebet_id: int) -> List[Dict]:
         """
         Load all bets for a surebet.
 
         Args:
-            surebet_id: ID of the surebet
+            surebet_id: ID of surebet
 
         Returns:
             List of bet dictionaries

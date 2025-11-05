@@ -90,3 +90,33 @@ def test_normalize_italian_red_card_yes_no():
     )
     assert result["market_code"] == "RED_CARD_AWARDED"
     assert result["side"] == "YES"
+
+
+def test_normalize_team_specific_corners_away():
+    db = _db()
+    norm = MarketNormalizer(db)
+    result = norm.normalize(
+        sport="football",
+        market_label="7 Or More Corners - Away Team Over Corners",
+        market_code_guess=None,
+        period_scope_text=None,
+        side_text="OVER",
+        line_value=None,
+    )
+    assert result["market_code"] == "AWAY_TEAM_TOTAL_CORNERS_OVER_UNDER"
+    assert result["side"] == "OVER"
+
+
+def test_normalize_team_specific_corners_home():
+    db = _db()
+    norm = MarketNormalizer(db)
+    result = norm.normalize(
+        sport="football",
+        market_label="Corner Totals - Home Team Under",
+        market_code_guess=None,
+        period_scope_text=None,
+        side_text="UNDER",
+        line_value="5.5",
+    )
+    assert result["market_code"] == "HOME_TEAM_TOTAL_CORNERS_OVER_UNDER"
+    assert result["side"] == "UNDER"

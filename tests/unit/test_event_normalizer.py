@@ -12,3 +12,15 @@ def test_normalize_event_name_bayern_club_bruges() -> None:
 
     # Idempotence guard: running normalization again should keep the same value.
     assert EventNormalizer.normalize_event_name(normalized) == normalized
+
+
+def test_normalize_preserves_hyphenated_club_names() -> None:
+    """Hyphenated club names should not create phantom teams."""
+    raw = "Lens vs Paris Saint-Germain Fc"
+
+    normalized = EventNormalizer.normalize_event_name(raw)
+    assert normalized == "Lens vs Paris Saint-Germain Fc"
+    assert EventNormalizer.split_teams(normalized) == (
+        "Lens",
+        "Paris Saint-Germain Fc",
+    )

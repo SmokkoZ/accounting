@@ -184,6 +184,8 @@ def insert_canonical_markets(conn: sqlite3.Connection) -> Dict[str, int]:
         {"market_code": "SECOND_HALF_TOTAL_GOALS", "description": "2nd Half Total Goals Over/Under", "created_at_utc": utc_now_iso()},
         {"market_code": "TOTAL_CARDS_OVER_UNDER", "description": "Total Cards Over/Under (Bookings)", "created_at_utc": utc_now_iso()},
         {"market_code": "TOTAL_CORNERS_OVER_UNDER", "description": "Total Corners Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "HOME_TEAM_TOTAL_CORNERS_OVER_UNDER", "description": "Home Team Total Corners Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "AWAY_TEAM_TOTAL_CORNERS_OVER_UNDER", "description": "Away Team Total Corners Over/Under", "created_at_utc": utc_now_iso()},
         {"market_code": "TOTAL_SHOTS_OVER_UNDER", "description": "Total Shots Over/Under", "created_at_utc": utc_now_iso()},
         {"market_code": "TOTAL_SHOTS_ON_TARGET_OVER_UNDER", "description": "Total Shots on Target Over/Under", "created_at_utc": utc_now_iso()},
         # Soccer Yes/No and team two-way
@@ -195,6 +197,31 @@ def insert_canonical_markets(conn: sqlite3.Connection) -> Dict[str, int]:
         # Tennis
         {"market_code": "MATCH_WINNER", "description": "Match Winner (Two-Way)", "created_at_utc": utc_now_iso()},
         {"market_code": "TOTAL_GAMES_OVER_UNDER", "description": "Total Games Over/Under (Match)", "created_at_utc": utc_now_iso()},
+        # --- Team totals (goals)
+        {"market_code": "HOME_TEAM_TOTAL_GOALS_OVER_UNDER", "description": "Home Team Total Goals Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "AWAY_TEAM_TOTAL_GOALS_OVER_UNDER", "description": "Away Team Total Goals Over/Under", "created_at_utc": utc_now_iso()},
+        # Team totals (cards / bookings)
+        {"market_code": "HOME_TEAM_TOTAL_CARDS_OVER_UNDER", "description": "Home Team Total Cards Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "AWAY_TEAM_TOTAL_CARDS_OVER_UNDER", "description": "Away Team Total Cards Over/Under", "created_at_utc": utc_now_iso()},
+        # Team totals (shots / SOT)
+        {"market_code": "HOME_TEAM_TOTAL_SHOTS_OVER_UNDER", "description": "Home Team Total Shots Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "AWAY_TEAM_TOTAL_SHOTS_OVER_UNDER", "description": "Away Team Total Shots Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "HOME_TEAM_TOTAL_SHOTS_ON_TARGET_OVER_UNDER", "description": "Home Team Total Shots on Target Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "AWAY_TEAM_TOTAL_SHOTS_ON_TARGET_OVER_UNDER", "description": "Away Team Total Shots on Target Over/Under", "created_at_utc": utc_now_iso()},
+        # Match props O/U (offsides, fouls)
+        {"market_code": "TOTAL_OFFSIDES_OVER_UNDER", "description": "Total Offsides Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "HOME_TEAM_TOTAL_OFFSIDES_OVER_UNDER", "description": "Home Team Total Offsides Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "AWAY_TEAM_TOTAL_OFFSIDES_OVER_UNDER", "description": "Away Team Total Offsides Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "TOTAL_FOULS_OVER_UNDER", "description": "Total Fouls Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "HOME_TEAM_TOTAL_FOULS_OVER_UNDER", "description": "Home Team Total Fouls Over/Under", "created_at_utc": utc_now_iso()},
+        {"market_code": "AWAY_TEAM_TOTAL_FOULS_OVER_UNDER", "description": "Away Team Total Fouls Over/Under", "created_at_utc": utc_now_iso()},
+        # Team Yes/No (two-way)
+        {"market_code": "HOME_TEAM_TO_SCORE", "description": "Home Team To Score (Yes/No)", "created_at_utc": utc_now_iso()},
+        {"market_code": "AWAY_TEAM_TO_SCORE", "description": "Away Team To Score (Yes/No)", "created_at_utc": utc_now_iso()},
+        {"market_code": "HOME_TEAM_CLEAN_SHEET", "description": "Home Team Clean Sheet (Yes/No)", "created_at_utc": utc_now_iso()},
+        {"market_code": "AWAY_TEAM_CLEAN_SHEET", "description": "Away Team Clean Sheet (Yes/No)", "created_at_utc": utc_now_iso()},
+        {"market_code": "HOME_TEAM_RED_CARD", "description": "Home Team Red Card Awarded (Yes/No)", "created_at_utc": utc_now_iso()},
+        {"market_code": "AWAY_TEAM_RED_CARD", "description": "Away Team Red Card Awarded (Yes/No)", "created_at_utc": utc_now_iso()},
     ]
 
     market_ids = {}

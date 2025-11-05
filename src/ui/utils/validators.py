@@ -189,3 +189,36 @@ def validate_decimal_input(amount_str: str) -> Optional[object]:
         return Decimal(amount_str.strip())
     except (InvalidOperation, ValueError):
         return None
+
+
+def validate_associate_id(associate_id: int) -> Tuple[bool, str]:
+    """Validate associate ID exists in database.
+    
+    Args:
+        associate_id: Associate ID to validate
+        
+    Returns:
+        Tuple of (is_valid: bool, error_message: str)
+    """
+    if not associate_id:
+        return False, "Associate ID is required"
+    
+    if not isinstance(associate_id, int) or associate_id <= 0:
+        return False, "Associate ID must be a positive integer"
+    
+    # Optional: Check database for existence
+    try:
+        from src.core.database import get_db_connection
+        conn = get_db_connection()
+        cursor = conn.execute("SELECT COUNT(*) FROM associates WHERE id = ?", (associate_id,))
+        count = cursor.fetchone()[0]
+        conn.close()
+        
+        if count == 0:
+            return False, f"Associate ID {associate_id} not found"
+            
+    except Exception:
+        # If database check fails, still allow basic validation
+        pass
+    
+    return True, ""

@@ -112,6 +112,13 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
         description="Administer associates and permissions.",
     ),
     PageSpec(
+        title="Delta Provenance",
+        section="Finance",
+        icon=":material/account_tree:",
+        script="pages/delta_provenance.py",
+        description="View associate delta breakdown by counterparty and surebet.",
+    ),
+    PageSpec(
         title="Balance Management",
         section="Finance",
         icon=":material/account_balance_wallet:",
@@ -122,10 +129,8 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
         title="Export",
         section="Operations",
         icon=":material/file_upload:",
-        description="CSV export workflow (coming soon).",
-        renderer=lambda: _render_placeholder(
-            "Export", "Export flows are on the roadmap. Coming soon!"
-        ),
+        script="pages/5_export.py",
+        description="CSV export workflow for ledger data and audit trails.",
     ),
     PageSpec(
         title="Statements",

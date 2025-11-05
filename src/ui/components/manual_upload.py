@@ -87,10 +87,11 @@ def render_manual_upload_panel() -> None:
 
     # Submission form for file + note
     with st.form("manual_upload_form"):
-        uploaded_file = st.file_uploader(
+        uploaded_files = st.file_uploader(
             "Choose screenshot file",
             type=["png", "jpg", "jpeg"],
             help="Max file size: 10MB. Supported formats: PNG, JPG, JPEG",
+            accept_multiple_files=True,
         )
 
         note = st.text_area(
@@ -103,15 +104,40 @@ def render_manual_upload_panel() -> None:
         submitted = st.form_submit_button("Import & OCR", type="primary")
 
         if submitted:
-            _process_manual_upload(
-                uploaded_file=uploaded_file,
-                associate_id=selected_associate_id,
-                associate_name=selected_associate_name,
-                bookmaker_id=selected_bookmaker_id,
-                bookmaker_name=selected_bookmaker_name,
-                note=note,
-                db=db,
+            if not uploaded_files:
+                st.error("Please upload at least one screenshot.")
+                return
+
+            # Streamlit returns a list when multiple files are accepted; coerce for safety.
+            files_to_process = (
+                list(uploaded_files)
+                if isinstance(uploaded_files, (list, tuple))
+                else [uploaded_files]
             )
+
+            successful_uploads = 0
+
+            for file_obj in files_to_process:
+                st.markdown(f"**Processing:** `{file_obj.name}`")
+                if _process_manual_upload(
+                    uploaded_file=file_obj,
+                    associate_id=selected_associate_id,
+                    associate_name=selected_associate_name,
+                    bookmaker_id=selected_bookmaker_id,
+                    bookmaker_name=selected_bookmaker_name,
+                    note=note,
+                    db=db,
+                    filename=file_obj.name,
+                ):
+                    successful_uploads += 1
+
+            if successful_uploads and successful_uploads == len(files_to_process):
+                st.success(f"Processed {successful_uploads} screenshot(s) successfully.")
+            elif successful_uploads:
+                st.warning(
+                    f"Processed {successful_uploads} out of {len(files_to_process)} screenshot(s). "
+                    "Review any errors above."
+                )
 
 
 def _process_manual_upload(
@@ -122,32 +148,35 @@ def _process_manual_upload(
     bookmaker_name: str,
     note: str,
     db: sqlite3.Connection,
-) -> None:
+    filename: Optional[str] = None,
+) -> bool:
     """
     Process manual file upload with validation and OCR extraction.
     """
+    display_name = filename or (uploaded_file.name if uploaded_file else "uploaded file")
+
     # Validation: File selected
     if not uploaded_file:
         st.error("Please select a file to upload")
-        return
+        return False
 
     # Validation: Bookmaker selected
     if not bookmaker_id:
-        st.error("Please select a valid bookmaker")
-        return
+        st.error(f"Please select a valid bookmaker before importing `{display_name}`.")
+        return False
 
     # Read file bytes
     file_bytes = uploaded_file.read()
 
     # Validation: File size
     if not validate_file_size(file_bytes, max_size_mb=10):
-        st.error("File size exceeds 10MB limit. Please upload a smaller image.")
-        return
+        st.error(f"File `{display_name}` exceeds the 10MB limit. Please upload a smaller image.")
+        return False
 
     # Validation: File type
     if not validate_file_type(uploaded_file.name):
-        st.error("Invalid file type. Please upload PNG, JPG, or JPEG only.")
-        return
+        st.error(f"File `{display_name}` is not PNG, JPG, or JPEG.")
+        return False
 
     # Process upload
     try:
@@ -273,8 +302,10 @@ def _process_manual_upload(
                     f"Bet #{bet_id} created but OCR extraction failed. "
                     "Please review and enter data manually."
                 )
+            return True
 
     except Exception as e:
         logger.error("manual_upload_failed", error=str(e), exc_info=True)
         st.error(f"Error processing upload: {str(e)}")
         st.exception(e)
+        return False

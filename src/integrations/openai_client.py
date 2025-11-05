@@ -239,6 +239,8 @@ Market Codes:
 - SECOND_HALF_TOTAL_GOALS: Football 2H goals O/U
 - TOTAL_CARDS_OVER_UNDER: Football bookings/cards O/U (match)
 - TOTAL_CORNERS_OVER_UNDER: Football corners O/U (match)
+- HOME_TEAM_TOTAL_CORNERS_OVER_UNDER: Football home team corners O/U
+- AWAY_TEAM_TOTAL_CORNERS_OVER_UNDER: Football away team corners O/U
 - TOTAL_SHOTS_OVER_UNDER: Football shots O/U (match)
 - TOTAL_SHOTS_ON_TARGET_OVER_UNDER: Football shots on target O/U (match)
 - BOTH_TEAMS_TO_SCORE: Football BTTS yes/no

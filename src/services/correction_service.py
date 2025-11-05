@@ -2,7 +2,8 @@
 Correction service for post-settlement adjustments.
 
 Implements Story 5.1 requirements: forward-only corrections via BOOKMAKER_CORRECTION
-ledger entries, FX rate freezing, and validation of associate-bookmaker relationships.
+ledger entries, FX rate freezing, validation of associate-bookmaker relationships,
+and Story 5.6 delta provenance link creation for corrections.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import List, Optional
 
 from src.core.database import get_db_connection
 from src.services.fx_manager import get_fx_rate, get_latest_fx_rate
+from src.services.delta_provenance_service import DeltaProvenanceService
 from src.utils.database_utils import TransactionError, transactional
 from src.utils.logging_config import get_logger
 
@@ -39,6 +41,7 @@ class CorrectionService:
         """
         self._owns_connection = db is None
         self.db = db or get_db_connection()
+        self.delta_provenance = DeltaProvenanceService(self.db)
 
     def close(self) -> None:
         """Close the managed database connection if owned by the service."""
@@ -57,6 +60,7 @@ class CorrectionService:
         native_currency: str,
         note: str,
         created_by: str = "local_user",
+        counterparty_associate_id: Optional[int] = None,
     ) -> int:
         """
         Apply forward-only correction by creating new ledger entry.
@@ -70,6 +74,7 @@ class CorrectionService:
             native_currency: Currency code (EUR, USD, GBP, AUD, CAD)
             note: Required explanatory note for audit trail
             created_by: User applying the correction
+            counterparty_associate_id: Optional counterparty for delta provenance linking
 
         Returns:
             entry_id of created ledger entry
@@ -83,6 +88,7 @@ class CorrectionService:
             bookmaker_id=bookmaker_id,
             amount=str(amount_native),
             currency=native_currency,
+            counterparty_associate_id=counterparty_associate_id,
         )
 
         # Validate correction data
@@ -108,7 +114,20 @@ class CorrectionService:
                     amount_eur,
                     note,
                     created_by,
+                    counterparty_associate_id,
                 )
+
+                # Create settlement link if counterparty specified and amount is non-zero
+                if counterparty_associate_id and amount_eur != Decimal("0"):
+                    self._create_correction_settlement_link(
+                        conn,
+                        entry_id,
+                        associate_id,
+                        counterparty_associate_id,
+                        amount_eur,
+                        note,
+                    )
+
         except TransactionError as exc:  # pragma: no cover - defensive path
             raise CorrectionError(str(exc)) from exc
         except Exception as exc:
@@ -163,10 +182,13 @@ class CorrectionService:
                 le.fx_rate_snapshot,
                 le.amount_eur,
                 le.note,
-                le.created_by
+                le.created_by,
+                le.opposing_associate_id,
+                ssl.id as settlement_link_id
             FROM ledger_entries le
             JOIN associates a ON le.associate_id = a.id
             LEFT JOIN bookmakers b ON le.bookmaker_id = b.id
+            LEFT JOIN surebet_settlement_links ssl ON le.id = ssl.winner_ledger_entry_id
             WHERE le.type = 'BOOKMAKER_CORRECTION'
                 AND le.created_at_utc >= ?
         """
@@ -178,7 +200,6 @@ class CorrectionService:
             params.append(associate_id)
 
         query += " ORDER BY le.created_at_utc DESC, le.id DESC"
-
         cursor = self.db.execute(query, params)
         rows = cursor.fetchall()
 
@@ -198,6 +219,8 @@ class CorrectionService:
                     "amount_eur": Decimal(row["amount_eur"]),
                     "note": row["note"],
                     "created_by": row["created_by"],
+                    "opposing_associate_id": row["opposing_associate_id"],
+                    "settlement_link_id": row["settlement_link_id"],
                 }
             )
 
@@ -272,7 +295,6 @@ class CorrectionService:
 
         # Get the most recent FX rate
         result = get_latest_fx_rate(currency.upper(), conn=self.db)
-
         if result is None:
             raise CorrectionError(
                 f"No FX rate available for {currency}. "
@@ -317,6 +339,7 @@ class CorrectionService:
         amount_eur: Decimal,
         note: str,
         created_by: str,
+        counterparty_associate_id: Optional[int] = None,
     ) -> int:
         """
         Write correction entry to ledger.
@@ -331,6 +354,7 @@ class CorrectionService:
             amount_eur: EUR amount
             note: Explanatory note
             created_by: User applying correction
+            counterparty_associate_id: Optional counterparty for provenance
 
         Returns:
             ID of created ledger entry
@@ -355,10 +379,12 @@ class CorrectionService:
                 per_surebet_share_eur,
                 surebet_id,
                 bet_id,
+                opposing_associate_id,
                 settlement_batch_id,
+                created_at_utc,
                 created_by,
                 note
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 "BOOKMAKER_CORRECTION",
@@ -373,13 +399,102 @@ class CorrectionService:
                 None,  # per_surebet_share_eur (not applicable)
                 None,  # surebet_id (corrections are independent)
                 None,  # bet_id (corrections are independent)
+                counterparty_associate_id,
                 None,  # settlement_batch_id (not applicable)
+                datetime.now(timezone.utc).isoformat() + "Z",  # created_at_utc
                 created_by,
                 note,
             ),
         )
 
         return cursor.lastrowid
+
+    def _create_correction_settlement_link(
+        self,
+        conn: sqlite3.Connection,
+        correction_ledger_entry_id: int,
+        associate_id: int,
+        counterparty_associate_id: int,
+        amount_eur: Decimal,
+        note: str,
+    ) -> None:
+        """
+        Create settlement link for correction delta provenance.
+
+        Args:
+            conn: Database connection (within transaction)
+            correction_ledger_entry_id: ID of the correction ledger entry
+            associate_id: Associate receiving the correction
+            counterparty_associate_id: Counterparty associate ID
+            amount_eur: EUR amount of the correction
+            note: Explanatory note
+        """
+        try:
+            # Determine winner/loser based on sign of amount
+            if amount_eur > 0:
+                winner_associate_id = associate_id
+                loser_associate_id = counterparty_associate_id
+                winner_ledger_entry_id = correction_ledger_entry_id
+                # For negative amount corrections, we need a corresponding negative entry for counterparty
+                # This would require a separate correction entry, so we'll create a link
+                # with a placeholder loser ledger entry that can be updated later
+                loser_ledger_entry_id = None
+            else:
+                # Negative amount - this associate is the loser
+                winner_associate_id = counterparty_associate_id
+                loser_associate_id = associate_id
+                loser_ledger_entry_id = correction_ledger_entry_id
+                winner_ledger_entry_id = None
+
+            # Only create link if we have both sides
+            if winner_ledger_entry_id or loser_ledger_entry_id:
+                if not winner_ledger_entry_id:
+                    # Create a dummy winner entry for link integrity
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO ledger_entries (
+                            type, associate_id, amount_native, native_currency,
+                            fx_rate_snapshot, amount_eur, created_by, note
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            "BOOKMAKER_CORRECTION",
+                            winner_associate_id,
+                            "0.00",
+                            "EUR",
+                            "1.000000",
+                            "0.00",
+                            "system",
+                            f"Counterparty entry for correction: {note}"
+                        )
+                    )
+                    winner_ledger_entry_id = cursor.lastrowid
+
+                # Create the settlement link
+                self.delta_provenance.create_settlement_link(
+                    surebet_id=None,  # Corrections don't have surebet_id
+                    winner_associate_id=winner_associate_id,
+                    loser_associate_id=loser_associate_id,
+                    amount_eur=abs(amount_eur),
+                    winner_ledger_entry_id=winner_ledger_entry_id,
+                    loser_ledger_entry_id=loser_ledger_entry_id
+                )
+
+                logger.info(
+                    "correction_settlement_link_created",
+                    correction_entry_id=correction_ledger_entry_id,
+                    associate_id=associate_id,
+                    counterparty_associate_id=counterparty_associate_id,
+                    amount_eur=str(amount_eur),
+                )
+
+        except Exception as e:
+            logger.warning(
+                "correction_settlement_link_failed",
+                correction_entry_id=correction_ledger_entry_id,
+                error=str(e)
+            )
+            # Don't fail the correction if link creation fails
 
     @staticmethod
     def _quantize_currency(value: Decimal) -> Decimal:

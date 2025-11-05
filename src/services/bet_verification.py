@@ -86,18 +86,73 @@ class BetVerificationService:
             # Use relaxed get_or_create which can work without kickoff time
             if has_event_name:
                 try:
-                    # Extract sport from edited fields or default to football
-                    sport = edited_fields.get("sport", "football")
+                    # Extract sport from edited fields, bet data, or default to football
+                    sport = edited_fields.get("sport") or bet.get("sport") or "football"
                     competition = edited_fields.get("league")
 
                     # Attempt to create/match canonical event
-                    event_id = self.get_or_create_canonical_event(
-                        bet_id=bet_id,
-                        event_name=event_name_candidate,
-                        sport=sport,
-                        competition=competition,
-                        kickoff_time_utc=bet.get("kickoff_time_utc"),
-                    )
+                    kickoff_time = bet.get("kickoff_time_utc")
+
+                    try:
+                        event_id = self.get_or_create_canonical_event(
+                            bet_id=bet_id,
+                            event_name=event_name_candidate,
+                            sport=sport,
+                            competition=competition,
+                            kickoff_time_utc=kickoff_time,
+                        )
+                    except ValueError as kickoff_error:
+                        if (
+                            "Kickoff time is required" not in str(kickoff_error)
+                            or kickoff_time
+                        ):
+                            raise
+
+                        normalized_event_name = EventNormalizer.normalize_event_name(
+                            event_name_candidate, sport
+                        )
+                        if not normalized_event_name:
+                            raise
+
+                        # Try to reuse an existing event by pair key before creating a new one
+                        event_id = None
+                        pair = EventNormalizer.compute_pair_key(normalized_event_name)
+                        sport_filter = sport.lower() if isinstance(sport, str) else None
+                        if pair:
+                            _, _, pair_key = pair
+                            row = self.db.execute(
+                                """
+                                SELECT id FROM canonical_events
+                                WHERE (? IS NULL OR sport = ?)
+                                  AND pair_key = ?
+                                ORDER BY id DESC
+                                LIMIT 1
+                                """,
+                                (sport_filter, sport_filter, pair_key),
+                            ).fetchone()
+                            if row:
+                                event_id = int(row[0])
+                                logger.info(
+                                    "canonical_event_auto_assigned_relaxed_match",
+                                    bet_id=bet_id,
+                                    event_id=event_id,
+                                    pair_key=pair_key,
+                                    verified_by=verified_by,
+                                )
+
+                        if event_id is None:
+                            event_id = self._create_canonical_event_relaxed(
+                                normalized_event_name,
+                                sport or "football",
+                                competition,
+                                None,
+                            )
+                            logger.info(
+                                "canonical_event_auto_created_relaxed",
+                                bet_id=bet_id,
+                                event_id=event_id,
+                                verified_by=verified_by,
+                            )
 
                     # Add event_id to edited fields
                     edited_fields["canonical_event_id"] = event_id

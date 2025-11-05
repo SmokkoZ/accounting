@@ -98,12 +98,17 @@ class EventNormalizer:
         # Strip diacritics to stabilize across locales (e.g., São → Sao)
         s = EventNormalizer._strip_diacritics(s)
 
-        # Normalize unicode dashes and separators to a placeholder
-        separators = [" vs ", " v ", " v. ", " vs. ", " - ", " – ", " — ", " : ", " @ "]
-        # Surround with spaces to make replacement easier
-        s = re.sub(r"\s*[\-–—:@]\s*", " vs ", s)
+        # Normalize explicit "v"/"vs" separators first
         s = re.sub(r"\s+v\.?\s+", " vs ", s, flags=re.IGNORECASE)
         s = re.sub(r"\s+vs\.?\s+", " vs ", s, flags=re.IGNORECASE)
+
+        # Convert alternate delimiters only if we still haven't found a "vs"
+        if " vs " not in s.lower():
+            s = re.sub(r"\s*[/@:]\s*", " vs ", s)
+
+        # Treat dashes as separators only when we still lack a vs token
+        if " vs " not in s.lower():
+            s = re.sub(r"\s*[-\u2010-\u2015]\s*", " vs ", s)
 
         # Collapse whitespace
         s = re.sub(r"\s+", " ", s).strip()
