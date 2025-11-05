@@ -17,7 +17,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence
 
 import streamlit as st
 
-from src.ui.utils.feature_flags import all_flags, has
+from src.ui.utils.feature_flags import has
 
 # Configure app-wide layout and theme once.
 st.set_page_config(
@@ -136,10 +136,8 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
         title="Statements",
         section="Finance",
         icon=":material/description:",
-        description="Monthly partner statements (coming soon).",
-        renderer=lambda: _render_placeholder(
-            "Statements", "Statements will be introduced in a future release."
-        ),
+        script="pages/6_statements.py",
+        description="Generate monthly partner statements with funding, entitlement, and reconciliation.",
     ),
 )
 
@@ -182,22 +180,16 @@ def _dynamic_run(page: PageSpec) -> None:
         st.error(f"Error loading page '{page.title}': {exc}")
 
 
-def _render_sidebar(pages: Sequence[PageSpec]) -> None:
-    st.sidebar.title("Navigation")
-
-    if has("page_link"):
+def _render_sidebar(pages: Sequence[PageSpec], use_modern_navigation: bool = False) -> None:
+    # Only show "Navigation" title when we have navigation content to display
+    if not use_modern_navigation and has("page_link"):
+        st.sidebar.title("Navigation")
         st.sidebar.caption("Quick links")
         for page in pages:
             if page.script:
                 st.sidebar.page_link(page.script, label=page.title, icon=page.icon)
         st.sidebar.divider()
 
-    st.sidebar.subheader("Feature flags")
-    for name, supported in sorted(all_flags().items()):
-        glyph = "✅" if supported else "⚪"
-        st.sidebar.write(f"{glyph} `{name}`")
-
-    st.sidebar.divider()
     st.sidebar.caption("Use the dashboard for at-a-glance status.")
 
 
@@ -248,9 +240,10 @@ def _render_navigation_fallback() -> None:
 
 
 def main() -> None:
-    _render_sidebar(PAGE_REGISTRY)
+    use_modern_navigation = has("navigation")
+    _render_sidebar(PAGE_REGISTRY, use_modern_navigation)
 
-    if has("navigation"):
+    if use_modern_navigation:
         _render_navigation_with_pages()
     else:
         _render_navigation_fallback()
