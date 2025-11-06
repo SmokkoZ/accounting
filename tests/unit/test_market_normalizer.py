@@ -120,3 +120,48 @@ def test_normalize_team_specific_corners_home():
     )
     assert result["market_code"] == "HOME_TEAM_TOTAL_CORNERS_OVER_UNDER"
     assert result["side"] == "UNDER"
+
+
+def test_normalize_home_goals_under_over_italian():
+    db = _db()
+    norm = MarketNormalizer(db)
+    result = norm.normalize(
+        sport="football",
+        market_label="Under/Over Casa (gol squadra casa)",
+        market_code_guess=None,
+        period_scope_text=None,
+        side_text="Over",
+        line_value="1.5",
+    )
+    assert result["market_code"] == "HOME_TEAM_TOTAL_GOALS_OVER_UNDER"
+    assert result["side"] == "OVER"
+
+
+def test_normalize_corners_even_odd_pari():
+    db = _db()
+    norm = MarketNormalizer(db)
+    result = norm.normalize(
+        sport="football",
+        market_label="Angoli Pari/Dispari (totali)",
+        market_code_guess=None,
+        period_scope_text=None,
+        side_text="Pari",
+        line_value=None,
+    )
+    assert result["market_code"] == "TOTAL_CORNERS_EVEN_ODD"
+    assert result["side"] == "EVEN"
+
+
+def test_normalize_double_chance_label():
+    db = _db()
+    norm = MarketNormalizer(db)
+    result = norm.normalize(
+        sport="football",
+        market_label="Doppia Chance 1X",
+        market_code_guess=None,
+        period_scope_text=None,
+        side_text="1X",
+        line_value=None,
+    )
+    assert result["market_code"] == "DOUBLE_CHANCE"
+    assert result["side"] == "1X"

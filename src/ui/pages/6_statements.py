@@ -23,6 +23,11 @@ from src.services.statement_service import (
     PartnerFacingSection,
     InternalSection
 )
+from src.ui.helpers.fragments import (
+    call_fragment,
+    render_debug_panel,
+    render_debug_toggle,
+)
 from src.ui.ui_components import load_global_styles
 
 PAGE_TITLE = "Statements"
@@ -281,6 +286,20 @@ def render_statement_details(calc: StatementCalculations) -> None:
             st.error(f"Failed to load transaction details: {str(e)}")
 
 
+
+
+def _render_statement_output(calc: StatementCalculations) -> None:
+    """Render the complete statement output within a fragment."""
+    statement_service = StatementService()
+    partner_section = statement_service.format_partner_facing_section(calc)
+    internal_section = statement_service.format_internal_section(calc)
+
+    render_statement_header(calc)
+    render_partner_facing_section(partner_section)
+    render_internal_section(internal_section)
+    render_export_options(calc, partner_section)
+    render_statement_details(calc)
+
 def render_validation_errors(errors: List[str]) -> None:
     """Render validation error messages."""
     for error in errors:
@@ -298,6 +317,10 @@ def main() -> None:
 
     st.title(f"{PAGE_ICON} {PAGE_TITLE}")
     st.caption("Generate per-associate statements showing funding, entitlement, and 50/50 split")
+
+    toggle_cols = st.columns([6, 2])
+    with toggle_cols[1]:
+        render_debug_toggle(":material/monitor_heart: Performance debug")
     
     # Initialize session state
     if 'statement_generated' not in st.session_state:
@@ -329,19 +352,14 @@ def main() -> None:
     # Display generated statement
     if st.session_state.statement_generated and st.session_state.current_statement:
         calc = st.session_state.current_statement
-        
-        # Format sections
-        statement_service = StatementService()
-        partner_section = statement_service.format_partner_facing_section(calc)
-        internal_section = statement_service.format_internal_section(calc)
-        
-        # Render statement sections
-        render_statement_header(calc)
-        render_partner_facing_section(partner_section)
-        render_internal_section(internal_section)
-        render_export_options(calc, partner_section)
-        render_statement_details(calc)
-    
+
+        call_fragment(
+            "statements.output",
+            _render_statement_output,
+            calc=calc,
+        )
+
+    # Instructions
     # Instructions
     with st.expander("📖 Statement Information", expanded=False):
         st.markdown("""
@@ -369,6 +387,9 @@ def main() -> None:
         **Important:** Statements are read-only snapshots and do not modify any ledger entries.
         """)
 
+    render_debug_panel()
+
 
 if __name__ == "__main__":
     main()
+

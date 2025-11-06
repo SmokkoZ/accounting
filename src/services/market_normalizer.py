@@ -146,5 +146,9 @@ class MarketNormalizer:
             "MENO": "UNDER",
             "PLAYER A": "TEAM_A",
             "PLAYER B": "TEAM_B",
+            "PARI": "EVEN",
+            "DISPARI": "ODD",
+            "EVEN": "EVEN",
+            "ODD": "ODD",
         }
         return mapping.get(s, s)

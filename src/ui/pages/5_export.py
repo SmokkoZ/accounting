@@ -14,6 +14,11 @@ from typing import Dict, List
 import streamlit as st
 
 from src.services.ledger_export_service import LedgerExportService
+from src.ui.helpers.fragments import (
+    call_fragment,
+    render_debug_panel,
+    render_debug_toggle,
+)
 from src.ui.ui_components import load_global_styles
 
 PAGE_TITLE = "Export"
@@ -155,11 +160,15 @@ def main() -> None:
     load_global_styles()
     st.title(f"{PAGE_ICON} {PAGE_TITLE}")
     st.caption("CSV export workflow for ledger data and audit trails.")
+
+    toggle_cols = st.columns([6, 2])
+    with toggle_cols[1]:
+        render_debug_toggle(":material/monitor_heart: Performance debug")
     
     # Render main sections
-    render_export_button()
+    call_fragment("export.action", render_export_button)
     st.divider()
-    render_export_history()
+    call_fragment("export.history", render_export_history)
     st.divider()
     render_export_instructions()
     
@@ -169,6 +178,8 @@ def main() -> None:
         "💡 **Tip:** For very large ledgers (10,000+ rows), the export may take "
         "several seconds. The progress spinner will indicate when the export is complete."
     )
+
+    render_debug_panel()
 
 
 if __name__ == "__main__":

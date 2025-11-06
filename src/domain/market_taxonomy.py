@@ -34,8 +34,7 @@ CANONICAL_MARKETS: Dict[str, str] = {
     # Tennis
     "MATCH_WINNER": "Match Winner (Two-Way)",
     "TOTAL_GAMES_OVER_UNDER": "Total Games Over/Under (Match)",
-    # --- ADD these entries to CANONICAL_MARKETS ---
-
+   
     # Team totals (goals)
     "HOME_TEAM_TOTAL_GOALS_OVER_UNDER": "Home Team Total Goals Over/Under",
     "AWAY_TEAM_TOTAL_GOALS_OVER_UNDER": "Away Team Total Goals Over/Under",
@@ -66,6 +65,12 @@ CANONICAL_MARKETS: Dict[str, str] = {
     "AWAY_TEAM_CLEAN_SHEET": "Away Team Clean Sheet (Yes/No)",
     "HOME_TEAM_RED_CARD": "Home Team Red Card Awarded (Yes/No)",
     "AWAY_TEAM_RED_CARD": "Away Team Red Card Awarded (Yes/No)",
+
+    # Even/Odd markets
+    "TOTAL_GOALS_EVEN_ODD": "Total Goals Even/Odd",
+    "HOME_TEAM_GOALS_EVEN_ODD": "Home Team Goals Even/Odd",
+    "AWAY_TEAM_GOALS_EVEN_ODD": "Away Team Goals Even/Odd",
+    "TOTAL_CORNERS_EVEN_ODD": "Total Corners Even/Odd",
 
 }
 
@@ -101,6 +106,16 @@ PERIOD_SYNONYMS: Dict[str, str] = {
 # Market label synonyms to normalized code with optional implied period
 # Order matters (checked in sequence for matching)
 MARKET_SYNONYMS: List[Tuple[str, str, str | None]] = [
+    # Double chance / Draw no bet / BTTS high-usage markets
+    ("DOUBLE CHANCE", "DOUBLE_CHANCE", None),
+    ("DOPPIA CHANCE", "DOUBLE_CHANCE", None),
+    ("1X2 DOPPIA CHANCE", "DOUBLE_CHANCE", None),
+    ("GOAL/NO GOAL", "BOTH_TEAMS_TO_SCORE", None),
+    ("GOAL / NO GOAL", "BOTH_TEAMS_TO_SCORE", None),
+    ("GOL/NO GOL", "BOTH_TEAMS_TO_SCORE", None),
+    ("GOL / NO GOL", "BOTH_TEAMS_TO_SCORE", None),
+    ("GG/NG", "BOTH_TEAMS_TO_SCORE", None),
+
     # Soccer goals O/U
     ("OVER/UNDER GOALS", "TOTAL_GOALS_OVER_UNDER", None),
     ("UNDER/OVER", "TOTAL_GOALS_OVER_UNDER", None),
@@ -125,16 +140,25 @@ MARKET_SYNONYMS: List[Tuple[str, str, str | None]] = [
     # Corners
     ("TOTAL CORNERS", "TOTAL_CORNERS_OVER_UNDER", None),
     ("CORNERS OVER/UNDER", "TOTAL_CORNERS_OVER_UNDER", None),
+    ("OVER/UNDER CORNERS", "TOTAL_CORNERS_OVER_UNDER", None),
+    ("UNDER/OVER CORNERS", "TOTAL_CORNERS_OVER_UNDER", None),
     ("CALCI D'ANGOLO", "TOTAL_CORNERS_OVER_UNDER", None),
+    ("UNDER/OVER CALCI D'ANGOLO", "TOTAL_CORNERS_OVER_UNDER", None),
+    ("OVER/UNDER CALCI D'ANGOLO", "TOTAL_CORNERS_OVER_UNDER", None),
     ("ANGOLI", "TOTAL_CORNERS_OVER_UNDER", None),
     ("ANGOLI TOTALI", "TOTAL_CORNERS_OVER_UNDER", None),
     ("CORNERS TOTALI", "TOTAL_CORNERS_OVER_UNDER", None),
+    ("NUMERO CALCI D'ANGOLO DELLA SQUADRA", "HOME_TEAM_TOTAL_CORNERS_OVER_UNDER", None),
     ("HOME TEAM CORNERS", "HOME_TEAM_TOTAL_CORNERS_OVER_UNDER", None),
     ("AWAY TEAM CORNERS", "AWAY_TEAM_TOTAL_CORNERS_OVER_UNDER", None),
     ("CORNERS CASA", "HOME_TEAM_TOTAL_CORNERS_OVER_UNDER", None),
     ("CORNERS OSPITE", "AWAY_TEAM_TOTAL_CORNERS_OVER_UNDER", None),
     ("ANGOLI CASA", "HOME_TEAM_TOTAL_CORNERS_OVER_UNDER", None),
     ("ANGOLI OSPITE", "AWAY_TEAM_TOTAL_CORNERS_OVER_UNDER", None),
+    ("UNDER/OVER ANGOLI CASA", "HOME_TEAM_TOTAL_CORNERS_OVER_UNDER", None),
+    ("UNDER/OVER ANGOLI OSPITE", "AWAY_TEAM_TOTAL_CORNERS_OVER_UNDER", None),
+    ("OVER/UNDER ANGOLI CASA", "HOME_TEAM_TOTAL_CORNERS_OVER_UNDER", None),
+    ("OVER/UNDER ANGOLI OSPITE", "AWAY_TEAM_TOTAL_CORNERS_OVER_UNDER", None),
     # Shots
     ("TOTAL SHOTS ON TARGET", "TOTAL_SHOTS_ON_TARGET_OVER_UNDER", None),
     ("SHOTS ON TARGET", "TOTAL_SHOTS_ON_TARGET_OVER_UNDER", None),
@@ -181,19 +205,31 @@ MARKET_SYNONYMS: List[Tuple[str, str, str | None]] = [
     ("HOME TEAM GOALS", "HOME_TEAM_TOTAL_GOALS_OVER_UNDER", None),
     ("TEAM A GOALS", "HOME_TEAM_TOTAL_GOALS_OVER_UNDER", None),
     ("CASA GOL", "HOME_TEAM_TOTAL_GOALS_OVER_UNDER", None),
+    ("UNDER/OVER CASA", "HOME_TEAM_TOTAL_GOALS_OVER_UNDER", None),
+    ("OVER/UNDER CASA", "HOME_TEAM_TOTAL_GOALS_OVER_UNDER", None),
+    ("UNDER/OVER SQUADRA CASA", "HOME_TEAM_TOTAL_GOALS_OVER_UNDER", None),
+    ("OVER/UNDER SQUADRA CASA", "HOME_TEAM_TOTAL_GOALS_OVER_UNDER", None),
     ("AWAY TEAM GOALS", "AWAY_TEAM_TOTAL_GOALS_OVER_UNDER", None),
     ("TEAM B GOALS", "AWAY_TEAM_TOTAL_GOALS_OVER_UNDER", None),
     ("OSPITE GOL", "AWAY_TEAM_TOTAL_GOALS_OVER_UNDER", None),
+    ("UNDER/OVER OSPITE", "AWAY_TEAM_TOTAL_GOALS_OVER_UNDER", None),
+    ("OVER/UNDER OSPITE", "AWAY_TEAM_TOTAL_GOALS_OVER_UNDER", None),
+    ("UNDER/OVER SQUADRA OSPITE", "AWAY_TEAM_TOTAL_GOALS_OVER_UNDER", None),
+    ("OVER/UNDER SQUADRA OSPITE", "AWAY_TEAM_TOTAL_GOALS_OVER_UNDER", None),
 
     # Team cards O/U (Home/Away)
     ("HOME CARDS", "HOME_TEAM_TOTAL_CARDS_OVER_UNDER", None),
     ("HOME BOOKINGS", "HOME_TEAM_TOTAL_CARDS_OVER_UNDER", None),
     ("TEAM A CARDS", "HOME_TEAM_TOTAL_CARDS_OVER_UNDER", None),
     ("CARTELLINI CASA", "HOME_TEAM_TOTAL_CARDS_OVER_UNDER", None),
+    ("UNDER/OVER CARTELLINI CASA", "HOME_TEAM_TOTAL_CARDS_OVER_UNDER", None),
+    ("OVER/UNDER CARTELLINI CASA", "HOME_TEAM_TOTAL_CARDS_OVER_UNDER", None),
     ("AWAY CARDS", "AWAY_TEAM_TOTAL_CARDS_OVER_UNDER", None),
     ("AWAY BOOKINGS", "AWAY_TEAM_TOTAL_CARDS_OVER_UNDER", None),
     ("TEAM B CARDS", "AWAY_TEAM_TOTAL_CARDS_OVER_UNDER", None),
     ("CARTELLINI OSPITE", "AWAY_TEAM_TOTAL_CARDS_OVER_UNDER", None),
+    ("UNDER/OVER CARTELLINI OSPITE", "AWAY_TEAM_TOTAL_CARDS_OVER_UNDER", None),
+    ("OVER/UNDER CARTELLINI OSPITE", "AWAY_TEAM_TOTAL_CARDS_OVER_UNDER", None),
 
     # Team shots O/U
     ("HOME SHOTS ON TARGET", "HOME_TEAM_TOTAL_SHOTS_ON_TARGET_OVER_UNDER", None),
@@ -209,6 +245,22 @@ MARKET_SYNONYMS: List[Tuple[str, str, str | None]] = [
     ("AWAY SHOTS", "AWAY_TEAM_TOTAL_SHOTS_OVER_UNDER", None),
     ("TEAM B SHOTS", "AWAY_TEAM_TOTAL_SHOTS_OVER_UNDER", None),
     ("TIRI OSPITE", "AWAY_TEAM_TOTAL_SHOTS_OVER_UNDER", None),
+
+    # Even/Odd totals
+    ("PARI/DISPARI (TOTALE GOL)", "TOTAL_GOALS_EVEN_ODD", None),
+    ("PARI/DISPARI GOL", "TOTAL_GOALS_EVEN_ODD", None),
+    ("GOL PARI/DISPARI", "TOTAL_GOALS_EVEN_ODD", None),
+    ("ODD/EVEN GOALS", "TOTAL_GOALS_EVEN_ODD", None),
+    ("GOALS ODD/EVEN", "TOTAL_GOALS_EVEN_ODD", None),
+    ("CASA PARI/DISPARI", "HOME_TEAM_GOALS_EVEN_ODD", None),
+    ("PARI/DISPARI CASA", "HOME_TEAM_GOALS_EVEN_ODD", None),
+    ("TEAM A ODD/EVEN GOALS", "HOME_TEAM_GOALS_EVEN_ODD", None),
+    ("OSPITE PARI/DISPARI", "AWAY_TEAM_GOALS_EVEN_ODD", None),
+    ("PARI/DISPARI OSPITE", "AWAY_TEAM_GOALS_EVEN_ODD", None),
+    ("TEAM B ODD/EVEN GOALS", "AWAY_TEAM_GOALS_EVEN_ODD", None),
+    ("PARI/DISPARI ANGOLI", "TOTAL_CORNERS_EVEN_ODD", None),
+    ("ANGOLI PARI/DISPARI", "TOTAL_CORNERS_EVEN_ODD", None),
+    ("ODD/EVEN CORNERS", "TOTAL_CORNERS_EVEN_ODD", None),
 
     # Offsides O/U (totals + team)
     ("TOTAL OFFSIDES", "TOTAL_OFFSIDES_OVER_UNDER", None),
@@ -307,7 +359,11 @@ def find_market_code_from_label(label: str | None) -> Tuple[str | None, str | No
         return any(c in s for c in candidates)
 
     def has_team_indicator(*, home: bool) -> bool:
-        tokens = ["HOME", "TEAM A", "CASA"] if home else ["AWAY", "TEAM B", "OSPITE", "TRASFERTA"]
+        tokens = (
+            ["HOME", "TEAM A", "CASA", "SQUADRA CASA"]
+            if home
+            else ["AWAY", "TEAM B", "OSPITE", "TRASFERTA", "SQUADRA OSPITE"]
+        )
         return any_in(up, tokens)
 
     def has_threshold_language() -> bool:
@@ -327,11 +383,28 @@ def find_market_code_from_label(label: str | None) -> Tuple[str | None, str | No
             ],
         )
 
-    # Goals O/U
-    if has_ou() and any_in(up_simplified, ["GOALS", "GOAL", "GOL", "GOLS"]):
+    def has_even_odd_tokens() -> bool:
+        return any_in(up_simplified, ["PARI", "DISPARI", "ODD", "EVEN"])
+
+    goals_keywords = ["GOALS", "GOAL", "GOL", "GOLS"]
+
+    # Goals O/U (total and team)
+    if has_ou() and any_in(up_simplified, goals_keywords):
+        if has_team_indicator(home=True) and not has_team_indicator(home=False):
+            return "HOME_TEAM_TOTAL_GOALS_OVER_UNDER", implied_period
+        if has_team_indicator(home=False) and not has_team_indicator(home=True):
+            return "AWAY_TEAM_TOTAL_GOALS_OVER_UNDER", implied_period
         return "TOTAL_GOALS_OVER_UNDER", implied_period
 
     corners_keywords = ["CORNERS", "CORNER", "CALCI D'ANGOLO", "ANGOLI"]
+
+    # Corners O/U (total + team)
+    if has_ou() and any_in(up_simplified, corners_keywords):
+        if has_team_indicator(home=True) and not has_team_indicator(home=False):
+            return "HOME_TEAM_TOTAL_CORNERS_OVER_UNDER", implied_period
+        if has_team_indicator(home=False) and not has_team_indicator(home=True):
+            return "AWAY_TEAM_TOTAL_CORNERS_OVER_UNDER", implied_period
+        return "TOTAL_CORNERS_OVER_UNDER", implied_period
 
     # Team-specific corners (detect even without explicit "over/under")
     if any_in(up_simplified, corners_keywords) and has_threshold_language():
@@ -339,10 +412,6 @@ def find_market_code_from_label(label: str | None) -> Tuple[str | None, str | No
             return "HOME_TEAM_TOTAL_CORNERS_OVER_UNDER", implied_period
         if has_team_indicator(home=False) and not has_team_indicator(home=True):
             return "AWAY_TEAM_TOTAL_CORNERS_OVER_UNDER", implied_period
-
-    # Corners O/U (total)
-    if has_ou() and any_in(up_simplified, corners_keywords):
-        return "TOTAL_CORNERS_OVER_UNDER", implied_period
 
     # If label explicitly mentions corners with team indicators plus "over"/"under" wording
     if any_in(up_simplified, corners_keywords) and has_threshold_language():
@@ -373,12 +442,15 @@ def find_market_code_from_label(label: str | None) -> Tuple[str | None, str | No
             return "AWAY_TEAM_TOTAL_CARDS_OVER_UNDER", implied_period
 
     # Team-specific GOALS O/U
-    goals_keywords = ["GOALS", "GOAL", "GOL", "GOLS"]
-    if has_ou() and any_in(up_simplified, goals_keywords):
-        if has_team_indicator(home=True) and not has_team_indicator(home=False):
-            return "HOME_TEAM_TOTAL_GOALS_OVER_UNDER", implied_period
-        if has_team_indicator(home=False) and not has_team_indicator(home=True):
-            return "AWAY_TEAM_TOTAL_GOALS_OVER_UNDER", implied_period
+    if has_even_odd_tokens():
+        if any_in(up_simplified, corners_keywords):
+            return "TOTAL_CORNERS_EVEN_ODD", implied_period
+        if any_in(up_simplified, goals_keywords):
+            if has_team_indicator(home=True) and not has_team_indicator(home=False):
+                return "HOME_TEAM_GOALS_EVEN_ODD", implied_period
+            if has_team_indicator(home=False) and not has_team_indicator(home=True):
+                return "AWAY_TEAM_GOALS_EVEN_ODD", implied_period
+            return "TOTAL_GOALS_EVEN_ODD", implied_period
 
     # Team-specific SHOTS ON TARGET O/U
     if has_ou() and any_in(up_simplified, ["SHOTS ON TARGET", "SOT", "TIRI IN PORTA"]):
@@ -435,6 +507,8 @@ def find_market_code_from_label(label: str | None) -> Tuple[str | None, str | No
         return "BOTH_TEAMS_TO_SCORE", implied_period
 
     # Team two-way
+    if any_in(up_simplified, ["DOUBLE CHANCE", "DOPPIA CHANCE"]):
+        return "DOUBLE_CHANCE", implied_period
     if any_in(up_simplified, ["DRAW NO BET", "DNB", "PAREGGIO NESSUNA SCOMMESSA", "PAREGGIO RIMBORSO"]):
         return "DRAW_NO_BET", implied_period
     if any_in(up_simplified, ["ASIAN HANDICAP", "HANDICAP ASIATICO", "HANDICAP"]):

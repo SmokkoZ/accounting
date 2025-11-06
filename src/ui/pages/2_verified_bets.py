@@ -34,6 +34,11 @@ from src.ui.helpers.dialogs import (
     render_confirmation_dialog,
     render_settlement_confirmation,
 )
+from src.ui.helpers.fragments import (
+    call_fragment,
+    render_debug_panel,
+    render_debug_toggle,
+)
 from src.ui.ui_components import load_global_styles
 from src.ui.utils.navigation_links import render_navigation_link
 from src.utils.logging_config import get_logger
@@ -49,6 +54,10 @@ st.set_page_config(page_title=PAGE_TITLE, layout="wide")
 load_global_styles()
 
 st.title(f"{PAGE_ICON} {PAGE_TITLE}")
+
+toggle_cols = st.columns([6, 2])
+with toggle_cols[1]:
+    render_debug_toggle(":material/monitor_heart: Performance debug")
 
 if "settlement_success_message" in st.session_state:
     st.success(st.session_state.pop("settlement_success_message"))
@@ -365,6 +374,28 @@ def load_surebet_bets(db, surebet_id: int) -> Dict[str, List[Dict]]:
         grouped[side].append(bet)
 
     return grouped
+
+
+def _render_surebets_overview_fragment(
+    *,
+    sort_by: str,
+    show_unsafe_only: bool,
+    filter_associate: str,
+) -> None:
+    """Render the surebets overview list inside a fragment."""
+    surebets = load_open_surebets(
+        sort_by=sort_by,
+        show_unsafe_only=show_unsafe_only,
+        filter_associate=filter_associate,
+    )
+
+    if not surebets:
+        st.info("No surebets found matching your filters.")
+        return
+
+    st.markdown(f"### Surebets ({len(surebets)} found)")
+    for surebet in surebets:
+        render_surebet_card(surebet)
 
 
 def count_open_surebets() -> int:
@@ -1287,13 +1318,13 @@ if selected_tab == "📊 Overview":
             except Exception as e:
                 st.error(f"FX update failed: {e}")
     st.markdown("---")
-    surebets = load_open_surebets(sort_by, show_unsafe_only, filter_associate)
-    if not surebets:
-        st.info("No surebets found matching your filters.")
-    else:
-        st.markdown(f"### Surebets ({len(surebets)} found)")
-        for surebet in surebets:
-            render_surebet_card(surebet)
+    call_fragment(
+        "surebets.overview.table",
+        _render_surebets_overview_fragment,
+        sort_by=sort_by,
+        show_unsafe_only=show_unsafe_only,
+        filter_associate=filter_associate,
+    )
 else:
     st.markdown('<div id="settle-tab-anchor"></div>', unsafe_allow_html=True)
     st.markdown("Settle completed surebets in chronological order by kickoff time.")
@@ -1313,3 +1344,5 @@ else:
         st.markdown(f"**{len(settlement_surebets)} open surebet(s)**")
         for idx, surebet in enumerate(settlement_surebets):
             render_settlement_surebet_card(surebet, idx)
+
+render_debug_panel()

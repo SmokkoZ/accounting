@@ -10,7 +10,7 @@ import streamlit as st
 import pandas as pd
 from decimal import Decimal
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from src.core.database import get_db_connection
 from src.services.reconciliation_service import ReconciliationService, AssociateBalance
@@ -24,6 +24,11 @@ from src.ui.components.reconciliation.pending_funding import (
 )
 from src.ui.ui_components import load_global_styles
 from src.ui.helpers.dialogs import open_dialog, render_correction_dialog
+from src.ui.helpers.fragments import (
+    call_fragment,
+    render_debug_panel,
+    render_debug_toggle,
+)
 from src.utils.logging_config import get_logger
 
 
@@ -43,6 +48,10 @@ st.set_page_config(
 
 st.title(f"{PAGE_ICON} {PAGE_TITLE}")
 st.markdown("**Track who's overholding group float vs. who's short**")
+
+toggle_cols = st.columns([6, 2])
+with toggle_cols[1]:
+    render_debug_toggle(":material/monitor_heart: Performance debug")
 
 # ========================================
 # Helper Functions
@@ -94,6 +103,213 @@ def export_to_csv(balances: List[AssociateBalance]) -> str:
     return df.to_csv(index=False)
 
 
+def _render_reconciliation_details_fragment(
+    *,
+    balance_entries: List[Dict[str, Any]],
+    bookmaker_balances,
+) -> None:
+    """Render associate cards, drilldowns, and correction flows inside a fragment."""
+    for entry in balance_entries:
+        balance: AssociateBalance = entry["balance"]
+        explanation: str = entry["explanation"]
+
+        with st.container():
+            col_icon, col_alias, col_deposits, col_should, col_current, col_delta = st.columns(
+                [0.5, 2, 1.5, 1.5, 1.5, 1.5]
+            )
+
+            with col_icon:
+                st.markdown(f"<h2 style='margin:0'>{balance.status_icon}</h2>", unsafe_allow_html=True)
+
+            with col_alias:
+                st.markdown(f"**{balance.associate_alias}**")
+                st.caption(balance.status.capitalize())
+
+            with col_deposits:
+                st.metric(
+                    "NET DEPOSITS",
+                    f"EUR {balance.net_deposits_eur:,.2f}",
+                    help="Cash you put in (deposits - withdrawals)",
+                )
+
+            with col_should:
+                st.metric(
+                    "SHOULD HOLD",
+                    f"EUR {balance.should_hold_eur:,.2f}",
+                    help="Your share of the pot (entitlement from settled bets)",
+                )
+
+            with col_current:
+                st.metric(
+                    "CURRENT HOLDING",
+                    f"EUR {balance.current_holding_eur:,.2f}",
+                    help="What you're holding in bookmaker accounts",
+                )
+
+            with col_delta:
+                delta_formatted = format_currency_with_sign(balance.delta_eur)
+                st.metric(
+                    "DELTA",
+                    delta_formatted,
+                    help="Difference between current holdings and entitlement",
+                )
+
+            with st.expander(":material/info: View Details"):
+                bg_color = get_status_color(balance.status)
+
+                st.markdown(
+                    f"""
+                    <div style='background-color: {bg_color}; padding: 15px; border-radius: 5px; margin: 10px 0;'>
+                        <p style='margin: 0; font-size: 16px;'>{explanation}</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                st.markdown("##### Financial Breakdown")
+
+                breakdown_data = {
+                    "Metric": [
+                        "Personal Funding (NET_DEPOSITS_EUR)",
+                        "Entitlement from Bets (SHOULD_HOLD_EUR)",
+                        "Physical Holdings (CURRENT_HOLDING_EUR)",
+                        "Discrepancy (DELTA)",
+                    ],
+                    "Amount (EUR)": [
+                        f"EUR {balance.net_deposits_eur:,.2f}",
+                        f"EUR {balance.should_hold_eur:,.2f}",
+                        f"EUR {balance.current_holding_eur:,.2f}",
+                        format_currency_with_sign(balance.delta_eur),
+                    ],
+                    "Description": [
+                        "Total deposits minus withdrawals",
+                        "Principal returned + profit/loss share from settled bets",
+                        "Sum of all ledger entries (BET_RESULT + DEPOSIT + WITHDRAWAL + CORRECTIONS)",
+                        "CURRENT_HOLDING - SHOULD_HOLD",
+                    ],
+                }
+
+                df_breakdown = pd.DataFrame(breakdown_data)
+                st.dataframe(df_breakdown, width="stretch", hide_index=True)
+
+        st.divider()
+
+    st.divider()
+
+    def update_balance_callback(
+        associate_id: int,
+        bookmaker_id: int,
+        amount_native: Decimal,
+        currency: str,
+        check_date_utc: str,
+        note: Optional[str],
+    ) -> None:
+        with BookmakerBalanceService() as service:
+            service.update_reported_balance(
+                associate_id=associate_id,
+                bookmaker_id=bookmaker_id,
+                balance_native=amount_native,
+                native_currency=currency,
+                check_date_utc=check_date_utc,
+                note=note,
+            )
+
+    def prefill_correction(balance_item) -> None:
+        with BookmakerBalanceService() as service:
+            payload = service.get_correction_prefill(balance_item)
+
+        if not payload:
+            st.info("No mismatch detected for this bookmaker; correction not required.")
+            return
+
+        st.session_state["recon_correction_context"] = {
+            "associate_id": payload["associate_id"],
+            "bookmaker_id": payload["bookmaker_id"],
+            "associate_alias": balance_item.associate_alias,
+            "bookmaker_name": balance_item.bookmaker_name,
+            "native_currency": payload["native_currency"],
+            "amount_eur": str(payload["amount_eur"]),
+            "amount_native": str(payload["amount_native"]) if payload["amount_native"] is not None else "",
+            "note": payload.get("note", ""),
+        }
+        open_dialog("reconciliation_correction")
+
+    render_bookmaker_drilldown(
+        bookmaker_balances,
+        on_update_balance=update_balance_callback,
+        on_prefill_correction=prefill_correction,
+    )
+
+    correction_context = st.session_state.get("recon_correction_context")
+    if correction_context:
+        dialog_defaults = {
+            "associate_alias": correction_context["associate_alias"],
+            "bookmaker_name": correction_context["bookmaker_name"],
+            "amount_eur": correction_context["amount_eur"],
+            "amount_native": correction_context["amount_native"],
+            "native_currency": correction_context["native_currency"],
+            "note": correction_context.get("note", ""),
+        }
+        dialog_payload = render_correction_dialog(
+            key="reconciliation_correction",
+            defaults=dialog_defaults,
+        )
+        if dialog_payload:
+            service = CorrectionService()
+            try:
+                entry_id = service.apply_correction(
+                    associate_id=correction_context["associate_id"],
+                    bookmaker_id=correction_context["bookmaker_id"],
+                    amount_native=dialog_payload["amount_native"],
+                    native_currency=dialog_payload["native_currency"],
+                    note=dialog_payload["note"],
+                    created_by="reconciliation_ui",
+                )
+            except CorrectionError as error:
+                st.error(f"Correction failed: {error}")
+                open_dialog("reconciliation_correction")
+            except Exception as error:
+                st.error(f"Unexpected error applying correction: {error}")
+                open_dialog("reconciliation_correction")
+            else:
+                st.success(
+                    f":material/task_alt: Correction applied (ledger entry {entry_id})."
+                )
+                st.session_state.pop("recon_correction_context", None)
+                st.rerun()
+            finally:
+                service.close()
+        elif not st.session_state.get("reconciliation_correction__open", False):
+            st.session_state.pop("recon_correction_context", None)
+
+    with st.expander(":material/help: How Reconciliation Works"):
+        st.markdown(
+            """
+        ### Reconciliation Math
+
+        **NET_DEPOSITS_EUR**: Personal funding
+        - Formula: `SUM(DEPOSIT.amount_eur) - SUM(WITHDRAWAL.amount_eur)`
+        - Explanation: "Cash you put in"
+
+        **SHOULD_HOLD_EUR**: Entitlement from settled bets
+        - Formula: `SUM(principal_returned_eur + per_surebet_share_eur)` from all BET_RESULT rows
+        - Explanation: "Your share of the pot"
+
+        **CURRENT_HOLDING_EUR**: Physical bookmaker holdings
+        - Formula: Sum of ALL ledger entries (BET_RESULT + DEPOSIT + WITHDRAWAL + BOOKMAKER_CORRECTION)
+        - Explanation: "What you're holding in bookmaker accounts"
+
+        **DELTA**: Discrepancy
+        - Formula: `CURRENT_HOLDING_EUR - SHOULD_HOLD_EUR`
+        - **Red (Overholder)**: `DELTA > +10 EUR` - Holding group float (collect from them)
+        - **Green (Balanced)**: `-10 EUR <= DELTA <= +10 EUR` - Holdings match entitlement
+        - **Orange (Short)**: `DELTA < -10 EUR` - Someone else is holding their money
+
+        ### Status Threshold
+        The +/- 10 EUR threshold accounts for minor rounding differences and pending transactions.
+        """
+        )
+
 # ========================================
 # Main Dashboard Layout
 # ========================================
@@ -105,7 +321,7 @@ with col1:
     st.markdown("### Associate Balance Summary")
 
 with col2:
-    if st.button("🔄 Refresh Balances", width="stretch"):
+    if st.button("Refresh Balances", width="stretch"):
         st.rerun()
 
 with col3:
@@ -163,211 +379,19 @@ try:
     
     st.divider()
 
-    # Associate balance table with expandable details
-    for balance in balances:
-        with st.container():
-            # Main row with status indicator
-            col_icon, col_alias, col_deposits, col_should, col_current, col_delta = st.columns([0.5, 2, 1.5, 1.5, 1.5, 1.5])
+    balance_entries = [
+        {"balance": balance, "explanation": reconciliation_service.get_explanation(balance)}
+        for balance in balances
+    ]
 
-            with col_icon:
-                st.markdown(f"<h2 style='margin:0'>{balance.status_icon}</h2>", unsafe_allow_html=True)
-
-            with col_alias:
-                st.markdown(f"**{balance.associate_alias}**")
-                st.caption(balance.status.capitalize())
-
-            with col_deposits:
-                st.metric(
-                    "NET DEPOSITS",
-                    f"€{balance.net_deposits_eur:,.2f}",
-                    help="Cash you put in (deposits - withdrawals)"
-                )
-
-            with col_should:
-                st.metric(
-                    "SHOULD HOLD",
-                    f"€{balance.should_hold_eur:,.2f}",
-                    help="Your share of the pot (entitlement from settled bets)"
-                )
-
-            with col_current:
-                st.metric(
-                    "CURRENT HOLDING",
-                    f"€{balance.current_holding_eur:,.2f}",
-                    help="What you're holding in bookmaker accounts"
-                )
-
-            with col_delta:
-                delta_formatted = format_currency_with_sign(balance.delta_eur)
-                st.metric(
-                    "DELTA",
-                    delta_formatted,
-                    help="Difference between current holdings and entitlement"
-                )
-
-            # Expandable details
-            with st.expander("📋 View Details"):
-                # Background color based on status
-                bg_color = get_status_color(balance.status)
-
-                explanation = reconciliation_service.get_explanation(balance)
-
-                st.markdown(
-                    f"""
-                    <div style='background-color: {bg_color}; padding: 15px; border-radius: 5px; margin: 10px 0;'>
-                        <p style='margin: 0; font-size: 16px;'>{explanation}</p>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-                # Detailed breakdown
-                st.markdown("##### Financial Breakdown")
-
-                breakdown_data = {
-                    "Metric": [
-                        "Personal Funding (NET_DEPOSITS_EUR)",
-                        "Entitlement from Bets (SHOULD_HOLD_EUR)",
-                        "Physical Holdings (CURRENT_HOLDING_EUR)",
-                        "Discrepancy (DELTA)",
-                    ],
-                    "Amount (EUR)": [
-                        f"€{balance.net_deposits_eur:,.2f}",
-                        f"€{balance.should_hold_eur:,.2f}",
-                        f"€{balance.current_holding_eur:,.2f}",
-                        format_currency_with_sign(balance.delta_eur),
-                    ],
-                    "Description": [
-                        "Total deposits minus withdrawals",
-                        "Principal returned + profit/loss share from settled bets",
-                        "Sum of all ledger entries (BET_RESULT + DEPOSIT + WITHDRAWAL + CORRECTIONS)",
-                        "CURRENT_HOLDING - SHOULD_HOLD",
-                    ]
-                }
-
-                df_breakdown = pd.DataFrame(breakdown_data)
-                st.dataframe(df_breakdown, width="stretch", hide_index=True)
-
-            st.divider()
-
-    # Bookmaker drilldown section
-    st.divider()
-
-    def update_balance_callback(
-        associate_id: int,
-        bookmaker_id: int,
-        amount_native: Decimal,
-        currency: str,
-        check_date_utc: str,
-        note: Optional[str],
-    ) -> None:
-        with BookmakerBalanceService() as service:
-            service.update_reported_balance(
-                associate_id=associate_id,
-                bookmaker_id=bookmaker_id,
-                balance_native=amount_native,
-                native_currency=currency,
-                check_date_utc=check_date_utc,
-                note=note,
-            )
-
-    def prefill_correction(balance) -> None:
-        with BookmakerBalanceService() as service:
-            payload = service.get_correction_prefill(balance)
-
-        if not payload:
-            st.info("No mismatch detected for this bookmaker; correction not required.")
-            return
-
-        st.session_state["recon_correction_context"] = {
-            "associate_id": payload["associate_id"],
-            "bookmaker_id": payload["bookmaker_id"],
-            "associate_alias": balance.associate_alias,
-            "bookmaker_name": balance.bookmaker_name,
-            "native_currency": payload["native_currency"],
-            "amount_eur": str(payload["amount_eur"]),
-            "amount_native": str(payload["amount_native"])
-            if payload["amount_native"] is not None
-            else "",
-            "note": payload.get("note", ""),
-        }
-        open_dialog("reconciliation_correction")
-
-    render_bookmaker_drilldown(
-        bookmaker_balances,
-        on_update_balance=update_balance_callback,
-        on_prefill_correction=prefill_correction,
+    call_fragment(
+        "reconciliation.associate_cards",
+        _render_reconciliation_details_fragment,
+        balance_entries=balance_entries,
+        bookmaker_balances=bookmaker_balances,
     )
 
-    correction_context = st.session_state.get("recon_correction_context")
-    if correction_context:
-        dialog_defaults = {
-            "associate_alias": correction_context["associate_alias"],
-            "bookmaker_name": correction_context["bookmaker_name"],
-            "amount_eur": correction_context["amount_eur"],
-            "amount_native": correction_context["amount_native"],
-            "native_currency": correction_context["native_currency"],
-            "note": correction_context.get("note", ""),
-        }
-        dialog_payload = render_correction_dialog(
-            key="reconciliation_correction",
-            defaults=dialog_defaults,
-        )
-        if dialog_payload:
-            service = CorrectionService()
-            try:
-                entry_id = service.apply_correction(
-                    associate_id=correction_context["associate_id"],
-                    bookmaker_id=correction_context["bookmaker_id"],
-                    amount_native=dialog_payload["amount_native"],
-                    native_currency=dialog_payload["native_currency"],
-                    note=dialog_payload["note"],
-                    created_by="reconciliation_ui",
-                )
-            except CorrectionError as error:
-                st.error(f"Correction failed: {error}")
-                open_dialog("reconciliation_correction")
-            except Exception as error:
-                st.error(f"Unexpected error applying correction: {error}")
-                open_dialog("reconciliation_correction")
-            else:
-                st.success(
-                    f":material/task_alt: Correction applied (ledger entry {entry_id})."
-                )
-                st.session_state.pop("recon_correction_context", None)
-                st.rerun()
-            finally:
-                service.close()
-        elif not st.session_state.get("reconciliation_correction__open", False):
-            # Dialog dismissed without submission; clear context
-            st.session_state.pop("recon_correction_context", None)
-
-    # Footer with explanation
-    with st.expander("ℹ️ How Reconciliation Works"):
-        st.markdown("""
-        ### Reconciliation Math
-
-        **NET_DEPOSITS_EUR**: Personal funding
-        - Formula: `SUM(DEPOSIT.amount_eur) - SUM(WITHDRAWAL.amount_eur)`
-        - Explanation: "Cash you put in"
-
-        **SHOULD_HOLD_EUR**: Entitlement from settled bets
-        - Formula: `SUM(principal_returned_eur + per_surebet_share_eur)` from all BET_RESULT rows
-        - Explanation: "Your share of the pot"
-
-        **CURRENT_HOLDING_EUR**: Physical bookmaker holdings
-        - Formula: Sum of ALL ledger entries (BET_RESULT + DEPOSIT + WITHDRAWAL + BOOKMAKER_CORRECTION)
-        - Explanation: "What you're holding in bookmaker accounts"
-
-        **DELTA**: Discrepancy
-        - Formula: `CURRENT_HOLDING_EUR - SHOULD_HOLD_EUR`
-        - **🔴 Red (Overholder)**: `DELTA > +€10` - Holding group float (collect from them)
-        - **🟢 Green (Balanced)**: `-€10 <= DELTA <= +€10` - Holdings match entitlement
-        - **🟠 Orange (Short)**: `DELTA < -€10` - Someone else is holding their money
-
-        ### Status Threshold
-        The ±€10 threshold accounts for minor rounding differences and pending transactions.
-        """)
+    render_debug_panel()
 
 except Exception as e:
     logger.error("reconciliation_dashboard_error", error=str(e), exc_info=True)
@@ -381,3 +405,4 @@ finally:
         reconciliation_service.close()
     if db is not None:
         db.close()
+
