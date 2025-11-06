@@ -165,3 +165,18 @@ def test_normalize_double_chance_label():
     )
     assert result["market_code"] == "DOUBLE_CHANCE"
     assert result["side"] == "1X"
+
+
+def test_normalize_dnb_italian_label():
+    db = _db()
+    norm = MarketNormalizer(db)
+    result = norm.normalize(
+        sport="football",
+        market_label="Rimborso in caso di parità",
+        market_code_guess=None,
+        period_scope_text=None,
+        side_text="Team 1 DNB",
+        line_value=None,
+    )
+    assert result["market_code"] == "DRAW_NO_BET"
+    assert result["side"] == "TEAM 1 DNB"
