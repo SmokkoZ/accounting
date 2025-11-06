@@ -24,11 +24,14 @@ except ModuleNotFoundError:  # pragma: no cover - executed only in non-UI contex
 
 from src.core.database import get_db_connection
 from src.services.fx_manager import convert_to_eur, get_fx_rate, get_latest_fx_rate
+from src.ui.ui_components import load_global_styles
 from src.ui.utils.formatters import format_currency_with_symbol, format_utc_datetime_local
 from src.ui.utils.validators import VALID_CURRENCIES, validate_balance_amount
 
 logger = structlog.get_logger()
 
+PAGE_TITLE = "Balance Management"
+PAGE_ICON = ":material/account_balance_wallet:"
 
 def _require_streamlit() -> None:
     """Ensure Streamlit is available before rendering UI components."""
@@ -709,8 +712,9 @@ def render_balance_management_page() -> None:
     """Render the standalone Balance Management page."""
     _require_streamlit()
 
-    st.set_page_config(page_title="Balance Management", layout="wide")
-    st.title("Balance Management")
+    st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
+    load_global_styles()
+    st.title(f"{PAGE_ICON} {PAGE_TITLE}")
     st.caption("Record balance checks, compare with the modeled balance, and manage corrections.")
     render_balance_history_tab()
 

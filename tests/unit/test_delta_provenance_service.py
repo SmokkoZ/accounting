@@ -264,12 +264,16 @@ class TestDeltaProvenanceService:
         
         conn.execute("""
             INSERT INTO ledger_entries 
-            (id, type, associate_id, amount_native, native_currency, fx_rate_snapshot, amount_eur, 
+            (id, type, associate_id, amount_native, native_currency, fx_rate_snapshot, amount_eur,
+             settlement_state, principal_returned_eur, per_surebet_share_eur,
+             surebet_id, bet_id, settlement_batch_id, opposing_associate_id,
              created_at_utc, created_by, note)
             VALUES 
                 (100, 'BET_RESULT', 1, '50.00', 'EUR', '1.000000', '50.00',
+                 'WON', '50.00', '0.00', 1, 10, 'batch-1', NULL,
                  datetime('now'), 'system', 'Test settlement'),
-                (101, 'BET_RESULT', 2, '0.00', 'EUR', '1.000000', '0.00',
+                (101, 'BET_RESULT', 2, '-50.00', 'EUR', '1.000000', '-50.00',
+                 'LOST', '0.00', '0.00', 1, 11, 'batch-1', NULL,
                  datetime('now'), 'system', 'Test settlement')
         """)
         
@@ -335,6 +339,52 @@ class TestDeltaProvenanceService:
         assert summary.net_delta == Decimal("0.00")
         assert summary.surebet_count == 0
         assert summary.counterparty_breakdown == {}
+
+    def test_get_associate_delta_provenance_backfills_missing_links(self, setup_test_db):
+        """Ensure missing settlement links are reconstructed on demand."""
+        service = DeltaProvenanceService(setup_test_db)
+
+        setup_test_db.execute(
+            """
+            INSERT INTO ledger_entries
+            (id, type, associate_id, amount_native, native_currency, fx_rate_snapshot, amount_eur,
+             settlement_state, principal_returned_eur, per_surebet_share_eur,
+             surebet_id, bet_id, settlement_batch_id, opposing_associate_id,
+             created_at_utc, created_by, note)
+            VALUES
+                (200, 'BET_RESULT', 1, '25.00', 'EUR', '1.000000', '25.00',
+                 'WON', '25.00', '0.00', 2, 20, 'batch-2', NULL,
+                 datetime('now'), 'system', 'Backfill winner'),
+                (201, 'BET_RESULT', 2, '-25.00', 'EUR', '1.000000', '-25.00',
+                 'LOST', '0.00', '0.00', 2, 21, 'batch-2', NULL,
+                 datetime('now'), 'system', 'Backfill loser')
+            """
+        )
+        setup_test_db.commit()
+
+        initial_count = setup_test_db.execute(
+            "SELECT COUNT(*) FROM surebet_settlement_links WHERE surebet_id = 2"
+        ).fetchone()[0]
+        assert initial_count == 0
+
+        entries, summary = service.get_associate_delta_provenance(associate_id=1)
+
+        link_rows = setup_test_db.execute(
+            "SELECT * FROM surebet_settlement_links WHERE surebet_id = 2"
+        ).fetchall()
+        assert len(link_rows) == 1
+        link = link_rows[0]
+        assert link["winner_associate_id"] == 1
+        assert link["loser_associate_id"] == 2
+        assert Decimal(link["amount_eur"]) == Decimal("25.00")
+
+        opposing_rows = setup_test_db.execute(
+            "SELECT opposing_associate_id FROM ledger_entries WHERE surebet_id = 2 ORDER BY amount_eur DESC"
+        ).fetchall()
+        assert [row["opposing_associate_id"] for row in opposing_rows] == [2, 1]
+
+        assert summary.net_delta >= Decimal("50.00")
+        assert len(entries) >= 2
     
     def test_get_counterparty_delta_summary_success(self, setup_test_db):
         """Test successful counterparty summary query."""

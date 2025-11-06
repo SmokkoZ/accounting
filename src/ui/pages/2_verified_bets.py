@@ -27,17 +27,37 @@ from src.services.ledger_entry_service import (
     SettlementCommitError,
 )
 from src.services.settlement_service import SettlementService, BetOutcome
+from src.ui.helpers.dialogs import (
+    ActionItem,
+    open_dialog,
+    render_action_menu,
+    render_confirmation_dialog,
+    render_settlement_confirmation,
+)
+from src.ui.ui_components import load_global_styles
+from src.ui.utils.navigation_links import render_navigation_link
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 
 
 # Configure page
-st.set_page_config(page_title="Surebets Dashboard", layout="wide")
-st.title("🎯 Surebets Dashboard")
+PAGE_TITLE = "Surebets"
+PAGE_ICON = ":material/target:"
+
+st.set_page_config(page_title=PAGE_TITLE, layout="wide")
+load_global_styles()
+
+st.title(f"{PAGE_ICON} {PAGE_TITLE}")
 
 if "settlement_success_message" in st.session_state:
     st.success(st.session_state.pop("settlement_success_message"))
+    render_navigation_link(
+        "pages/6_reconciliation.py",
+        label="Go To Reconciliation",
+        icon=":material/account_balance:",
+        help_text="Open 'Reconciliation' from navigation to confirm settlement impact.",
+    )
 
 if st.session_state.pop("pending_settle_tab_click", False):
     st.session_state["verified_bets_active_tab"] = "⚖️ Settle"
@@ -639,72 +659,63 @@ def render_surebet_card(surebet: Dict) -> None:
                 "FX rate transparency: Check fx_rates_daily table for rates used in EUR conversion"
             )
 
+        surebet_id = surebet["surebet_id"]
         # Action buttons
         st.markdown("---")
 
-        # Check if coverage proof has been sent
         coverage_sent = surebet.get("coverage_proof_sent_at_utc")
+        if coverage_sent:
+            sent_at = format_utc_datetime_local(coverage_sent)
+            st.success(f":material/check_circle: Coverage proof sent at {sent_at}")
+        else:
+            st.caption("Coverage proof not yet sent.")
 
-        action_cols = st.columns([2, 2, 1])
-        with action_cols[0]:
-            if coverage_sent:
-                # Show "Coverage proof sent" with checkmark and re-send option
-                st.success(
-                    f"✓ Coverage proof sent at {format_utc_datetime_local(coverage_sent)}"
-                )
-            else:
-                # Show "Send Coverage Proof" button
-                if st.button(
-                    "📤 Send Coverage Proof",
-                    key=f"coverage_{surebet['surebet_id']}",
-                    width="stretch",
-                ):
-                    # Store the surebet ID in session state for processing
-                    st.session_state[f"send_coverage_{surebet['surebet_id']}"] = True
-                    st.rerun()
+        triggered_action = render_action_menu(
+            key=f"surebet_actions_{surebet_id}",
+            label="Actions",
+            actions=[
+                ActionItem(
+                    key="send_coverage" if not coverage_sent else "resend_coverage",
+                    label="Send Coverage Proof"
+                    if not coverage_sent
+                    else "Re-send Coverage Proof",
+                    icon=":material/mail:",
+                    button_type="primary" if not coverage_sent else "secondary",
+                ),
+                ActionItem(
+                    key="settle",
+                    label="Open Settlement Tab",
+                    icon=":material/receipt_long:",
+                ),
+            ],
+        )
 
-        with action_cols[1]:
-            if coverage_sent:
-                # Show "Re-send Coverage Proof" button with confirmation modal
-                if st.button(
-                    "🔄 Re-send Coverage Proof",
-                    key=f"resend_{surebet['surebet_id']}",
-                    width="stretch",
-                ):
-                    st.session_state[f"confirm_resend_{surebet['surebet_id']}"] = True
-                    st.rerun()
-            else:
-                st.caption("Coverage proof not sent yet")
+        if triggered_action == "send_coverage":
+            st.session_state[f"send_coverage_{surebet_id}"] = True
+            st.rerun()
+        elif triggered_action == "resend_coverage":
+            open_dialog(f"confirm_resend_{surebet_id}")
+            st.session_state[f"pending_resend_id_{surebet_id}"] = True
+            st.rerun()
+        elif triggered_action == "settle":
+            st.session_state["pending_settle_tab_click"] = True
+            st.rerun()
 
-        with action_cols[2]:
-            if st.button(
-                "⚖️ Settle",
-                key=f"settle_{surebet['surebet_id']}",
-                width="stretch",
-            ):
-                st.session_state["pending_settle_tab_click"] = True
+        if st.session_state.get(f"pending_resend_id_{surebet_id}", False):
+            decision = render_confirmation_dialog(
+                key=f"confirm_resend_{surebet_id}",
+                title="Re-send coverage proof?",
+                body="Associates will receive the coverage proof again. Continue?",
+                confirm_label="Re-send",
+                confirm_type="secondary",
+            )
+            if decision is not None:
+                st.session_state.pop(f"pending_resend_id_{surebet_id}", None)
+                if decision:
+                    st.session_state[f"resend_coverage_{surebet_id}"] = True
+                st.session_state.pop(f"confirm_resend_{surebet_id}", None)
                 st.rerun()
 
-        # Handle confirmation modal for re-send
-        if st.session_state.get(f"confirm_resend_{surebet['surebet_id']}", False):
-            with st.container():
-                st.warning(
-                    "⚠️ Are you sure you want to re-send coverage proof? Associates will receive the screenshots again."
-                )
-                confirm_cols = st.columns([1, 1, 2])
-                with confirm_cols[0]:
-                    if st.button(
-                        "✓ Yes, Re-send", key=f"confirm_yes_{surebet['surebet_id']}"
-                    ):
-                        st.session_state[f"resend_coverage_{surebet['surebet_id']}"] = (
-                            True
-                        )
-                        del st.session_state[f"confirm_resend_{surebet['surebet_id']}"]
-                        st.rerun()
-                with confirm_cols[1]:
-                    if st.button("✗ Cancel", key=f"confirm_no_{surebet['surebet_id']}"):
-                        del st.session_state[f"confirm_resend_{surebet['surebet_id']}"]
-                        st.rerun()
 
 
 def render_settlement_preview(
@@ -825,13 +836,13 @@ def render_settlement_preview(
 
     confirm_cols = st.columns([3, 2])
     with confirm_cols[0]:
-        confirmation = None
-        if st.button(
-            "✅ Confirm Settlement",
-            key=f"confirm_settlement_{surebet_id}_{index}",
-            width="stretch",
-        ):
+        confirmation_note = render_settlement_confirmation(
+            key=f"settlement_confirm_{surebet_id}_{index}",
+            warning_text="This action is PERMANENT and will write ledger entries.",
+        )
+        if confirmation_note is not None:
             ledger_service = LedgerEntryService()
+            confirmation = None
             try:
                 with st.spinner("Writing ledger entries..."):
                     confirmation = ledger_service.confirm_settlement(
@@ -846,21 +857,33 @@ def render_settlement_preview(
             finally:
                 ledger_service.close()
 
-        if confirmation:
-            st.success(
-                f"Settlement committed. Batch ID: `{confirmation.settlement_batch_id}`"
-            )
-            st.session_state.pop(f"settlement_preview_{surebet_id}", None)
-            st.session_state.pop(f"settlement_preview_outcomes_{surebet_id}", None)
-            st.session_state.pop(f"settlement_preview_base_{surebet_id}", None)
-            st.session_state["settlement_success_message"] = (
-                f"Settlement complete for surebet {surebet_id} · Batch {confirmation.settlement_batch_id}"
-            )
-            st.rerun()
+            if confirmation:
+                logger.info(
+                    "settlement_confirmed_via_dialog",
+                    surebet_id=surebet_id,
+                    settlement_batch_id=confirmation.settlement_batch_id,
+                    confirmation_note=confirmation_note or None,
+                )
+                st.success(
+                    f"Settlement committed. Batch ID: `{confirmation.settlement_batch_id}`"
+                )
+                render_navigation_link(
+                    "pages/6_reconciliation.py",
+                    label="Go To Reconciliation",
+                    icon=":material/account_balance:",
+                    help_text="Open 'Reconciliation' from navigation to confirm settlement impact.",
+                )
+                st.session_state.pop(f"settlement_preview_{surebet_id}", None)
+                st.session_state.pop(f"settlement_preview_outcomes_{surebet_id}", None)
+                st.session_state.pop(f"settlement_preview_base_{surebet_id}", None)
+                st.session_state["settlement_success_message"] = (
+                    f"Settlement complete for surebet {surebet_id} - Batch {confirmation.settlement_batch_id}"
+                )
+                st.rerun()
 
     with confirm_cols[1]:
         if st.button(
-            "🛑 Cancel Preview",
+            "Cancel Preview",
             key=f"cancel_preview_{surebet_id}_{index}",
             width="stretch",
         ):
@@ -868,6 +891,7 @@ def render_settlement_preview(
             st.session_state.pop(f"settlement_preview_outcomes_{surebet_id}", None)
             st.session_state.pop(f"settlement_preview_base_{surebet_id}", None)
             st.rerun()
+
 
 def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
     """Render a surebet card for settlement with outcome selection."""

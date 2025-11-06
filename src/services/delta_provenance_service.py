@@ -12,6 +12,7 @@ import structlog
 from datetime import datetime, timezone
 
 from src.core.database import get_db_connection
+from src.core.schema import create_ledger_append_only_trigger
 from src.utils.datetime_helpers import utc_now_iso
 
 logger = structlog.get_logger(__name__)
@@ -104,6 +105,101 @@ class DeltaProvenanceService:
         # Set row_factory to return dictionaries instead of tuples
         if hasattr(self.db, 'row_factory'):
             self.db.row_factory = sqlite3.Row
+
+    def _backfill_missing_links_for_associate(self, associate_id: int) -> None:
+        """Create settlement links for historical ledger entries missing provenance."""
+        if associate_id is None:
+            return
+
+        cursor = self.db.execute(
+            """
+            SELECT DISTINCT le.surebet_id
+            FROM ledger_entries le
+            WHERE le.associate_id = ?
+              AND le.surebet_id IS NOT NULL
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM surebet_settlement_links ssl
+                    WHERE ssl.surebet_id = le.surebet_id
+                )
+            """,
+            (associate_id,),
+        )
+        missing_surebets = [row["surebet_id"] for row in cursor.fetchall() if row["surebet_id"]]
+
+        for surebet_id in missing_surebets:
+            try:
+                self._reconstruct_settlement_link(surebet_id)
+            except Exception as exc:  # pragma: no cover - defensive log
+                logger.error(
+                    "delta_link_backfill_failed",
+                    surebet_id=surebet_id,
+                    associate_id=associate_id,
+                    error=str(exc),
+                )
+
+    def _reconstruct_settlement_link(self, surebet_id: int) -> None:
+        """Rebuild a settlement link from ledger entries when missing."""
+        rows = self.db.execute(
+            """
+            SELECT
+                id,
+                associate_id,
+                amount_eur,
+                settlement_state
+            FROM ledger_entries
+            WHERE surebet_id = ?
+            ORDER BY created_at_utc ASC, id ASC
+            """,
+            (surebet_id,),
+        ).fetchall()
+
+        if len(rows) < 2:
+            return
+
+        def _state(row: sqlite3.Row) -> str:
+            return (row["settlement_state"] or "").upper()
+
+        winner_row = next((row for row in rows if _state(row) == "WON"), None)
+        loser_row = next((row for row in rows if _state(row) == "LOST"), None)
+
+        if winner_row is None:
+            winner_row = max(rows, key=lambda r: Decimal(str(r["amount_eur"])))
+        if loser_row is None:
+            loser_row = min(rows, key=lambda r: Decimal(str(r["amount_eur"])))
+
+        if winner_row is None or loser_row is None:
+            return
+
+        amount_eur = Decimal(str(winner_row["amount_eur"]))
+        if amount_eur <= Decimal("0.00"):
+            amount_eur = abs(Decimal(str(loser_row["amount_eur"])))
+
+        if amount_eur <= Decimal("0.00"):
+            return
+
+        self.create_settlement_link(
+            surebet_id=surebet_id,
+            winner_associate_id=winner_row["associate_id"],
+            loser_associate_id=loser_row["associate_id"],
+            amount_eur=amount_eur,
+            winner_ledger_entry_id=winner_row["id"],
+            loser_ledger_entry_id=loser_row["id"],
+        )
+
+        # Populate opposing associate IDs if still missing
+        self.db.execute("DROP TRIGGER IF EXISTS prevent_ledger_update")
+        try:
+            self.db.execute(
+                "UPDATE ledger_entries SET opposing_associate_id = ? WHERE id = ?",
+                (loser_row["associate_id"], winner_row["id"]),
+            )
+            self.db.execute(
+                "UPDATE ledger_entries SET opposing_associate_id = ? WHERE id = ?",
+                (winner_row["associate_id"], loser_row["id"]),
+            )
+        finally:
+            create_ledger_append_only_trigger(self.db)
     
     def get_associate_delta_provenance(
         self,
@@ -125,6 +221,8 @@ class DeltaProvenanceService:
         start_time = datetime.now(timezone.utc)
         
         try:
+            self._backfill_missing_links_for_associate(associate_id)
+
             # Get settlement links where associate is winner or loser
             query = """
                 SELECT 

@@ -25,17 +25,22 @@ from src.ui.components.associate_hub import (
     render_empty_state,
 )
 from src.ui.utils.feature_flags import has
+from src.ui.ui_components import load_global_styles
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 
+load_global_styles()
+
+PAGE_TITLE = "Associate Operations Hub"
+PAGE_ICON = ":material/groups_3:"
 
 def _configure_page() -> None:
     """Set page config when allowed (ignored if already configured)."""
     try:
         st.set_page_config(
-            page_title="Associate Operations Hub",
-            page_icon="👥",
+            page_title=PAGE_TITLE,
+            page_icon=PAGE_ICON,
             layout="wide",
             initial_sidebar_state="expanded",
         )
@@ -46,7 +51,7 @@ def _configure_page() -> None:
 
 _configure_page()
 
-st.title("Associate Operations Hub")
+st.title(f"{PAGE_ICON} {PAGE_TITLE}")
 st.markdown(
     "Manage associates, bookmakers, balances, and funding movements in one place. "
     "Filters persist across refreshes for fast back-to-back operations."

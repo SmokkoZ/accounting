@@ -35,6 +35,7 @@ def mock_db_connection():
 def sample_calculations():
     """Sample statement calculations for testing."""
     return StatementCalculations(
+        associate_id=1,
         net_deposits_eur=Decimal("1000.00"),
         should_hold_eur=Decimal("1200.00"),
         current_holding_eur=Decimal("1150.00"),
@@ -194,6 +195,7 @@ class TestFormattingMethods:
     def test_format_partner_facing_section_loss(self, service):
         """Test partner-facing section formatting with loss."""
         calc = StatementCalculations(
+            associate_id=1,
             net_deposits_eur=Decimal("1000.00"),
             should_hold_eur=Decimal("800.00"),
             current_holding_eur=Decimal("750.00"),
@@ -211,6 +213,7 @@ class TestFormattingMethods:
     def test_format_partner_facing_section_break_even(self, service):
         """Test partner-facing section formatting with break-even."""
         calc = StatementCalculations(
+            associate_id=1,
             net_deposits_eur=Decimal("1000.00"),
             should_hold_eur=Decimal("1000.00"),
             current_holding_eur=Decimal("1000.00"),
@@ -228,6 +231,7 @@ class TestFormattingMethods:
     def test_format_internal_section_holding_more(self, service):
         """Test internal section formatting when holding more."""
         calc = StatementCalculations(
+            associate_id=1,
             net_deposits_eur=Decimal("1000.00"),
             should_hold_eur=Decimal("1200.00"),
             current_holding_eur=Decimal("1300.00"),  # Holding more
@@ -258,6 +262,7 @@ class TestFormattingMethods:
     def test_format_internal_section_balanced(self, service):
         """Test internal section formatting when balanced."""
         calc = StatementCalculations(
+            associate_id=1,
             net_deposits_eur=Decimal("1000.00"),
             should_hold_eur=Decimal("1200.00"),
             current_holding_eur=Decimal("1200.00"),  # Exactly balanced

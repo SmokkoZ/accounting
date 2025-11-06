@@ -17,6 +17,7 @@ from decimal import Decimal
 
 from src.core.database import get_db_connection
 from src.services.delta_provenance_service import DeltaProvenanceService
+from src.ui.ui_components import load_global_styles
 from src.ui.utils.formatters import (
     format_utc_datetime_local,
     format_currency_with_symbol,
@@ -25,17 +26,22 @@ from src.ui.utils.validators import validate_associate_id
 
 logger = structlog.get_logger()
 
+load_global_styles()
+
 # ============================================================================
 # PAGE CONFIG AND INITIALIZATION
 # ============================================================================
 
+PAGE_TITLE = "Delta Provenance"
+PAGE_ICON = ":material/source:"
+
 st.set_page_config(
-    page_title="Delta Provenance", 
-    page_icon="🔍", 
+    page_title=PAGE_TITLE, 
+    page_icon=PAGE_ICON, 
     layout="wide"
 )
 
-st.title("🔍 Delta Provenance")
+st.title(f"{PAGE_ICON} {PAGE_TITLE}")
 st.markdown("View associate deltas broken down by counterparty and surebet")
 
 # ============================================================================

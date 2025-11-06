@@ -133,6 +133,8 @@ Thumbs.db
 # BMAD (local only)
 .bmad-core/
 .bmad-*/
+# Claude local state
+.claude/
 
 # Windows reserved device names (avoid add errors on Windows)
 **/[Nn][Uu][Ll]

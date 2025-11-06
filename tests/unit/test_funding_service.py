@@ -44,19 +44,17 @@ class TestFundingService:
 
     def test_create_funding_draft_success(self, funding_service):
         """Test successful creation of a funding draft."""
-        # Mock associate alias lookup
-        mock_row = Mock()
-        mock_row.__getitem__ = lambda self, key: {'display_alias': 'Test User'}[key]
-        funding_service.db.execute.return_value.fetchone.return_value = mock_row
-        
-        # Create draft
-        draft_id = funding_service.create_funding_draft(
-            associate_id=1,
-            event_type="DEPOSIT",
-            amount_native=Decimal('100.00'),
-            currency="USD",
-            note="Test deposit"
-        )
+        with patch.object(funding_service, "_get_associate_alias", return_value="Test User"), patch.object(
+            funding_service, "_get_bookmaker_name", return_value="Test Bookmaker"
+        ):
+            draft_id = funding_service.create_funding_draft(
+                associate_id=1,
+                bookmaker_id=10,
+                event_type="DEPOSIT",
+                amount_native=Decimal('100.00'),
+                currency="USD",
+                note="Test deposit"
+            )
         
         # Verify
         assert draft_id is not None
@@ -68,43 +66,51 @@ class TestFundingService:
         assert draft.amount_native == Decimal('100.00')
         assert draft.currency == "USD"
         assert draft.note == "Test deposit"
+        assert draft.bookmaker_id == 10
+        assert draft.bookmaker_name == "Test Bookmaker"
 
     def test_create_funding_draft_invalid_amount(self, funding_service):
         """Test funding draft creation with invalid amount."""
-        with pytest.raises(FundingError, match="Amount must be positive"):
-            funding_service.create_funding_draft(
-                associate_id=1,
-                event_type="DEPOSIT",
-                amount_native=Decimal('-100.00'),
-                currency="USD",
-                note="Test deposit"
-            )
+        with patch.object(funding_service, "_get_associate_alias", return_value="Test User"), patch.object(
+            funding_service, "_get_bookmaker_name", return_value="Test Bookmaker"
+        ):
+            with pytest.raises(FundingError, match="Amount must be positive"):
+                funding_service.create_funding_draft(
+                    associate_id=1,
+                    bookmaker_id=10,
+                    event_type="DEPOSIT",
+                    amount_native=Decimal('-100.00'),
+                    currency="USD",
+                    note="Test deposit"
+                )
 
     def test_create_funding_draft_invalid_event_type(self, funding_service):
         """Test funding draft creation with invalid event type."""
-        with pytest.raises(FundingError, match="Event type must be 'DEPOSIT' or 'WITHDRAWAL'"):
-            funding_service.create_funding_draft(
-                associate_id=1,
-                event_type="INVALID",
-                amount_native=Decimal('100.00'),
-                currency="USD",
-                note="Test deposit"
-            )
+        with patch.object(funding_service, "_get_associate_alias", return_value="Test User"), patch.object(
+            funding_service, "_get_bookmaker_name", return_value="Test Bookmaker"
+        ):
+            with pytest.raises(FundingError, match="Event type must be 'DEPOSIT' or 'WITHDRAWAL'"):
+                funding_service.create_funding_draft(
+                    associate_id=1,
+                    bookmaker_id=10,
+                    event_type="INVALID",
+                    amount_native=Decimal('100.00'),
+                    currency="USD",
+                    note="Test deposit"
+                )
 
     def test_get_pending_drafts(self, funding_service):
         """Test retrieval of pending funding drafts."""
-        # Mock associate alias lookup
-        mock_row = Mock()
-        mock_row.__getitem__ = lambda self, key: {'display_alias': 'Test User'}[key]
-        funding_service.db.execute.return_value.fetchone.return_value = mock_row
-        
-        # Create a test draft
-        draft_id = funding_service.create_funding_draft(
-            associate_id=1,
-            event_type="DEPOSIT",
-            amount_native=Decimal('100.00'),
-            currency="USD"
-        )
+        with patch.object(funding_service, "_get_associate_alias", return_value="Test User"), patch.object(
+            funding_service, "_get_bookmaker_name", return_value="Test Bookmaker"
+        ):
+            draft_id = funding_service.create_funding_draft(
+                associate_id=1,
+                bookmaker_id=10,
+                event_type="DEPOSIT",
+                amount_native=Decimal('100.00'),
+                currency="USD"
+            )
         
         # Get drafts
         drafts = funding_service.get_pending_drafts()
@@ -128,19 +134,17 @@ class TestFundingService:
         mock_transactional.return_value.__enter__.return_value = mock_conn
         mock_conn.execute.return_value.lastrowid = 456  # Ledger entry ID
         
-        # Mock associate alias lookup for draft creation
-        mock_row = Mock()
-        mock_row.__getitem__ = lambda self, key: {'display_alias': 'Test User'}[key]
-        funding_service.db.execute.return_value.fetchone.return_value = mock_row
-        
-        # Create a draft
-        draft_id = funding_service.create_funding_draft(
-            associate_id=1,
-            event_type="DEPOSIT",
-            amount_native=Decimal('100.00'),
-            currency="USD",
-            note="Test deposit"
-        )
+        with patch.object(funding_service, "_get_associate_alias", return_value="Test User"), patch.object(
+            funding_service, "_get_bookmaker_name", return_value="Test Bookmaker"
+        ):
+            draft_id = funding_service.create_funding_draft(
+                associate_id=1,
+                bookmaker_id=10,
+                event_type="DEPOSIT",
+                amount_native=Decimal('100.00'),
+                currency="USD",
+                note="Test deposit"
+            )
         
         # Accept draft
         ledger_id = funding_service.accept_funding_draft(draft_id)
@@ -150,6 +154,8 @@ class TestFundingService:
         assert draft_id not in funding_service._drafts
         mock_get_fx_rate.assert_called_once_with("USD", datetime.now(timezone.utc).date())
         mock_conn.execute.assert_called_once()
+        _, params = mock_conn.execute.call_args[0]
+        assert params[2] == 10  # bookmaker_id column
 
     def test_accept_funding_draft_not_found(self, funding_service):
         """Test acceptance of non-existent draft."""
@@ -238,6 +244,8 @@ class TestFundingService:
             draft_id='test-draft',
             associate_id=1,
             associate_alias='Test User',
+            bookmaker_id=10,
+            bookmaker_name='Test Bookmaker',
             event_type='DEPOSIT',
             amount_native=Decimal('100.00'),
             currency='USD',
@@ -248,6 +256,8 @@ class TestFundingService:
         assert draft.draft_id == 'test-draft'
         assert draft.associate_id == 1
         assert draft.associate_alias == 'Test User'
+        assert draft.bookmaker_id == 10
+        assert draft.bookmaker_name == 'Test Bookmaker'
         assert draft.event_type == 'DEPOSIT'
         assert draft.amount_native == Decimal('100.00')
         assert draft.currency == 'USD'
@@ -261,6 +271,8 @@ class TestFundingService:
                 draft_id='test-draft',
                 associate_id=1,
                 associate_alias='Test User',
+                bookmaker_id=10,
+                bookmaker_name='Test Bookmaker',
                 event_type='INVALID',
                 amount_native=Decimal('100.00'),
                 currency='USD',
@@ -275,6 +287,8 @@ class TestFundingService:
                 draft_id='test-draft',
                 associate_id=1,
                 associate_alias='Test User',
+                bookmaker_id=10,
+                bookmaker_name='Test Bookmaker',
                 event_type='DEPOSIT',
                 amount_native=Decimal('-100.00'),
                 currency='USD',
@@ -289,6 +303,8 @@ class TestFundingService:
                 draft_id='test-draft',
                 associate_id=1,
                 associate_alias='Test User',
+                bookmaker_id=10,
+                bookmaker_name='Test Bookmaker',
                 event_type='DEPOSIT',
                 amount_native=Decimal('100.00'),
                 currency='INVALID',

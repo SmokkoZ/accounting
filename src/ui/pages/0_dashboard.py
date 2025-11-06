@@ -15,8 +15,14 @@ from typing import Iterable
 import streamlit as st
 
 from src.ui.utils.feature_flags import has
+from src.ui.ui_components import card, load_global_styles, metric_compact
 
-st.title("Operations Overview")
+load_global_styles()
+
+PAGE_TITLE = "Dashboard"
+PAGE_ICON = ":material/monitoring:"
+
+st.title(f"{PAGE_ICON} {PAGE_TITLE}")
 st.caption(
     "Realtime view of key surebet metrics. Values refresh automatically when "
     "data sources update."
@@ -41,9 +47,9 @@ else:
 
 
 def _render_metrics_block() -> None:
-    cols = st.columns(3)
-    for col, (name, value, delta) in zip(cols, _generate_metrics()):
-        col.metric(name, value, delta)
+    with card("Key Metrics", "Live operational stats", icon=":material/monitoring:"):
+        for name, value, delta in _generate_metrics():
+            metric_compact(name, value, delta=delta)
 
 
 if has("fragment"):

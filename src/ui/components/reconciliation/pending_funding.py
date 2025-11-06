@@ -48,31 +48,54 @@ def render_pending_funding_section() -> None:
 def render_funding_entry_form(funding_service: FundingService) -> None:
     """Render the manual funding entry form."""
     with st.expander("➕ Add Funding Event", expanded=not funding_service.get_pending_drafts()):
+        associates = get_active_associates()
+        if not associates:
+            st.error("❌ No active associates found. Please add associates first.")
+            return
+
+        selected_associate = st.selectbox(
+            "Associate*",
+            options=associates,
+            format_func=lambda a: a["display_alias"],
+            key="funding_associate_select",
+        )
+
+        bookmakers = get_bookmakers_for_associate(selected_associate["id"])
+        if not bookmakers:
+            st.error(
+                "❌ No bookmakers found for this associate. Add a bookmaker before recording funding."
+            )
+            st.caption("Tip: Use the Admin & Associates page to register bookmakers.")
+            return
+
+        bookmaker_lookup = {
+            b["id"]: b for b in bookmakers
+        }
+        bookmaker_labels = {
+            bid: f"{info['bookmaker_name']} {'(inactive)' if not info['is_active'] else ''}"
+            for bid, info in bookmaker_lookup.items()
+        }
+        bookmaker_ids = list(bookmaker_lookup.keys())
+        bookmaker_select_key = f"funding_bookmaker_select_{selected_associate['id']}"
+
         with st.form("funding_entry_form"):
-            col1, col2 = st.columns(2)
-            
-            # Associate selector
-            with col1:
-                associates = get_active_associates()
-                if not associates:
-                    st.error("❌ No active associates found. Please add associates first.")
-                    return
-                
-                selected_associate = st.selectbox(
-                    "Associate*",
-                    options=associates,
-                    format_func=lambda a: a['display_alias'],
-                    key="funding_associate_select"
-                )
-            
-            # Event type
-            with col2:
+            col_event, col_bookmaker = st.columns([1, 1])
+
+            with col_event:
                 event_type = st.radio(
                     "Event Type*",
                     options=["DEPOSIT", "WITHDRAWAL"],
-                    key="funding_event_type"
+                    key="funding_event_type",
                 )
-            
+
+            with col_bookmaker:
+                selected_bookmaker_id = st.selectbox(
+                    "Bookmaker*",
+                    options=bookmaker_ids,
+                    format_func=lambda bid: bookmaker_labels[bid],
+                    key=bookmaker_select_key,
+                )
+
             col3, col4 = st.columns(2)
             
             # Amount input
@@ -111,6 +134,8 @@ def render_funding_entry_form(funding_service: FundingService) -> None:
                 handle_funding_form_submit(
                     funding_service,
                     selected_associate['id'],
+                    selected_bookmaker_id,
+                    bookmaker_lookup[selected_bookmaker_id]['bookmaker_name'],
                     event_type,
                     amount_str,
                     currency,
@@ -129,7 +154,7 @@ def render_pending_drafts_list(drafts: List[FundingDraft], funding_service: Fund
             
             with col_info:
                 # Draft details
-                st.markdown(f"**{draft.associate_alias}** - {draft.event_type}")
+                st.markdown(f"**{draft.associate_alias}** → {draft.bookmaker_name} · {draft.event_type}")
                 
                 amount_display = format_currency_amount(
                     draft.amount_native,
@@ -193,7 +218,9 @@ def render_funding_history(funding_service: FundingService) -> None:
                     )
                     amount_eur = format_eur(entry['amount_eur'])
                     
-                    st.markdown(f"**{entry['associate_alias']}** - {amount_native} ({amount_eur})")
+                    st.markdown(
+                        f"**{entry['associate_alias']}** → {entry['bookmaker_name']} - {amount_native} ({amount_eur})"
+                    )
                     st.caption(f"{entry['created_at_utc']}")
                     
                     if entry['note']:
@@ -208,6 +235,8 @@ def render_funding_history(funding_service: FundingService) -> None:
 def handle_funding_form_submit(
     funding_service: FundingService,
     associate_id: int,
+    bookmaker_id: int,
+    bookmaker_name: str,
     event_type: str,
     amount_str: str,
     currency: str,
@@ -226,13 +255,15 @@ def handle_funding_form_submit(
         # Create draft
         draft_id = funding_service.create_funding_draft(
             associate_id=associate_id,
+            bookmaker_id=bookmaker_id,
             event_type=event_type,
             amount_native=amount,
             currency=currency,
-            note=note
+            note=note,
+            bookmaker_name=bookmaker_name
         )
         
-        st.success(f"✅ Funding draft created successfully!")
+        st.success(f"✅ Funding draft created for {bookmaker_name}!")
         st.rerun()
         
     except FundingError as e:
@@ -240,6 +271,7 @@ def handle_funding_form_submit(
         logger.error(
             "funding_draft_creation_failed",
             associate_id=associate_id,
+            bookmaker_id=bookmaker_id,
             event_type=event_type,
             amount=amount_str,
             currency=currency,
@@ -306,6 +338,36 @@ def get_active_associates() -> List[dict]:
     except Exception as e:
         logger.error("failed_to_load_associates", error=str(e))
         st.error("❌ Failed to load associates from database.")
+        return []
+
+
+def get_bookmakers_for_associate(associate_id: int) -> List[dict]:
+    """Return bookmakers linked to the associate."""
+    try:
+        db = get_db_connection()
+        cursor = db.execute(
+            """
+            SELECT id, bookmaker_name, is_active
+            FROM bookmakers
+            WHERE associate_id = ?
+            ORDER BY bookmaker_name
+            """,
+            (associate_id,),
+        )
+
+        bookmakers: List[dict] = []
+        for row in cursor.fetchall():
+            bookmakers.append(
+                {
+                    "id": row["id"],
+                    "bookmaker_name": row["bookmaker_name"],
+                    "is_active": bool(row["is_active"]),
+                }
+            )
+        return bookmakers
+    except Exception as e:
+        logger.error("failed_to_load_bookmakers", associate_id=associate_id, error=str(e))
+        st.error("❌ Failed to load bookmakers for the selected associate.")
         return []
 
 

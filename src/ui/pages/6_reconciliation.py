@@ -15,26 +15,33 @@ from typing import List, Optional
 from src.core.database import get_db_connection
 from src.services.reconciliation_service import ReconciliationService, AssociateBalance
 from src.services.bookmaker_balance_service import BookmakerBalanceService
+from src.services.correction_service import CorrectionService, CorrectionError
 from src.ui.components.reconciliation.bookmaker_drilldown import (
     render_bookmaker_drilldown,
 )
 from src.ui.components.reconciliation.pending_funding import (
     render_pending_funding_section,
 )
+from src.ui.ui_components import load_global_styles
+from src.ui.helpers.dialogs import open_dialog, render_correction_dialog
 from src.utils.logging_config import get_logger
 
 
 logger = get_logger(__name__)
 
+load_global_styles()
 
 # Configure page
+PAGE_TITLE = "Reconciliation"
+PAGE_ICON = ":material/account_balance:"
+
 st.set_page_config(
-    page_title="Reconciliation Dashboard",
-    page_icon="💰",
+    page_title=PAGE_TITLE,
+    page_icon=PAGE_ICON,
     layout="wide"
 )
 
-st.title("💰 Reconciliation Dashboard")
+st.title(f"{PAGE_ICON} {PAGE_TITLE}")
 st.markdown("**Track who's overholding group float vs. who's short**")
 
 # ========================================
@@ -272,24 +279,68 @@ try:
             st.info("No mismatch detected for this bookmaker; correction not required.")
             return
 
-        st.session_state["correction_prefill"] = {
-            "source": "bookmaker_drilldown",
+        st.session_state["recon_correction_context"] = {
             "associate_id": payload["associate_id"],
             "bookmaker_id": payload["bookmaker_id"],
+            "associate_alias": balance.associate_alias,
+            "bookmaker_name": balance.bookmaker_name,
             "native_currency": payload["native_currency"],
+            "amount_eur": str(payload["amount_eur"]),
             "amount_native": str(payload["amount_native"])
             if payload["amount_native"] is not None
-            else None,
-            "amount_eur": str(payload["amount_eur"]),
-            "note": payload["note"],
-            "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            else "",
+            "note": payload.get("note", ""),
         }
+        open_dialog("reconciliation_correction")
 
     render_bookmaker_drilldown(
         bookmaker_balances,
         on_update_balance=update_balance_callback,
         on_prefill_correction=prefill_correction,
     )
+
+    correction_context = st.session_state.get("recon_correction_context")
+    if correction_context:
+        dialog_defaults = {
+            "associate_alias": correction_context["associate_alias"],
+            "bookmaker_name": correction_context["bookmaker_name"],
+            "amount_eur": correction_context["amount_eur"],
+            "amount_native": correction_context["amount_native"],
+            "native_currency": correction_context["native_currency"],
+            "note": correction_context.get("note", ""),
+        }
+        dialog_payload = render_correction_dialog(
+            key="reconciliation_correction",
+            defaults=dialog_defaults,
+        )
+        if dialog_payload:
+            service = CorrectionService()
+            try:
+                entry_id = service.apply_correction(
+                    associate_id=correction_context["associate_id"],
+                    bookmaker_id=correction_context["bookmaker_id"],
+                    amount_native=dialog_payload["amount_native"],
+                    native_currency=dialog_payload["native_currency"],
+                    note=dialog_payload["note"],
+                    created_by="reconciliation_ui",
+                )
+            except CorrectionError as error:
+                st.error(f"Correction failed: {error}")
+                open_dialog("reconciliation_correction")
+            except Exception as error:
+                st.error(f"Unexpected error applying correction: {error}")
+                open_dialog("reconciliation_correction")
+            else:
+                st.success(
+                    f":material/task_alt: Correction applied (ledger entry {entry_id})."
+                )
+                st.session_state.pop("recon_correction_context", None)
+                st.rerun()
+            finally:
+                service.close()
+        elif not st.session_state.get("reconciliation_correction__open", False):
+            # Dialog dismissed without submission; clear context
+            st.session_state.pop("recon_correction_context", None)
 
     # Footer with explanation
     with st.expander("ℹ️ How Reconciliation Works"):

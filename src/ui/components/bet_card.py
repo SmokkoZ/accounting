@@ -1,15 +1,18 @@
 """Bet card component for displaying incoming bets."""
 
 import streamlit as st
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from pathlib import Path
 from decimal import Decimal
-from datetime import datetime
 from src.ui.utils.formatters import (
     format_timestamp_relative,
     format_confidence_badge,
     format_bet_summary,
     format_market_display,
+)
+from src.ui.helpers.dialogs import (
+    open_dialog,
+    render_canonical_event_dialog,
 )
 
 
@@ -28,13 +31,30 @@ def render_bet_card(
         verification_service: BetVerificationService instance for data loading
     """
     bet_id = bet.get("bet_id", bet.get("id"))
+    dialog_key = f"create_event_{bet_id}"
 
-    # Check if "Create New Event" modal should be shown
-    if st.session_state.get(f"show_create_event_modal_{bet_id}"):
-        show_create_event_modal(bet, verification_service)
-        # Clear the flag after showing modal
-        del st.session_state[f"show_create_event_modal_{bet_id}"]
-        return
+    if st.session_state.pop(f"show_create_event_modal_{bet_id}", False):
+        open_dialog(dialog_key)
+
+    if verification_service is not None:
+        payload = render_canonical_event_dialog(key=dialog_key, bet=bet)
+        if payload:
+            try:
+                event_id = verification_service._create_canonical_event(
+                    event_name=payload["event_name"],
+                    sport=payload["sport"],
+                    competition=payload["competition"],
+                    kickoff_time_utc=payload["kickoff_time_utc"],
+                )
+                st.success(f"✅ Event created: {payload['event_name']}")
+                st.session_state["newly_created_event_id"] = event_id
+                st.rerun()
+            except ValueError as error:
+                st.error(f"Validation error: {error}")
+                open_dialog(dialog_key)
+            except Exception as error:
+                st.error(f"Failed to create event: {error}")
+                open_dialog(dialog_key)
 
     with st.container():
         # Create 3-column layout: screenshot | details | actions
@@ -325,104 +345,3 @@ def _render_bet_actions(
             st.rerun()
 
 
-@st.dialog("Create New Event")
-def show_create_event_modal(bet: Dict[str, Any], verification_service) -> Optional[int]:
-    """Modal dialog for creating a new canonical event.
-
-    Args:
-        bet: Bet dictionary with extracted data for pre-filling
-        verification_service: BetVerificationService instance for event creation
-
-    Returns:
-        Event ID if created successfully, None otherwise
-    """
-    st.markdown("Create a new canonical event for this bet.")
-
-    # Pre-fill values from bet data
-    default_event_name = bet.get("selection_text", "")
-    default_kickoff = bet.get("kickoff_time_utc", "")
-
-    # Form for event creation
-    event_name = st.text_input(
-        "Event Name *",
-        value=default_event_name,
-        placeholder="e.g., Manchester United vs Liverpool",
-        help="Minimum 5 characters required",
-    )
-
-    sport_options = ["football", "tennis", "basketball", "cricket", "rugby"]
-    sport = st.selectbox(
-        "Sport *",
-        options=sport_options,
-        index=0,
-        help="Select the sport type",
-    )
-
-    competition = st.text_input(
-        "Competition / League (Optional)",
-        value="",
-        placeholder="e.g., Premier League, ATP Masters",
-        help="Maximum 100 characters",
-    )
-
-    kickoff_time = st.text_input(
-        "Kickoff Time (UTC) *",
-        value=default_kickoff,
-        placeholder="YYYY-MM-DDTHH:MM:SSZ",
-        help="ISO8601 format with Z suffix required",
-    )
-
-    st.caption("* Required fields")
-
-    # Action buttons
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button("Create Event", type="primary", width="stretch"):
-            # Validate inputs
-            errors = []
-
-            if not event_name or len(event_name) < 5:
-                errors.append("Event name must be at least 5 characters")
-
-            if competition and len(competition) > 100:
-                errors.append("Competition name must not exceed 100 characters")
-
-            if not kickoff_time or not kickoff_time.endswith("Z"):
-                errors.append("Kickoff time must end with 'Z' (UTC timezone)")
-            else:
-                # Validate ISO8601 format
-                try:
-                    datetime.fromisoformat(kickoff_time.replace("Z", "+00:00"))
-                except (ValueError, AttributeError):
-                    errors.append(
-                        "Invalid kickoff time format. Use YYYY-MM-DDTHH:MM:SSZ"
-                    )
-
-            # Show errors if any
-            if errors:
-                for error in errors:
-                    st.error(error)
-                return None
-
-            # Attempt to create event
-            try:
-                event_id = verification_service._create_canonical_event(
-                    event_name=event_name,
-                    sport=sport,
-                    competition=competition if competition else None,
-                    kickoff_time_utc=kickoff_time,
-                )
-
-                st.success(f"✅ Event created: {event_name}")
-                st.session_state["newly_created_event_id"] = event_id
-                st.rerun()
-
-            except ValueError as e:
-                st.error(f"Validation error: {str(e)}")
-            except Exception as e:
-                st.error(f"Failed to create event: {str(e)}")
-
-    with col2:
-        if st.button("Cancel", width="content"):
-            st.rerun()

@@ -11,6 +11,7 @@ from decimal import Decimal, InvalidOperation
 from typing import List, Dict, Optional
 from src.core.database import get_db_connection
 from src.services.correction_service import CorrectionService, CorrectionError
+from src.ui.ui_components import load_global_styles
 from src.ui.utils.formatters import format_utc_datetime_local
 from src.utils.logging_config import get_logger
 
@@ -18,8 +19,12 @@ logger = get_logger(__name__)
 
 
 # Configure page
-st.set_page_config(page_title="Corrections", layout="wide")
-st.title("🔧 Post-Settlement Corrections")
+PAGE_TITLE = "Corrections"
+PAGE_ICON = ":material/edit_note:"
+
+st.set_page_config(page_title=PAGE_TITLE, layout="wide")
+load_global_styles()
+st.title(f"{PAGE_ICON} {PAGE_TITLE}")
 
 st.markdown(
     """

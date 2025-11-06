@@ -9,9 +9,17 @@ import streamlit as st
 from typing import Optional, List, Dict, Any
 from src.core.database import get_db_connection
 from src.services.bet_verification import BetVerificationService
+from src.ui.ui_components import load_global_styles
+from src.ui.utils.navigation_links import render_navigation_link
 
 
-st.title("Verified Bets Queue")
+PAGE_TITLE = "Verified Bets Queue"
+PAGE_ICON = ":material/task_alt:"
+
+st.set_page_config(page_title=PAGE_TITLE, layout="wide")
+load_global_styles()
+
+st.title(f"{PAGE_ICON} {PAGE_TITLE}")
 st.caption("Review approved bets and check matching prerequisites")
 
 
@@ -306,7 +314,13 @@ else:
 
                 try:
                     svc.update_verified_bet(target_bet_id, edited)
-                    st.success("Bet updated. If matchable, it will be paired automatically.")
+                    st.success(":material/check_circle: Bet updated. If matchable, it will be paired automatically.")
+                    render_navigation_link(
+                        "pages/2_verified_bets.py",
+                        label="Open Surebets",
+                        icon=":material/target:",
+                        help_text="Use the navigation to open 'Surebets' and continue settlement prep.",
+                    )
                     st.rerun()
                 except Exception as e:
                     st.error(f"Update failed: {e}")

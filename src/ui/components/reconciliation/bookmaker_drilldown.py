@@ -187,7 +187,6 @@ def _render_bookmaker_card(
                     type="secondary",
                 ):
                     on_prefill(balance)
-                    st.success("Correction form pre-filled. Open the Corrections page to review.")
 
         stat_cols = st.columns([2, 2, 2])
         with stat_cols[0]:

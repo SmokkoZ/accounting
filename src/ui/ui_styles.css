@@ -1,0 +1,217 @@
+:root {
+  --bg: #0b1220;
+  --panel: #101826;
+  --panel2: #0e1726;
+  --text: #e5e7eb;
+  --muted: #94a3b8;
+  --border: #1f2937;
+  --radius: 14px;
+  --shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  --accent: #22c55e;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+}
+
+html,
+body {
+  background: var(--bg) !important;
+  color: var(--text);
+}
+
+.stApp {
+  background: var(--bg);
+}
+
+.stApp header,
+section[data-testid="stHeader"] {
+  background: linear-gradient(90deg, rgba(16, 24, 38, 0.95), rgba(11, 18, 32, 0.95));
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(16px);
+}
+
+section[data-testid="stSidebar"] {
+  background: rgba(10, 16, 30, 0.95);
+  border-right: 1px solid var(--border);
+}
+
+section[data-testid="stSidebar"] .stMarkdown,
+section[data-testid="stSidebar"] .stButton button {
+  color: var(--muted);
+}
+
+.stMarkdown h1,
+.stMarkdown h2,
+.stMarkdown h3 {
+  color: var(--text);
+}
+
+.stMarkdown p,
+.stMarkdown span,
+.stCaption {
+  color: var(--muted);
+}
+
+.card {
+  background: linear-gradient(180deg, var(--panel), var(--panel2));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+  margin-bottom: 14px;
+}
+
+.card > .stMarkdown p,
+.card > .stCaption {
+  color: var(--muted);
+}
+
+.pill {
+  display: inline-flex;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.85rem;
+  align-items: center;
+  line-height: 1.1;
+}
+
+.pill[data-variant="success"] {
+  border-color: rgba(34, 197, 94, 0.6);
+  color: #bbf7d0;
+}
+
+.pill[data-variant="warning"] {
+  border-color: rgba(245, 158, 11, 0.6);
+  color: #fef08a;
+}
+
+.pill[data-variant="danger"] {
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #fecaca;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.toolbar > * {
+  margin-bottom: 0 !important;
+}
+
+.stDataFrame,
+.stDataEditor {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+div[data-testid="stDataFrame"] table,
+.stDataEditor table {
+  background: var(--panel);
+  color: var(--text);
+}
+
+div[data-testid="stDataFrame"] table thead tr th,
+.stDataEditor table thead tr th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+
+div[data-testid="stDataFrame"] table tbody tr,
+.stDataEditor table tbody tr {
+  height: 34px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+div[data-testid="stDataFrame"] table tbody tr:hover,
+.stDataEditor table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.stButton button,
+.stDownloadButton button {
+  background: linear-gradient(180deg, #1f2937, #111827);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 0.45rem 1.1rem;
+  font-weight: 600;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.stButton button:hover,
+.stDownloadButton button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 25px rgba(34, 197, 94, 0.25);
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+.stTextInput input,
+.stNumberInput input,
+.stSelectbox select,
+.stMultiSelect div[data-baseweb="select"] > div,
+.stDateInput input {
+  background: rgba(16, 24, 38, 0.85);
+  color: var(--text);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.stTextInput input:focus,
+.stNumberInput input:focus,
+.stSelectbox select:focus,
+.stMultiSelect div[data-baseweb="select"] > div:focus-within,
+.stDateInput input:focus {
+  border-color: rgba(34, 197, 94, 0.55);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35);
+}
+
+.stMetric {
+  background: linear-gradient(180deg, rgba(17, 24, 39, 0.8), rgba(11, 18, 32, 0.8));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 0.8rem 1rem;
+}
+
+.stMetric label {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.stMetric div[data-testid="stMetricValue"] {
+  color: var(--text);
+  font-weight: 600;
+}
+
+footer,
+.stApp footer {
+  background: transparent;
+  color: var(--muted);
+}
+
+@media (max-width: 768px) {
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .card {
+    padding: 14px;
+  }
+}

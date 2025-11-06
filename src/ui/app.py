@@ -10,10 +10,11 @@ is not available.
 from __future__ import annotations
 
 import importlib.util
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 
 import streamlit as st
 
@@ -42,6 +43,16 @@ class PageSpec:
     description: str = ""
     renderer: Optional[Callable[[], None]] = None
 
+    def to_navigation_page(self) -> "st.Page":
+        """Convert this spec into a Streamlit Page for modern navigation."""
+        if not self.script:
+            raise ValueError(f"Page '{self.title}' does not define a script.")
+        return st.Page(
+            self.script,
+            title=self.title,
+            icon=self.icon,
+        )
+
     @property
     def script_path(self) -> Optional[Path]:
         if not self.script:
@@ -52,6 +63,13 @@ class PageSpec:
 def _render_placeholder(name: str, message: str) -> None:
     st.header(name)
     st.info(message)
+
+
+def _group_by_section(pages: Sequence[PageSpec]) -> "OrderedDict[str, List[PageSpec]]":
+    grouped: "OrderedDict[str, List[PageSpec]]" = OrderedDict()
+    for page in pages:
+        grouped.setdefault(page.section, []).append(page)
+    return grouped
 
 
 PAGE_REGISTRY: Sequence[PageSpec] = (
@@ -84,7 +102,7 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
         description="Manage verified surebets and coverage.",
     ),
     PageSpec(
-        title="Settlement Queue",
+        title="Verified Bets Queue",
         section="Operations",
         icon=":material/task_alt:",
         script="pages/3_verified_bets_queue.py",
@@ -93,7 +111,7 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
     PageSpec(
         title="Corrections",
         section="Operations",
-        icon=":material/edit:",
+        icon=":material/edit_note:",
         script="pages/5_corrections.py",
         description="Track and resolve corrections.",
     ),
@@ -107,14 +125,14 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
     PageSpec(
         title="Admin & Associates",
         section="Administration",
-        icon=":material/manage_accounts:",
+        icon=":material/admin_panel_settings:",
         script="pages/7_admin_associates.py",
         description="Administer associates and permissions.",
     ),
     PageSpec(
         title="Delta Provenance",
         section="Finance",
-        icon=":material/account_tree:",
+        icon=":material/source:",
         script="pages/delta_provenance.py",
         description="View associate delta breakdown by counterparty and surebet.",
     ),
@@ -128,25 +146,18 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
     PageSpec(
         title="Export",
         section="Operations",
-        icon=":material/file_upload:",
+        icon=":material/ios_share:",
         script="pages/5_export.py",
         description="CSV export workflow for ledger data and audit trails.",
     ),
     PageSpec(
         title="Statements",
         section="Finance",
-        icon=":material/description:",
+        icon=":material/contract:",
         script="pages/6_statements.py",
         description="Generate monthly partner statements with funding, entitlement, and reconciliation.",
     ),
 )
-
-
-def _group_by_section(pages: Iterable[PageSpec]) -> Dict[str, List[PageSpec]]:
-    grouped: Dict[str, List[PageSpec]] = {}
-    for page in pages:
-        grouped.setdefault(page.section, []).append(page)
-    return grouped
 
 
 def _dynamic_run(page: PageSpec) -> None:
@@ -203,15 +214,13 @@ def _render_footer() -> None:
 
 def _render_navigation_with_pages() -> None:
     """Use Streamlit's native navigation when available."""
-    grouped = _group_by_section(PAGE_REGISTRY)
-    nav_structure: Dict[str, List["st.Page"]] = {}
-
-    for section, pages in grouped.items():
+    nav_structure: "OrderedDict[str, List['st.Page']]" = OrderedDict()
+    for section, pages in _group_by_section(PAGE_REGISTRY).items():
         entries: List["st.Page"] = []
-        for page in pages:
-            if not page.script:
+        for page_spec in pages:
+            if not page_spec.script:
                 continue
-            entries.append(st.Page(page.script, title=page.title, icon=page.icon))
+            entries.append(page_spec.to_navigation_page())
         if entries:
             nav_structure[section] = entries
 

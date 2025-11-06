@@ -11,11 +11,13 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import sqlite3
 
 from src.core.database import get_db_connection
+from src.core.schema import create_ledger_append_only_trigger
+from src.services.delta_provenance_service import DeltaProvenanceService
 from src.services.settlement_service import (
     BetOutcome,
     Participant,
@@ -87,7 +89,11 @@ class LedgerEntryService:
         try:
             with transactional(self.db) as conn:
                 fx_snapshots = self._freeze_fx_snapshots(preview_data)
-                ledger_ids, total_amount_eur = self._write_ledger_entries(
+                (
+                    ledger_ids,
+                    total_amount_eur,
+                    entry_amounts_eur,
+                ) = self._write_ledger_entries(
                     conn,
                     batch_id,
                     fx_snapshots,
@@ -96,6 +102,15 @@ class LedgerEntryService:
                 )
                 self._update_surebet_status(conn, surebet_id)
                 self._update_bet_statuses(conn, bet_ids)
+                self._update_opposing_associates(
+                    conn, preview_data.participants, ledger_ids
+                )
+                self._ensure_delta_provenance_link(
+                    conn,
+                    preview_data,
+                    ledger_ids,
+                    entry_amounts_eur,
+                )
         except TransactionError as exc:  # pragma: no cover - defensive path
             raise SettlementCommitError(str(exc)) from exc
         except Exception as exc:
@@ -149,10 +164,11 @@ class LedgerEntryService:
         fx_snapshots: Dict[str, Decimal],
         preview_data: SettlementPreview,
         created_by: str,
-    ) -> Tuple[List[int], Decimal]:
+    ) -> Tuple[List[int], Decimal, List[Decimal]]:
         """Write append-only ledger rows for each participant."""
         ledger_ids: List[int] = []
         total_amount_eur = Decimal("0.00")
+        entry_amounts_eur: List[Decimal] = []
 
         for participant in preview_data.participants:
             fx_rate = fx_snapshots[participant.currency]
@@ -211,8 +227,13 @@ class LedgerEntryService:
             )
             ledger_ids.append(cursor.lastrowid)
             total_amount_eur += amount_eur
+            entry_amounts_eur.append(amount_eur)
 
-        return ledger_ids, self._quantize_currency(total_amount_eur)
+        return (
+            ledger_ids,
+            self._quantize_currency(total_amount_eur),
+            entry_amounts_eur,
+        )
 
     def _update_surebet_status(
         self, conn: sqlite3.Connection, surebet_id: int
@@ -248,6 +269,122 @@ class LedgerEntryService:
         """,
             [(timestamp, bet_id) for bet_id in bet_ids],
         )
+
+    def _update_opposing_associates(
+        self,
+        conn: sqlite3.Connection,
+        participants: List[Participant],
+        ledger_entry_ids: List[int],
+    ) -> None:
+        """Attach opposing associate references to ledger entries."""
+        if not participants or len(participants) != len(ledger_entry_ids):
+            return
+
+        winner_idx: Optional[int] = None
+        loser_idx: Optional[int] = None
+
+        for idx, participant in enumerate(participants):
+            if participant.outcome == BetOutcome.WON and winner_idx is None:
+                winner_idx = idx
+            elif participant.outcome == BetOutcome.LOST and loser_idx is None:
+                loser_idx = idx
+
+        if winner_idx is None and loser_idx is None and len(participants) >= 2:
+            winner_idx, loser_idx = 0, 1
+
+        if winner_idx is None or loser_idx is None:
+            logger.warning(
+                "opposing_associate_update_skipped",
+                reason="unable_to_determine_winner_loser",
+                participant_count=len(participants),
+            )
+            return
+
+        conn.execute("DROP TRIGGER IF EXISTS prevent_ledger_update")
+        try:
+            conn.execute(
+                "UPDATE ledger_entries SET opposing_associate_id = ? WHERE id = ?",
+                (
+                    participants[loser_idx].associate_id,
+                    ledger_entry_ids[winner_idx],
+                ),
+            )
+            conn.execute(
+                "UPDATE ledger_entries SET opposing_associate_id = ? WHERE id = ?",
+                (
+                    participants[winner_idx].associate_id,
+                    ledger_entry_ids[loser_idx],
+                ),
+            )
+        finally:
+            create_ledger_append_only_trigger(conn)
+
+    def _ensure_delta_provenance_link(
+        self,
+        conn: sqlite3.Connection,
+        preview_data: SettlementPreview,
+        ledger_entry_ids: List[int],
+        entry_amounts_eur: List[Decimal],
+    ) -> None:
+        """Create a settlement link to power delta provenance dashboards."""
+        participants = preview_data.participants
+        if not participants or len(participants) != len(ledger_entry_ids):
+            return
+
+        winner_idx: Optional[int] = None
+        loser_idx: Optional[int] = None
+
+        for idx, participant in enumerate(participants):
+            if participant.outcome == BetOutcome.WON and winner_idx is None:
+                winner_idx = idx
+            elif participant.outcome == BetOutcome.LOST and loser_idx is None:
+                loser_idx = idx
+
+        if winner_idx is None and loser_idx is None and len(participants) >= 2:
+            winner_idx, loser_idx = 0, 1
+
+        if winner_idx is None or loser_idx is None:
+            logger.warning(
+                "delta_provenance_link_skipped",
+                reason="unable_to_determine_winner_loser",
+                participant_count=len(participants),
+                surebet_id=preview_data.surebet_id,
+            )
+            return
+
+        amount_eur = entry_amounts_eur[winner_idx]
+        if amount_eur <= Decimal("0.00") and loser_idx is not None:
+            amount_eur = abs(entry_amounts_eur[loser_idx])
+
+        if amount_eur <= Decimal("0.00"):
+            logger.warning(
+                "delta_provenance_link_skipped",
+                reason="non_positive_amount",
+                surebet_id=preview_data.surebet_id,
+                amount=str(amount_eur),
+            )
+            return
+
+        try:
+            delta_service = DeltaProvenanceService(conn)
+            delta_service.create_settlement_link(
+                surebet_id=preview_data.surebet_id,
+                winner_associate_id=participants[winner_idx].associate_id,
+                loser_associate_id=participants[loser_idx].associate_id,
+                amount_eur=amount_eur,
+                winner_ledger_entry_id=ledger_entry_ids[winner_idx],
+                loser_ledger_entry_id=ledger_entry_ids[loser_idx],
+            )
+        except Exception as exc:
+            logger.error(
+                "delta_provenance_link_failed",
+                surebet_id=preview_data.surebet_id,
+                error=str(exc),
+                exception=exc,
+            )
+            raise SettlementCommitError(
+                "Failed to create delta provenance link."
+            ) from exc
 
     @staticmethod
     def _calculate_amount_native(participant: Participant) -> Decimal:

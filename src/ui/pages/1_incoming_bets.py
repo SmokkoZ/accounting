@@ -19,6 +19,8 @@ from src.core.database import get_db_connection
 from src.services.bet_verification import BetVerificationService
 from src.ui.components.manual_upload import render_manual_upload_panel
 from src.ui.components.bet_card import render_bet_card
+from src.ui.ui_components import load_global_styles
+from src.ui.utils.navigation_links import render_navigation_link
 
 logger = structlog.get_logger()
 
@@ -93,7 +95,13 @@ def _handle_bet_actions(verification_service: BetVerificationService) -> None:
 
                 # Validate and approve
                 verification_service.approve_bet(bet_id, edited_fields)
-                st.success(f"✅ Bet #{bet_id} approved successfully!")
+                st.success(f":material/check_circle: Bet #{bet_id} approved successfully!")
+                render_navigation_link(
+                    "pages/2_verified_bets.py",
+                    label="Review Surebets",
+                    icon=":material/target:",
+                    help_text="Open 'Surebets' from navigation to continue coverage review.",
+                )
                 logger.info("bet_approved_via_ui", bet_id=bet_id)
 
             except ValueError as e:
@@ -146,7 +154,13 @@ def _show_rejection_modal(bet_id: int, verification_service: BetVerificationServ
                     # Clean up session state
                     if session_key in st.session_state:
                         del st.session_state[session_key]
-                    st.success(f"✅ Bet #{bet_id} rejected successfully!")
+                    st.success(f":material/highlight_off: Bet #{bet_id} rejected successfully!")
+                    render_navigation_link(
+                        "pages/5_corrections.py",
+                        label="Track Corrections",
+                        icon=":material/edit_note:",
+                        help_text="Open 'Corrections' via navigation to review rejection fallout.",
+                    )
                     logger.info("bet_rejected_via_ui", bet_id=bet_id, reason=reason)
                     st.rerun()
                 except Exception as e:
@@ -164,12 +178,16 @@ def _show_rejection_modal(bet_id: int, verification_service: BetVerificationServ
 
 
 # Configure page
-st.set_page_config(page_title="Incoming Bets", layout="wide")
+PAGE_TITLE = "Incoming Bets"
+PAGE_ICON = ":material/inbox:"
 
-st.title("📥 Incoming Bets")
+st.set_page_config(page_title=PAGE_TITLE, layout="wide")
+load_global_styles()
+
+st.title(f"{PAGE_ICON} {PAGE_TITLE}")
 
 # Manual upload panel at top (collapsible)
-with st.expander("📤 Upload Manual Bet", expanded=False):
+with st.expander(":material/cloud_upload: Upload Manual Bet", expanded=False):
     render_manual_upload_panel()
 
 st.markdown("---")

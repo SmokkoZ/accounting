@@ -23,7 +23,10 @@ from src.services.statement_service import (
     PartnerFacingSection,
     InternalSection
 )
+from src.ui.ui_components import load_global_styles
 
+PAGE_TITLE = "Statements"
+PAGE_ICON = ":material/contract:"
 
 def get_associates() -> List[Dict[str, int]]:
     """Get list of associates for dropdown selection."""
@@ -287,12 +290,13 @@ def render_validation_errors(errors: List[str]) -> None:
 def main() -> None:
     """Main entry point for Statements page."""
     st.set_page_config(
-        page_title="Statements - Surebet Accounting",
-        page_icon=":material/description:",
+        page_title=PAGE_TITLE,
+        page_icon=PAGE_ICON,
         layout="wide"
     )
-    
-    st.title("📊 Monthly Statements")
+    load_global_styles()
+
+    st.title(f"{PAGE_ICON} {PAGE_TITLE}")
     st.caption("Generate per-associate statements showing funding, entitlement, and 50/50 split")
     
     # Initialize session state

@@ -24,6 +24,7 @@ logger = structlog.get_logger()
 class StatementCalculations:
     """Container for all statement calculation results."""
     # Raw calculations
+    associate_id: int
     net_deposits_eur: Decimal
     should_hold_eur: Decimal
     current_holding_eur: Decimal
@@ -95,6 +96,7 @@ class StatementService:
             delta = current_holding - should_hold
             
             calculations = StatementCalculations(
+                associate_id=associate_id,
                 net_deposits_eur=net_deposits,
                 should_hold_eur=should_hold,
                 current_holding_eur=current_holding,

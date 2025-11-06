@@ -14,7 +14,10 @@ from typing import Dict, List
 import streamlit as st
 
 from src.services.ledger_export_service import LedgerExportService
+from src.ui.ui_components import load_global_styles
 
+PAGE_TITLE = "Export"
+PAGE_ICON = ":material/ios_share:"
 
 def render_export_button() -> None:
     """Render the main export button and handle export logic."""
@@ -145,12 +148,12 @@ def render_export_instructions() -> None:
 def main() -> None:
     """Main entry point for the Export page."""
     st.set_page_config(
-        page_title="Export - Surebet Accounting",
-        page_icon=":material/file_upload:",
+        page_title=PAGE_TITLE,
+        page_icon=PAGE_ICON,
         layout="wide"
     )
-    
-    st.title("📤 Export")
+    load_global_styles()
+    st.title(f"{PAGE_ICON} {PAGE_TITLE}")
     st.caption("CSV export workflow for ledger data and audit trails.")
     
     # Render main sections

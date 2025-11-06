@@ -94,10 +94,25 @@ def db_conn() -> sqlite3.Connection:
             created_at_utc TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
             created_by TEXT NOT NULL DEFAULT 'local_user',
             note TEXT,
+            opposing_associate_id INTEGER,
             FOREIGN KEY (associate_id) REFERENCES associates(id),
             FOREIGN KEY (bookmaker_id) REFERENCES bookmakers(id),
             FOREIGN KEY (surebet_id) REFERENCES surebets(id),
             FOREIGN KEY (bet_id) REFERENCES bets(id)
+        );
+
+        CREATE TABLE surebet_settlement_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            surebet_id INTEGER NOT NULL,
+            winner_associate_id INTEGER NOT NULL,
+            loser_associate_id INTEGER NOT NULL,
+            amount_eur TEXT NOT NULL,
+            winner_ledger_entry_id INTEGER NOT NULL,
+            loser_ledger_entry_id INTEGER NOT NULL,
+            created_at_utc TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            FOREIGN KEY (surebet_id) REFERENCES surebets(id),
+            FOREIGN KEY (winner_ledger_entry_id) REFERENCES ledger_entries(id),
+            FOREIGN KEY (loser_ledger_entry_id) REFERENCES ledger_entries(id)
         );
         """
     )
@@ -243,11 +258,13 @@ def test_confirm_settlement_creates_ledger_entries(db_conn: sqlite3.Connection) 
     assert first["amount_native"] == "100.00"
     assert first["principal_returned_eur"] == "100.00"
     assert first["per_surebet_share_eur"] == "0.00"
+    assert first["opposing_associate_id"] == 2
 
     assert second["bet_id"] == 2
     assert second["settlement_state"] == "LOST"
     assert second["amount_native"] == "-100.00"
     assert second["principal_returned_eur"] == "0.00"
+    assert second["opposing_associate_id"] == 1
 
     surebet_row = db_conn.execute("SELECT status, settled_at_utc FROM surebets WHERE id = 1").fetchone()
     assert surebet_row["status"] == "settled"
@@ -257,6 +274,18 @@ def test_confirm_settlement_creates_ledger_entries(db_conn: sqlite3.Connection) 
         "SELECT id, status FROM bets ORDER BY id"
     ).fetchall()
     assert [row["status"] for row in bet_statuses] == ["settled", "settled"]
+
+    settlement_links = db_conn.execute(
+        "SELECT * FROM surebet_settlement_links"
+    ).fetchall()
+    assert len(settlement_links) == 1
+    link = settlement_links[0]
+    assert link["surebet_id"] == 1
+    assert link["winner_associate_id"] == 1
+    assert link["loser_associate_id"] == 2
+    assert link["winner_ledger_entry_id"] == first["id"]
+    assert link["loser_ledger_entry_id"] == second["id"]
+    assert Decimal(link["amount_eur"]) == Decimal("100.00")
 
 
 def test_confirm_settlement_handles_all_void(db_conn: sqlite3.Connection) -> None:
@@ -309,6 +338,14 @@ def test_confirm_settlement_handles_all_void(db_conn: sqlite3.Connection) -> Non
     assert rows[1]["principal_returned_eur"] == "100.00"
     assert all(row["per_surebet_share_eur"] == "0.00" for row in rows)
     assert confirmation.total_eur_amount == Decimal("0.00")
+    opposing = db_conn.execute(
+        "SELECT opposing_associate_id FROM ledger_entries ORDER BY bet_id"
+    ).fetchall()
+    assert [row["opposing_associate_id"] for row in opposing] == [2, 1]
+    assert (
+        db_conn.execute("SELECT COUNT(*) FROM surebet_settlement_links").fetchone()[0]
+        == 0
+    )
 
 
 def test_confirm_settlement_rolls_back_on_failure(db_conn: sqlite3.Connection) -> None:
@@ -329,6 +366,11 @@ def test_confirm_settlement_rolls_back_on_failure(db_conn: sqlite3.Connection) -
     # Ensure no ledger rows inserted
     count = db_conn.execute("SELECT COUNT(*) FROM ledger_entries").fetchone()[0]
     assert count == 0
+
+    assert (
+        db_conn.execute("SELECT COUNT(*) FROM surebet_settlement_links").fetchone()[0]
+        == 0
+    )
 
     # Surebet should remain open
     surebet_row = db_conn.execute("SELECT status FROM surebets WHERE id = 1").fetchone()

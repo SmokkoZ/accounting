@@ -36,6 +36,8 @@ class FundingDraft:
     draft_id: str  # UUID for in-memory tracking
     associate_id: int
     associate_alias: str
+    bookmaker_id: int
+    bookmaker_name: str
     event_type: str  # 'DEPOSIT' or 'WITHDRAWAL'
     amount_native: Decimal
     currency: str
@@ -50,6 +52,10 @@ class FundingDraft:
             raise ValueError("Amount must be positive")
         if not self.currency or len(self.currency) != 3:
             raise ValueError("Currency must be a valid 3-letter ISO code")
+        if self.bookmaker_id <= 0:
+            raise ValueError("Bookmaker ID must be a positive integer")
+        if not self.bookmaker_name:
+            raise ValueError("Bookmaker name must be provided")
 
 
 class FundingService:
@@ -73,22 +79,26 @@ class FundingService:
     def create_funding_draft(
         self, 
         associate_id: int, 
+        bookmaker_id: int,
         event_type: str, 
         amount_native: Decimal, 
         currency: str, 
         note: Optional[str] = None,
-        associate_alias: Optional[str] = None
+        associate_alias: Optional[str] = None,
+        bookmaker_name: Optional[str] = None,
     ) -> str:
         """
         Create a funding draft and return draft ID.
 
         Args:
             associate_id: ID of the associate
+            bookmaker_id: ID of the bookmaker account
             event_type: 'DEPOSIT' or 'WITHDRAWAL'
             amount_native: Positive amount in native currency
             currency: 3-letter ISO currency code
             note: Optional note for the funding event
             associate_alias: Optional alias for display purposes
+            bookmaker_name: Optional bookmaker name for display
 
         Returns:
             Draft ID (UUID) for tracking
@@ -106,10 +116,17 @@ class FundingService:
             
             if not currency or len(currency) != 3:
                 raise FundingError("Currency must be a valid 3-letter ISO code")
+            
+            if bookmaker_id <= 0:
+                raise FundingError("Bookmaker must be selected")
 
             # Get associate alias if not provided
             if associate_alias is None:
                 associate_alias = self._get_associate_alias(associate_id)
+            
+            # Get bookmaker name and validate association if not provided
+            if bookmaker_name is None:
+                bookmaker_name = self._get_bookmaker_name(associate_id, bookmaker_id)
 
             # Create draft
             draft_id = str(uuid.uuid4())
@@ -118,6 +135,8 @@ class FundingService:
                 draft_id=draft_id,
                 associate_id=associate_id,
                 associate_alias=associate_alias,
+                bookmaker_id=bookmaker_id,
+                bookmaker_name=bookmaker_name,
                 event_type=event_type,
                 amount_native=amount_native,
                 currency=currency.upper(),
@@ -188,7 +207,7 @@ class FundingService:
                     conn=conn,
                     entry_type=draft.event_type,
                     associate_id=draft.associate_id,
-                    bookmaker_id=None,  # Funding is associate-level
+                    bookmaker_id=draft.bookmaker_id,
                     amount_native=amount_native,
                     native_currency=draft.currency,
                     fx_rate_snapshot=fx_rate,
@@ -202,6 +221,7 @@ class FundingService:
                     ledger_id=ledger_id,
                     event_type=draft.event_type,
                     associate_id=draft.associate_id,
+                    bookmaker_id=draft.bookmaker_id,
                     amount_native=str(amount_native),
                     currency=draft.currency,
                     fx_rate=str(fx_rate)
@@ -270,6 +290,8 @@ class FundingService:
                     le.type as event_type,
                     le.associate_id,
                     a.display_alias as associate_alias,
+                    le.bookmaker_id,
+                    COALESCE(b.bookmaker_name, '(unknown)') as bookmaker_name,
                     le.amount_native,
                     le.native_currency,
                     le.fx_rate_snapshot,
@@ -278,6 +300,7 @@ class FundingService:
                     le.note
                 FROM ledger_entries le
                 JOIN associates a ON le.associate_id = a.id
+                LEFT JOIN bookmakers b ON le.bookmaker_id = b.id
                 WHERE le.type IN ('DEPOSIT', 'WITHDRAWAL')
                 AND le.created_at_utc >= ?
                 ORDER BY le.created_at_utc DESC
@@ -292,6 +315,8 @@ class FundingService:
                     'event_type': row['event_type'],
                     'associate_id': row['associate_id'],
                     'associate_alias': row['associate_alias'],
+                    'bookmaker_id': row['bookmaker_id'],
+                    'bookmaker_name': row['bookmaker_name'],
                     'amount_native': Decimal(row['amount_native']),
                     'native_currency': row['native_currency'],
                     'fx_rate_snapshot': Decimal(row['fx_rate_snapshot']),
@@ -321,6 +346,21 @@ class FundingService:
         if not row:
             raise FundingError(f"Associate not found: {associate_id}")
         return row['display_alias']
+
+    def _get_bookmaker_name(self, associate_id: int, bookmaker_id: int) -> str:
+        """Validate bookmaker relationship and return its name."""
+        cursor = self.db.execute(
+            """
+            SELECT bookmaker_name
+            FROM bookmakers
+            WHERE id = ? AND associate_id = ?
+            """,
+            (bookmaker_id, associate_id),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise FundingError("Selected bookmaker is not assigned to the associate")
+        return row["bookmaker_name"]
 
     def _create_ledger_entry(
         self,

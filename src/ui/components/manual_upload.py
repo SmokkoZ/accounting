@@ -5,6 +5,7 @@ This module provides a Streamlit component for uploading bet screenshots manuall
 with associate/bookmaker selection, file validation, and OCR processing.
 """
 
+import hashlib
 import sqlite3
 from typing import Optional, Any
 
@@ -86,12 +87,25 @@ def render_manual_upload_panel() -> None:
     selected_bookmaker_id = bookmaker_options.get(selected_bookmaker_name)
 
     # Submission form for file + note
-    with st.form("manual_upload_form"):
+    UPLOADER_KEY = "manual_upload_files"
+    NONCE_KEY = "manual_upload_nonce"
+
+    # Initialize nonce if not exists
+    if NONCE_KEY not in st.session_state:
+        st.session_state[NONCE_KEY] = 0
+
+    # Remove legacy uploader state that used the static key to prevent Streamlit API errors
+    st.session_state.pop(UPLOADER_KEY, None)
+
+    uploader_nonce = st.session_state[NONCE_KEY]
+    uploader_key = f"{UPLOADER_KEY}_{uploader_nonce}"
+    with st.form("manual_upload_form", clear_on_submit=True):
         uploaded_files = st.file_uploader(
             "Choose screenshot file",
             type=["png", "jpg", "jpeg"],
             help="Max file size: 10MB. Supported formats: PNG, JPG, JPEG",
             accept_multiple_files=True,
+            key=uploader_key,
         )
 
         note = st.text_area(
@@ -133,11 +147,19 @@ def render_manual_upload_panel() -> None:
 
             if successful_uploads and successful_uploads == len(files_to_process):
                 st.success(f"Processed {successful_uploads} screenshot(s) successfully.")
+                # Rotate the widget key for next run to clear the uploader
+                st.session_state.pop(uploader_key, None)
+                st.session_state[NONCE_KEY] += 1
+                st.rerun()
             elif successful_uploads:
                 st.warning(
                     f"Processed {successful_uploads} out of {len(files_to_process)} screenshot(s). "
                     "Review any errors above."
                 )
+                # Rotate the widget key for next run to clear the uploader
+                st.session_state.pop(uploader_key, None)
+                st.session_state[NONCE_KEY] += 1
+                st.rerun()
 
 
 def _process_manual_upload(
@@ -178,6 +200,22 @@ def _process_manual_upload(
         st.error(f"File `{display_name}` is not PNG, JPG, or JPEG.")
         return False
 
+    # Compute SHA256 hash for duplicate detection
+    file_sha = hashlib.sha256(file_bytes).hexdigest()
+
+    # Check for duplicate by hash
+    dup = db.execute(
+        "SELECT id, screenshot_path FROM bets WHERE screenshot_sha256 = ? LIMIT 1",
+        (file_sha,)
+    ).fetchone()
+
+    if dup:
+        st.warning(
+            f"Duplicate detected: This image was already ingested as Bet #{dup['id']} "
+            f"({dup['screenshot_path']}). Skipping."
+        )
+        return True  # treat as a handled item, not a failure
+
     # Process upload
     try:
         with st.spinner("Saving screenshot..."):
@@ -214,8 +252,9 @@ def _process_manual_upload(
                     screenshot_path,
                     ingestion_source,
                     created_at_utc,
-                    updated_at_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    updated_at_utc,
+                    screenshot_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     associate_id,
@@ -228,6 +267,7 @@ def _process_manual_upload(
                     "manual_upload",
                     utc_now_iso(),
                     utc_now_iso(),
+                    file_sha,
                 ),
             )
             db.commit()
@@ -236,7 +276,7 @@ def _process_manual_upload(
             if bet_id is None:
                 st.error("Failed to create bet record")
                 logger.error("bet_creation_failed", error="lastrowid is None")
-                return
+                return False
 
             # Add operator note if provided
             if note and note.strip():

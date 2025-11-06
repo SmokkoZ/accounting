@@ -37,9 +37,19 @@ def has(name: str) -> bool:
     return bool(_compute_feature_matrix().get(name, False))
 
 
+def supports_dialogs() -> bool:
+    """Return True when the current runtime exposes dialog support."""
+    return has("dialog")
+
+
+def supports_popovers() -> bool:
+    """Return True when the current runtime exposes popover support."""
+    return has("popover")
+
+
 def all_flags() -> Dict[str, bool]:
     """Expose a copy of the feature matrix for debugging."""
     return dict(_compute_feature_matrix())
 
 
-__all__ = ["has", "all_flags"]
+__all__ = ["has", "all_flags", "supports_dialogs", "supports_popovers"]

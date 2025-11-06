@@ -242,6 +242,7 @@ class TestFormattingIntegration:
         from src.services.statement_service import StatementCalculations
         
         calc = StatementCalculations(
+            associate_id=1,
             net_deposits_eur=Decimal("5000.00"),
             should_hold_eur=Decimal("7500.00"),
             current_holding_eur=Decimal("7200.00"),
@@ -267,6 +268,7 @@ class TestFormattingIntegration:
         
         # Test holding more scenario
         calc_holding_more = StatementCalculations(
+            associate_id=1,
             net_deposits_eur=Decimal("1000.00"),
             should_hold_eur=Decimal("2000.00"),
             current_holding_eur=Decimal("2500.00"),
@@ -284,6 +286,7 @@ class TestFormattingIntegration:
         
         # Test short scenario
         calc_short = StatementCalculations(
+            associate_id=1,
             net_deposits_eur=Decimal("1000.00"),
             should_hold_eur=Decimal("2000.00"),
             current_holding_eur=Decimal("1500.00"),

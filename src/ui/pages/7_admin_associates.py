@@ -31,8 +31,20 @@ from src.ui.utils.formatters import (
 )
 from src.services.fx_manager import get_fx_rate, get_latest_fx_rate, convert_to_eur
 from src.ui.pages.balance_management import render_balance_history_tab
+from src.ui.ui_components import load_global_styles
+from src.ui.helpers.dialogs import (
+    ActionItem,
+    open_dialog,
+    render_action_menu,
+    render_confirmation_dialog,
+)
 
 logger = structlog.get_logger()
+
+load_global_styles()
+
+PAGE_TITLE = "Admin & Associates"
+PAGE_ICON = ":material/admin_panel_settings:"
 
 # ============================================================================
 # DATABASE QUERY FUNCTIONS - ASSOCIATES
@@ -706,47 +718,40 @@ def render_edit_associate_modal(associate: Dict) -> None:
 
 
 def render_delete_confirmation_modal(associate: Dict) -> None:
-    """Render the Delete Confirmation modal.
-
-    Args:
-        associate: Associate dictionary from database
-    """
+    """Render the Delete Confirmation dialog."""
     associate_id = associate["id"]
-    modal_key = f"show_delete_modal_{associate_id}"
+    pending_key = f"pending_delete_assoc_{associate_id}"
+    dialog_key = f"delete_associate_{associate_id}"
 
-    if st.session_state.get(modal_key, False):
-        with st.expander(f"🗑️ Delete Associate: {associate['display_alias']}", expanded=True):
-            st.warning(f"⚠️ Are you sure you want to delete **{associate['display_alias']}**?")
+    if st.session_state.pop(pending_key, False):
+        open_dialog(dialog_key)
 
-            # Check if can delete
-            can_delete, reason = can_delete_associate(associate_id)
+    decision = render_confirmation_dialog(
+        key=dialog_key,
+        title=f"Delete Associate: {associate['display_alias']}",
+        body="This will remove the associate and all related bookmakers. This action cannot be undone.",
+        confirm_label="Delete",
+    )
 
-            if not can_delete:
-                st.error(f"❌ {reason}")
+    if decision is None:
+        return
 
-            col_cancel, col_delete = st.columns([1, 1])
-            with col_cancel:
-                if st.button(
-                    "Cancel", key=f"cancel_delete_{associate_id}", width="stretch"
-                ):
-                    st.session_state[modal_key] = False
-                    st.rerun()
+    if not decision:
+        return
 
-            with col_delete:
-                if st.button(
-                    "Delete",
-                    key=f"confirm_delete_{associate_id}",
-                    type="primary",
-                    disabled=not can_delete,
-                    width="stretch",
-                ):
-                    success, message = delete_associate(associate_id)
-                    if success:
-                        st.success(message)
-                        st.session_state[modal_key] = False
-                        st.rerun()
-                    else:
-                        st.error(message)
+    can_delete, reason = can_delete_associate(associate_id)
+    if not can_delete:
+        st.error(reason)
+        open_dialog(dialog_key)
+        return
+
+    success, message = delete_associate(associate_id)
+    if success:
+        st.success(message)
+        st.rerun()
+    else:
+        st.error(message)
+        open_dialog(dialog_key)
 
 
 # ============================================================================
@@ -885,50 +890,39 @@ def render_edit_bookmaker_modal(bookmaker: Dict, associate_alias: str) -> None:
 
 
 def render_delete_bookmaker_modal(bookmaker: Dict, associate_alias: str) -> None:
-    """Render the Delete Bookmaker confirmation modal.
-
-    Args:
-        bookmaker: Bookmaker dictionary from database
-        associate_alias: Display alias of the owning associate
-    """
+    """Render the Delete Bookmaker confirmation dialog."""
     bookmaker_id = bookmaker["id"]
-    modal_key = f"show_delete_bookmaker_{bookmaker_id}"
+    pending_key = f"pending_delete_bookmaker_{bookmaker_id}"
+    dialog_key = f"delete_bookmaker_{bookmaker_id}"
 
-    if st.session_state.get(modal_key, False):
-        with st.expander(f"🗑️ Delete Bookmaker: {bookmaker['bookmaker_name']}", expanded=True):
-            st.warning(f"⚠️ Are you sure you want to delete **{bookmaker['bookmaker_name']}**?")
+    if st.session_state.pop(pending_key, False):
+        open_dialog(dialog_key)
 
-            # Check if can delete (always True, but may have warning)
-            can_delete, warning, bet_count = can_delete_bookmaker(bookmaker_id)
+    can_delete, warning, _ = can_delete_bookmaker(bookmaker_id)
+    body_lines = [
+        f"Deleting {bookmaker['bookmaker_name']} will remove it from {associate_alias}.",
+    ]
+    if warning and warning != "OK":
+        body_lines.append(warning)
 
-            if bet_count > 0:
-                st.warning(warning)
-                st.info("💡 Deletion is allowed but requires confirmation.")
+    decision = render_confirmation_dialog(
+        key=dialog_key,
+        title=f"Delete Bookmaker: {bookmaker['bookmaker_name']}",
+        body="\n\n".join(body_lines),
+        confirm_label="Delete",
+    )
 
-            col_cancel, col_delete = st.columns([1, 1])
-            with col_cancel:
-                if st.button(
-                    "Cancel",
-                    key=f"cancel_delete_bm_{bookmaker_id}",
-                    width="stretch",
-                ):
-                    st.session_state[modal_key] = False
-                    st.rerun()
+    if decision is None or not decision:
+        return
 
-            with col_delete:
-                if st.button(
-                    "Delete",
-                    key=f"confirm_delete_bm_{bookmaker_id}",
-                    type="primary",
-                    width="stretch",
-                ):
-                    success, message = delete_bookmaker(bookmaker_id)
-                    if success:
-                        st.success(message)
-                        st.session_state[modal_key] = False
-                        st.rerun()
-                    else:
-                        st.error(message)
+    success, message = delete_bookmaker(bookmaker_id)
+    if success:
+        st.success(message)
+        st.rerun()
+    else:
+        st.error(message)
+        open_dialog(dialog_key)
+
 
 
 def render_bookmaker_row(bookmaker: Dict, associate_alias: str) -> None:
@@ -967,25 +961,37 @@ def render_bookmaker_row(bookmaker: Dict, associate_alias: str) -> None:
         st.text(chat_status)
 
     with col5:
-        # Action buttons
-        col_edit, col_delete = st.columns(2)
-        with col_edit:
-            if st.button(
-                "Edit",
-                key=f"edit_bm_btn_{bookmaker['id']}",
-                width="stretch",
-            ):
-                st.session_state[f"show_edit_bookmaker_{bookmaker['id']}"] = True
-                st.rerun()
+        bookmaker_id = bookmaker['id']
+        can_delete, warning, _ = can_delete_bookmaker(bookmaker_id)
+        delete_description = None if can_delete else warning
+        actions = [
+            ActionItem(
+                key='edit',
+                label='Edit',
+                icon=':material/edit:',
+            ),
+            ActionItem(
+                key='delete',
+                label='Delete',
+                icon=':material/delete:',
+                button_type='secondary',
+                disabled=not can_delete,
+                description=delete_description,
+            ),
+        ]
+        triggered_action = render_action_menu(
+            key=f'bookmaker_actions_{bookmaker_id}',
+            label='Actions',
+            actions=actions,
+        )
 
-        with col_delete:
-            if st.button(
-                "Delete",
-                key=f"delete_bm_btn_{bookmaker['id']}",
-                width="stretch",
-            ):
-                st.session_state[f"show_delete_bookmaker_{bookmaker['id']}"] = True
-                st.rerun()
+        if triggered_action == 'edit':
+            st.session_state[f'show_edit_bookmaker_{bookmaker_id}'] = True
+            st.rerun()
+        elif triggered_action == 'delete':
+            st.session_state[f'pending_delete_bookmaker_{bookmaker_id}'] = True
+            open_dialog(f'delete_bookmaker_{bookmaker_id}')
+            st.rerun()
 
 
 def render_bookmakers_for_associate(associate: Dict) -> None:
@@ -1058,10 +1064,10 @@ def render_associates_table(associates: List[Dict]) -> None:
         render_delete_confirmation_modal(assoc)
 
         # Associate row
-        col1, col2, col3, col4, col5, col6 = st.columns([3, 1.5, 1, 1.5, 2, 2])
+        col1, col2, col3, col4, col5 = st.columns([3, 1.5, 1, 1.5, 2])
 
         with col1:
-            admin_badge = "✓" if assoc["is_admin"] else ""
+            admin_badge = ":material/verified:" if assoc["is_admin"] else ""
             st.markdown(f"**{assoc['display_alias']}** {admin_badge}")
 
         with col2:
@@ -1072,24 +1078,42 @@ def render_associates_table(associates: List[Dict]) -> None:
 
         with col4:
             created_date = format_utc_datetime_local(assoc["created_at_utc"])
-            st.text(created_date.split(" ")[0] if created_date != "—" else "—")
+            if created_date:
+                created_display = created_date.split(" ")[0]
+            else:
+                created_display = "N/A"
+            st.text(created_display)
 
         with col5:
-            if st.button(
-                "Edit",
-                key=f"edit_btn_{assoc['id']}",
-                width="stretch",
-            ):
-                st.session_state[f"show_edit_modal_{assoc['id']}"] = True
-                st.rerun()
+            assoc_id = assoc["id"]
+            can_delete, delete_reason = can_delete_associate(assoc_id)
+            actions = [
+                ActionItem(
+                    key="edit",
+                    label="Edit",
+                    icon=":material/edit:",
+                ),
+                ActionItem(
+                    key="delete",
+                    label="Delete",
+                    icon=":material/delete:",
+                    button_type="secondary",
+                    disabled=not can_delete,
+                    description=None if can_delete else delete_reason,
+                ),
+            ]
+            triggered = render_action_menu(
+                key=f"associate_actions_{assoc_id}",
+                label="Actions",
+                actions=actions,
+            )
 
-        with col6:
-            if st.button(
-                "Delete",
-                key=f"delete_btn_{assoc['id']}",
-                width="stretch",
-            ):
-                st.session_state[f"show_delete_modal_{assoc['id']}"] = True
+            if triggered == "edit":
+                st.session_state[f"show_edit_modal_{assoc_id}"] = True
+                st.rerun()
+            elif triggered == "delete":
+                st.session_state[f"pending_delete_assoc_{assoc_id}"] = True
+                open_dialog(f"delete_associate_{assoc_id}")
                 st.rerun()
 
         # Render expandable bookmaker section
@@ -1105,9 +1129,9 @@ def render_associates_table(associates: List[Dict]) -> None:
 # Only run Streamlit UI code if not being imported by tests
 if __name__ != "__main__" or "pytest" not in globals():
     try:
-        st.set_page_config(page_title="Admin - Associates", page_icon="🧑‍💼", layout="wide")
+        st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 
-        st.title("🧑‍💼 Associate & Bookmaker Management")
+        st.title(f"{PAGE_ICON} {PAGE_TITLE}")
 
         # Initialize session state
         if "show_add_form" not in st.session_state:
