@@ -9,7 +9,7 @@ with older runtimes.
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import streamlit as st
 from streamlit.errors import StreamlitAPIException
@@ -18,13 +18,15 @@ from src.repositories.associate_hub_repository import AssociateHubRepository
 from src.services.bookmaker_balance_service import BookmakerBalanceService
 from src.services.funding_transaction_service import FundingTransactionService
 from src.ui.components.associate_hub import (
+from src.ui.utils.state_management import safe_rerun
     render_associate_listing,
     render_detail_drawer,
     render_filters,
     render_pagination_info,
     render_empty_state,
 )
-from src.ui.utils.feature_flags import has
+from src.ui.helpers.fragments import fragment
+from src.ui.helpers.streaming import status_with_steps
 from src.ui.ui_components import load_global_styles
 from src.utils.logging_config import get_logger
 
@@ -110,28 +112,35 @@ def main() -> None:
     filter_state, should_refresh = render_filters(repository)
 
     if should_refresh:
-        st.rerun()
+        safe_rerun()
         return
 
     def render_listing_section() -> None:
         load_label = "Loading associate data..."
+        payload: Dict[str, Any] = {}
+
+        def _load_payload() -> None:
+            (
+                payload["associates"],
+                payload["bookmakers"],
+                payload["total_count"],
+            ) = _load_associate_payload(repository, filter_state)
 
         try:
-            if has("status"):
-                with st.status(load_label, expanded=False) as status:
-                    associates, bookmakers, total_count = _load_associate_payload(
-                        repository, filter_state
-                    )
-                    status.update(label="Associates loaded", state="complete")
-            else:
-                with st.spinner(load_label):
-                    associates, bookmakers, total_count = _load_associate_payload(
-                        repository, filter_state
-                    )
+            for _ in status_with_steps(
+                load_label,
+                [("Fetch associates", _load_payload)],
+                expanded=False,
+            ):
+                pass
         except Exception as exc:
             st.error(f"Failed to load associate data: {exc}")
             logger.error("data_loading_failed", error=str(exc), exc_info=True)
             return
+
+        associates = payload.get("associates", [])
+        bookmakers = payload.get("bookmakers", [])
+        total_count = int(payload.get("total_count", 0))
 
         if associates:
             render_associate_listing(associates, bookmakers)
@@ -145,15 +154,11 @@ def main() -> None:
             st.write(f"Bookmakers loaded: {len(bookmakers)}")
             st.write(f"Current filter state: {filter_state}")
 
-    if has("fragment"):
-        # Refresh the listing every 60 seconds without re-running filters.
-        @st.fragment(run_every=60)
-        def listing_fragment() -> None:
-            render_listing_section()
-
-        listing_fragment()
-    else:
+    @fragment("associate_hub.listing", run_every=60)
+    def listing_fragment() -> None:
         render_listing_section()
+
+    listing_fragment()
 
     # Drawer must render outside the fragment to avoid sidebar restrictions.
     render_detail_drawer(repository, funding_service, balance_service)
@@ -186,7 +191,7 @@ def handle_keyboard_shortcuts() -> None:
             page=0,
         )
         st.session_state.pop("shortcut_reset_filters")
-        st.rerun()
+        safe_rerun()
 
 
 def validate_page_access() -> bool:

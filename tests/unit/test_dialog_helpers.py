@@ -75,7 +75,7 @@ def test_render_action_menu_popover_path(monkeypatch):
     actions = [ActionItem(key="delete", label="Delete")]
 
     dialogs.render_action_menu(key="menu", label="Actions", actions=actions)
-    assert stub.popover_calls == [("Actions", {"use_container_width": True})]
+    assert stub.popover_calls == [("Actions", {"width": "stretch"})]
 
     result = dialogs.render_action_menu(key="menu", label="Actions", actions=actions)
     assert result == "delete"

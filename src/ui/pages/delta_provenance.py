@@ -19,6 +19,7 @@ from src.core.database import get_db_connection
 from src.services.delta_provenance_service import DeltaProvenanceService
 from src.ui.ui_components import load_global_styles
 from src.ui.utils.formatters import (
+from src.ui.utils.state_management import safe_rerun
     format_utc_datetime_local,
     format_currency_with_symbol,
 )
@@ -268,7 +269,7 @@ def render_counterparty_table(
                 key=f"details_{counterparty['counterparty_id']}"
             ):
                 st.session_state[f"show_details_{counterparty['counterparty_id']}"] = True
-                st.rerun()
+                safe_rerun()
 
 def render_transaction_details(
     associate_id: int,
@@ -396,7 +397,7 @@ def main():
                     
                     if st.button("← Back to Counterparty List"):
                         st.session_state[detail_key] = False
-                        st.rerun()
+                        safe_rerun()
 
 # Run the main function
 if __name__ == "__main__" or "pytest" in globals():

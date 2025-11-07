@@ -17,6 +17,7 @@ from src.domain.market_taxonomy import (
     find_market_code_from_label,
     normalize_period,
 )
+from src.services.event_normalizer import EventNormalizer
 
 logger = structlog.get_logger()
 
@@ -35,6 +36,7 @@ class MarketNormalizer:
         period_scope_text: Optional[str],
         side_text: Optional[str],
         line_value: Optional[str],
+        event_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Return normalized fields: market_code, canonical_market_id, period_scope, side, normalization_confidence.
 
@@ -50,8 +52,25 @@ class MarketNormalizer:
         side_norm = self._normalize_side(side_text)
         period_norm = normalize_period(period_scope_text)
 
-        # 1) Try mapping by raw market label
-        code, implied_period = find_market_code_from_label(market_label)
+        # Extract team context from event when available
+        normalized_event = (
+            EventNormalizer.normalize_event_name(event_name, sport)
+            if event_name
+            else None
+        )
+        home_team: Optional[str] = None
+        away_team: Optional[str] = None
+        if normalized_event:
+            teams = EventNormalizer.split_teams(normalized_event)
+            if teams:
+                home_team, away_team = teams
+
+        # 1) Try mapping by raw market label (include team context if known)
+        code, implied_period = find_market_code_from_label(
+            market_label,
+            home_team=home_team,
+            away_team=away_team,
+        )
         confidence = 0.9 if code else 0.0
 
         # 2) Fall back to guess if allowed and within our taxonomy

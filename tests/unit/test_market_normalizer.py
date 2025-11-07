@@ -180,3 +180,51 @@ def test_normalize_dnb_italian_label():
     )
     assert result["market_code"] == "DRAW_NO_BET"
     assert result["side"] == "TEAM 1 DNB"
+
+
+def test_normalize_home_shots_on_target_by_team_label():
+    db = _db()
+    norm = MarketNormalizer(db)
+    result = norm.normalize(
+        sport="football",
+        market_label="Total Shots on Target by Nantes (Settled using Opta data)",
+        market_code_guess=None,
+        period_scope_text=None,
+        side_text="Under",
+        line_value="2.5",
+        event_name="Nantes vs Lille",
+    )
+    assert result["market_code"] == "HOME_TEAM_TOTAL_SHOTS_ON_TARGET_OVER_UNDER"
+    assert result["side"] == "UNDER"
+
+
+def test_normalize_away_shots_on_target_by_team_label():
+    db = _db()
+    norm = MarketNormalizer(db)
+    result = norm.normalize(
+        sport="football",
+        market_label="Total Shots on Target by Lille (Settled using Opta data)",
+        market_code_guess=None,
+        period_scope_text=None,
+        side_text="Over",
+        line_value="1.5",
+        event_name="Nantes vs Lille",
+    )
+    assert result["market_code"] == "AWAY_TEAM_TOTAL_SHOTS_ON_TARGET_OVER_UNDER"
+    assert result["side"] == "OVER"
+
+
+def test_normalize_home_total_shots_by_team_label():
+    db = _db()
+    norm = MarketNormalizer(db)
+    result = norm.normalize(
+        sport="football",
+        market_label="Total Shots by Nantes",
+        market_code_guess=None,
+        period_scope_text=None,
+        side_text="under",
+        line_value="8.5",
+        event_name="Nantes vs Lille",
+    )
+    assert result["market_code"] == "HOME_TEAM_TOTAL_SHOTS_OVER_UNDER"
+    assert result["side"] == "UNDER"

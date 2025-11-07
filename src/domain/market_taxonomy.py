@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 import re
+import unicodedata
 
 
 # Canonical market codes (two-way focus)
@@ -76,6 +77,35 @@ CANONICAL_MARKETS: Dict[str, str] = {
 
 
 # Period normalization
+def _strip_accents(text: str) -> str:
+    """Return ASCII-only uppercase string without diacritics."""
+    normalized = unicodedata.normalize("NFKD", text)
+    return normalized.encode("ascii", "ignore").decode("ascii")
+
+
+def _team_tokens(team: str | None) -> List[str]:
+    """Build searchable tokens for a team name."""
+    if not team:
+        return []
+    cleaned = _strip_accents(team).upper()
+    cleaned = re.sub(r"[^A-Z0-9 ]+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return []
+    tokens: List[str] = [cleaned]
+    compact = cleaned.replace(" ", "")
+    if len(compact) >= 3:
+        tokens.append(compact)
+    for part in cleaned.split(" "):
+        if len(part) >= 3:
+            tokens.append(part)
+    deduped: List[str] = []
+    for tok in tokens:
+        if tok not in deduped:
+            deduped.append(tok)
+    return deduped
+
+
 PERIOD_SYNONYMS: Dict[str, str] = {
     # English
     "FULL_MATCH": "FULL_MATCH",
@@ -353,7 +383,12 @@ def normalize_period(label: str | None) -> str | None:
     return PERIOD_SYNONYMS.get(key, None)
 
 
-def find_market_code_from_label(label: str | None) -> Tuple[str | None, str | None]:
+def find_market_code_from_label(
+    label: str | None,
+    *,
+    home_team: str | None = None,
+    away_team: str | None = None,
+) -> Tuple[str | None, str | None]:
     """Return (market_code, implied_period) for a raw market label.
 
     Heuristics:
@@ -365,6 +400,9 @@ def find_market_code_from_label(label: str | None) -> Tuple[str | None, str | No
         return None, None
 
     up = label.strip().upper()
+    search_text = _strip_accents(up)
+    home_tokens = _team_tokens(home_team)
+    away_tokens = _team_tokens(away_team)
 
     # quick implied period
     implied_period = None
@@ -398,12 +436,14 @@ def find_market_code_from_label(label: str | None) -> Tuple[str | None, str | No
         return any(c in s for c in candidates)
 
     def has_team_indicator(*, home: bool) -> bool:
-        tokens = (
+        base_tokens = (
             ["HOME", "TEAM A", "CASA", "SQUADRA CASA"]
             if home
             else ["AWAY", "TEAM B", "OSPITE", "TRASFERTA", "SQUADRA OSPITE"]
         )
-        return any_in(up, tokens)
+        dynamic_tokens = home_tokens if home else away_tokens
+        tokens = base_tokens + dynamic_tokens
+        return any_in(search_text, tokens)
 
     def has_threshold_language() -> bool:
         return any_in(
@@ -464,13 +504,45 @@ def find_market_code_from_label(label: str | None) -> Tuple[str | None, str | No
     if has_ou() and any_in(up_simplified, ["CARDS", "CARD", "CARTELLINI", "AMMONIZIONI", "BOOKINGS"]):
         return "TOTAL_CARDS_OVER_UNDER", implied_period
 
-    # Shots on target O/U
-    if has_ou() and any_in(up_simplified, ["SHOTS ON TARGET", "SOT", "TIRI IN PORTA"]):
+    # Shots on target O/U (total + team detection)
+    shots_on_target_keywords = ["SHOTS ON TARGET", "SOT", "TIRI IN PORTA"]
+    if (has_ou() or has_threshold_language()) and any_in(up_simplified, shots_on_target_keywords):
+        home_flag = has_team_indicator(home=True)
+        away_flag = has_team_indicator(home=False)
+        if home_flag and not away_flag:
+            return "HOME_TEAM_TOTAL_SHOTS_ON_TARGET_OVER_UNDER", implied_period
+        if away_flag and not home_flag:
+            return "AWAY_TEAM_TOTAL_SHOTS_ON_TARGET_OVER_UNDER", implied_period
         return "TOTAL_SHOTS_ON_TARGET_OVER_UNDER", implied_period
 
-    # Shots O/U (generic)
-    if has_ou() and any_in(up_simplified, ["SHOTS", "TIRI"]):
+    # Team-specific shots on target mention even without explicit threshold tokens (e.g., "by Nantes")
+    if any_in(up_simplified, shots_on_target_keywords):
+        home_flag = has_team_indicator(home=True)
+        away_flag = has_team_indicator(home=False)
+        if home_flag and not away_flag:
+            return "HOME_TEAM_TOTAL_SHOTS_ON_TARGET_OVER_UNDER", implied_period
+        if away_flag and not home_flag:
+            return "AWAY_TEAM_TOTAL_SHOTS_ON_TARGET_OVER_UNDER", implied_period
+
+    # Shots O/U (generic totals + team)
+    shots_keywords = ["SHOTS", "TIRI"]
+    if (has_ou() or has_threshold_language()) and any_in(up_simplified, shots_keywords):
+        home_flag = has_team_indicator(home=True)
+        away_flag = has_team_indicator(home=False)
+        if home_flag and not away_flag:
+            return "HOME_TEAM_TOTAL_SHOTS_OVER_UNDER", implied_period
+        if away_flag and not home_flag:
+            return "AWAY_TEAM_TOTAL_SHOTS_OVER_UNDER", implied_period
         return "TOTAL_SHOTS_OVER_UNDER", implied_period
+
+    # Team-specific shots mention even without explicit threshold text
+    if any_in(up_simplified, shots_keywords):
+        home_flag = has_team_indicator(home=True)
+        away_flag = has_team_indicator(home=False)
+        if home_flag and not away_flag:
+            return "HOME_TEAM_TOTAL_SHOTS_OVER_UNDER", implied_period
+        if away_flag and not home_flag:
+            return "AWAY_TEAM_TOTAL_SHOTS_OVER_UNDER", implied_period
 
     # --- Team-specific CARDS O/U (detect even without explicit 'O/U' if threshold language appears)
     cards_keywords = ["CARDS", "CARD", "CARTELLINI", "AMMONIZIONI", "BOOKINGS"]
@@ -490,20 +562,6 @@ def find_market_code_from_label(label: str | None) -> Tuple[str | None, str | No
             if has_team_indicator(home=False) and not has_team_indicator(home=True):
                 return "AWAY_TEAM_GOALS_EVEN_ODD", implied_period
             return "TOTAL_GOALS_EVEN_ODD", implied_period
-
-    # Team-specific SHOTS ON TARGET O/U
-    if has_ou() and any_in(up_simplified, ["SHOTS ON TARGET", "SOT", "TIRI IN PORTA"]):
-        if has_team_indicator(home=True) and not has_team_indicator(home=False):
-            return "HOME_TEAM_TOTAL_SHOTS_ON_TARGET_OVER_UNDER", implied_period
-        if has_team_indicator(home=False) and not has_team_indicator(home=True):
-            return "AWAY_TEAM_TOTAL_SHOTS_ON_TARGET_OVER_UNDER", implied_period
-
-    # Team-specific SHOTS O/U
-    if has_ou() and any_in(up_simplified, ["SHOTS", "TIRI"]):
-        if has_team_indicator(home=True) and not has_team_indicator(home=False):
-            return "HOME_TEAM_TOTAL_SHOTS_OVER_UNDER", implied_period
-        if has_team_indicator(home=False) and not has_team_indicator(home=True):
-            return "AWAY_TEAM_TOTAL_SHOTS_OVER_UNDER", implied_period
 
     # OFFSIDES O/U (total + team)
     offsides_keywords = ["OFFSIDES", "FUORIGIOCO"]

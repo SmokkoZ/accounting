@@ -22,12 +22,18 @@ from src.ui.components.reconciliation.bookmaker_drilldown import (
 from src.ui.components.reconciliation.pending_funding import (
     render_pending_funding_section,
 )
-from src.ui.ui_components import load_global_styles
+from src.ui.ui_components import advanced_section, form_gated_filters, load_global_styles
+from src.ui.utils.state_management import render_reset_control, safe_rerun
 from src.ui.helpers.dialogs import open_dialog, render_correction_dialog
 from src.ui.helpers.fragments import (
     call_fragment,
     render_debug_panel,
     render_debug_toggle,
+)
+from src.ui.helpers.streaming import (
+    handle_streaming_error,
+    show_success_toast,
+    status_with_steps,
 )
 from src.utils.logging_config import get_logger
 
@@ -52,6 +58,57 @@ st.markdown("**Track who's overholding group float vs. who's short**")
 toggle_cols = st.columns([6, 2])
 with toggle_cols[1]:
     render_debug_toggle(":material/monitor_heart: Performance debug")
+
+action_cols = st.columns([6, 2])
+with action_cols[1]:
+    render_reset_control(
+        key="reconciliation_reset",
+        description="Clear reconciliation filters and dialog state.",
+        prefixes=("reconciliation_", "filters_", "advanced_", "dialog_"),
+    )
+
+
+def _render_filter_controls() -> Dict[str, object]:
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        statuses = st.multiselect(
+            "Statuses to show",
+            options=["overholder", "balanced", "short"],
+            default=["overholder", "balanced", "short"],
+            key="reconciliation_status_filter",
+        )
+    with col2:
+        slider_api = getattr(st, "slider", None)
+        if callable(slider_api):
+            min_delta = slider_api(
+                "Min |Δ| (EUR)",
+                min_value=0,
+                max_value=200,
+                value=10,
+                step=5,
+                key="reconciliation_delta_threshold",
+                help="Hide associates whose absolute delta is below this value.",
+            )
+        else:
+            min_delta = st.number_input(
+                "Min |Δ| (EUR)",
+                min_value=0,
+                max_value=200,
+                value=10,
+                step=5,
+                key="reconciliation_delta_threshold_input",
+                help="Hide associates whose absolute delta is below this value.",
+            )
+    return {"statuses": statuses, "min_delta": min_delta}
+
+
+with advanced_section():
+    filter_state, _ = form_gated_filters(
+        "reconciliation_filters",
+        _render_filter_controls,
+        submit_label="Apply Filters",
+        help_text="Update the dashboard with the selected filters.",
+    )
 
 # ========================================
 # Helper Functions
@@ -204,15 +261,34 @@ def _render_reconciliation_details_fragment(
         check_date_utc: str,
         note: Optional[str],
     ) -> None:
-        with BookmakerBalanceService() as service:
-            service.update_reported_balance(
-                associate_id=associate_id,
-                bookmaker_id=bookmaker_id,
-                balance_native=amount_native,
-                native_currency=currency,
-                check_date_utc=check_date_utc,
-                note=note,
+        def _persist_balance() -> None:
+            with BookmakerBalanceService() as service:
+                service.update_reported_balance(
+                    associate_id=associate_id,
+                    bookmaker_id=bookmaker_id,
+                    balance_native=amount_native,
+                    native_currency=currency,
+                    check_date_utc=check_date_utc,
+                    note=note,
+                )
+
+        try:
+            list(
+                status_with_steps(
+                    "Update bookmaker balance",
+                    [
+                        ":material/rule: Validating input",
+                        (":material/sync: Persisting balance", _persist_balance),
+                        ":material/refresh: Refreshing dashboard",
+                    ],
+                )
             )
+        except Exception as error:
+            handle_streaming_error(error, "balance_update")
+            return
+
+        show_success_toast("Bookmaker balance updated.")
+        safe_rerun()
 
     def prefill_correction(balance_item) -> None:
         with BookmakerBalanceService() as service:
@@ -255,30 +331,50 @@ def _render_reconciliation_details_fragment(
             defaults=dialog_defaults,
         )
         if dialog_payload:
-            service = CorrectionService()
+            correction_result: Dict[str, int] = {}
+
+            def _apply_correction() -> None:
+                service = CorrectionService()
+                try:
+                    correction_result["entry_id"] = service.apply_correction(
+                        associate_id=correction_context["associate_id"],
+                        bookmaker_id=correction_context["bookmaker_id"],
+                        amount_native=dialog_payload["amount_native"],
+                        native_currency=dialog_payload["native_currency"],
+                        note=dialog_payload["note"],
+                        created_by="reconciliation_ui",
+                    )
+                finally:
+                    service.close()
+
             try:
-                entry_id = service.apply_correction(
-                    associate_id=correction_context["associate_id"],
-                    bookmaker_id=correction_context["bookmaker_id"],
-                    amount_native=dialog_payload["amount_native"],
-                    native_currency=dialog_payload["native_currency"],
-                    note=dialog_payload["note"],
-                    created_by="reconciliation_ui",
+                list(
+                    status_with_steps(
+                        "Applying correction",
+                        [
+                            ":material/rule: Validating correction inputs",
+                            (":material/note_alt: Writing ledger adjustment", _apply_correction),
+                            ":material/refresh: Refreshing reconciliation view",
+                        ],
+                    )
                 )
             except CorrectionError as error:
-                st.error(f"Correction failed: {error}")
+                handle_streaming_error(error, "reconciliation_correction")
                 open_dialog("reconciliation_correction")
             except Exception as error:
-                st.error(f"Unexpected error applying correction: {error}")
+                handle_streaming_error(error, "reconciliation_correction")
                 open_dialog("reconciliation_correction")
             else:
-                st.success(
-                    f":material/task_alt: Correction applied (ledger entry {entry_id})."
-                )
-                st.session_state.pop("recon_correction_context", None)
-                st.rerun()
-            finally:
-                service.close()
+                entry_id = correction_result.get("entry_id")
+                if entry_id is None:
+                    st.error("Correction did not return a ledger entry id.")
+                    open_dialog("reconciliation_correction")
+                else:
+                    show_success_toast(
+                        f"Correction applied (ledger entry {entry_id})."
+                    )
+                    st.session_state.pop("recon_correction_context", None)
+                    safe_rerun()
         elif not st.session_state.get("reconciliation_correction__open", False):
             st.session_state.pop("recon_correction_context", None)
 
@@ -322,7 +418,7 @@ with col1:
 
 with col2:
     if st.button("Refresh Balances", width="stretch"):
-        st.rerun()
+        safe_rerun()
 
 with col3:
     # Placeholder for export button (populated after data load)
@@ -348,8 +444,21 @@ try:
         )
         st.stop()
 
+    status_filter = list(filter_state.get("statuses") or ["overholder", "balanced", "short"])
+    min_delta_value = Decimal(str(filter_state.get("min_delta", 0)))
+
+    def _matches_filters(balance: AssociateBalance) -> bool:
+        status_ok = not status_filter or balance.status in status_filter
+        if min_delta_value <= 0:
+            delta_ok = True
+        else:
+            delta_ok = abs(balance.delta_eur) >= min_delta_value
+        return status_ok and delta_ok
+
+    filtered_balances = [balance for balance in balances if _matches_filters(balance)]
+
     # Export button
-    csv_data = export_to_csv(balances)
+    csv_data = export_to_csv(filtered_balances)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     export_placeholder.download_button(
         label="📥 Export CSV",
@@ -360,9 +469,9 @@ try:
     )
 
     # Summary metrics
-    total_overholders = sum(1 for b in balances if b.status == "overholder")
-    total_short = sum(1 for b in balances if b.status == "short")
-    total_balanced = sum(1 for b in balances if b.status == "balanced")
+    total_overholders = sum(1 for b in filtered_balances if b.status == "overholder")
+    total_short = sum(1 for b in filtered_balances if b.status == "short")
+    total_balanced = sum(1 for b in filtered_balances if b.status == "balanced")
 
     metric_col1, metric_col2, metric_col3 = st.columns(3)
     with metric_col1:
@@ -379,17 +488,20 @@ try:
     
     st.divider()
 
-    balance_entries = [
-        {"balance": balance, "explanation": reconciliation_service.get_explanation(balance)}
-        for balance in balances
-    ]
+    if not filtered_balances:
+        st.warning("No associates match the selected filters.")
+    else:
+        balance_entries = [
+            {"balance": balance, "explanation": reconciliation_service.get_explanation(balance)}
+            for balance in filtered_balances
+        ]
 
-    call_fragment(
-        "reconciliation.associate_cards",
-        _render_reconciliation_details_fragment,
-        balance_entries=balance_entries,
-        bookmaker_balances=bookmaker_balances,
-    )
+        call_fragment(
+            "reconciliation.associate_cards",
+            _render_reconciliation_details_fragment,
+            balance_entries=balance_entries,
+            bookmaker_balances=bookmaker_balances,
+        )
 
     render_debug_panel()
 

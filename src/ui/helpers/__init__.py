@@ -2,4 +2,4 @@
 Helper utilities for the Streamlit UI layer.
 """
 
-__all__ = ["dialogs", "fragments"]
+__all__ = ["dialogs", "editor", "fragments", "streaming"]

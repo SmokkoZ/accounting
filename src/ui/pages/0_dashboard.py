@@ -14,7 +14,9 @@ from typing import Iterable
 
 import streamlit as st
 
-from src.ui.utils.feature_flags import has
+from src.ui.helpers.fragments import fragment
+from src.ui.helpers.streaming import show_info_toast, status_with_steps, stream_with_fallback
+from src.ui.utils.navigation_links import render_navigation_link
 from src.ui.ui_components import card, load_global_styles, metric_compact
 
 load_global_styles()
@@ -38,12 +40,16 @@ def _generate_metrics() -> Iterable[tuple[str, str, str]]:
     )
 
 
-if has("status"):
-    with st.status("Fetching latest ledger snapshots...", expanded=False) as status:
-        time.sleep(0.1)
-        status.update(label="Snapshots loaded", state="complete", expanded=False)
-else:
-    st.info("Snapshots refresh whenever filters or inputs change.")
+def _simulate_snapshot_fetch() -> None:
+    time.sleep(0.1)
+
+
+for _ in status_with_steps(
+    "Fetching latest ledger snapshots...",
+    [("Load snapshots", _simulate_snapshot_fetch)],
+    expanded=False,
+):
+    pass
 
 
 def _render_metrics_block() -> None:
@@ -52,14 +58,12 @@ def _render_metrics_block() -> None:
             metric_compact(name, value, delta=delta)
 
 
-if has("fragment"):
-    @st.fragment(run_every=30)
-    def render_metrics_fragment() -> None:
-        _render_metrics_block()
-
-    render_metrics_fragment()
-else:
+@fragment("dashboard.metrics", run_every=30)
+def render_metrics_fragment() -> None:
     _render_metrics_block()
+
+
+render_metrics_fragment()
 
 
 st.divider()
@@ -69,53 +73,42 @@ col_activity, col_shortcuts = st.columns([3, 1])
 with col_activity:
     st.subheader("Activity Stream")
 
-    if has("write_stream"):
+    def _activity_feed() -> Iterable[str]:
+        events = [
+            "Checking bookmaker balances...",
+            "Syncing telegram queue...",
+            "Refreshing settlement projections...",
+            "Recomputing exposure deltas...",
+        ]
+        for event in events:
+            yield f"- {event}\n"
+            time.sleep(0.1)
 
-        def _activity_feed() -> Iterable[str]:
-            events = [
-                "Checking bookmaker balances...",
-                "Syncing telegram queue...",
-                "Refreshing settlement projections...",
-                "Recomputing exposure deltas...",
-            ]
-            for event in events:
-                yield f"- {event}\n"
-                time.sleep(0.1)
-
-        st.write_stream(_activity_feed())
-    else:
-        st.caption(
-            "Streamed updates appear here when newer Streamlit runtimes are available."
-        )
-        st.write(
-            "- Checking bookmaker balances...\n"
-            "- Syncing telegram queue...\n"
-            "- Refreshing settlement projections..."
-        )
+    stream_with_fallback(_activity_feed, header=":material/dvr: Live log output")
 
 with col_shortcuts:
     st.subheader("Shortcuts")
-    if has("page_link"):
-        st.page_link(
-            "pages/8_associate_operations.py",
-            label="Associate Hub",
-            icon=":material/groups_3:",
-        )
-        st.page_link(
-            "pages/6_reconciliation.py",
-            label="Reconciliation",
-            icon=":material/account_balance:",
-        )
-        st.page_link(
-            "pages/2_verified_bets.py",
-            label="Surebets",
-            icon=":material/target:",
-        )
-    else:
-        st.write("Use sidebar navigation when quick links are unavailable.")
 
-    if has("toast") and st.button("Show Tip"):
-        st.toast("Use keyboard shortcut R to reset filters in the Associate Hub.")
+    render_navigation_link(
+        "pages/8_associate_operations.py",
+        label="Associate Hub",
+        icon=":material/groups_3:",
+        help_text="Open 'Associate Operations Hub' from the sidebar.",
+    )
+    render_navigation_link(
+        "pages/6_reconciliation.py",
+        label="Reconciliation",
+        icon=":material/account_balance:",
+        help_text="Use sidebar navigation when page links are unavailable.",
+    )
+    render_navigation_link(
+        "pages/2_verified_bets.py",
+        label="Surebets",
+        icon=":material/target:",
+    )
+
+    if st.button("Show Tip", key="dashboard_tip"):
+        show_info_toast("Use keyboard shortcut R to reset filters in the Associate Hub.")
 
 
 st.divider()

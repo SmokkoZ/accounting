@@ -38,11 +38,11 @@ Enable associates and admins to manage funding operations directly from Telegram
 - Funding drafts and approvals exist in Streamlit (Story 5.4) via `FundingService` (associate‑level by design; `bookmaker_id=None`).
 - Balance history exists via `bookmaker_balance_checks` and UI (Story 7.3).
 
-### What’s Being Built
+### What's Being Built
 
 1) Telegram funding commands (per registered chat/bookmaker):
    - Text messages: "deposit 500" or "withdraw 500" (decimals allowed)
-   - If sender is admin (admin chat or admin user): auto‑approve → create ledger entry immediately (type `DEPOSIT`/`WITHDRAWAL`) with `bookmaker_id` from chat registration and native currency equal to associate’s `home_currency`.
+   - If sender is admin (admin chat or admin user): auto‑approve → create ledger entry immediately (type `DEPOSIT`/`WITHDRAWAL`) with `bookmaker_id` from chat registration and native currency equal to associate's `home_currency`.
    - If sender is associate: create a "funding draft" tied to `(associate_id, bookmaker_id)` → appears in Streamlit for approval.
 
 2) Streamlit approvals (funding drafts panel):
@@ -51,12 +51,12 @@ Enable associates and admins to manage funding operations directly from Telegram
    - On Accept: optional confirmation message to the originating Telegram chat.
 
 3) Balance statement messaging:
-   - Streamlit button: “Send Balance to This Chat” on a bookmaker context sends: "DD/MM/YY Balance: {latest_balance_native} {CUR}, pending balance: {pending_native} {CUR}."
-   - Pending balance definition: sum of stake amounts on bets for `(associate_id, bookmaker_id)` with status in {`verified`, `matched`} (not `settled`, not `incoming`). Display in associate’s `home_currency`.
+   - Streamlit button: "Send Balance to This Chat" on a bookmaker context sends: "DD/MM/YY Balance: {latest_balance_native} {CUR}, pending balance: {pending_native} {CUR}."
+   - Pending balance definition: sum of stake amounts on bets for `(associate_id, bookmaker_id)` with status in {`verified`, `matched`} (not `settled`, not `incoming`). Display in associate's `home_currency`.
    - Balance source: latest row from `bookmaker_balance_checks` for `(associate_id, bookmaker_id)`; if none exists, show "Balance: N/A" and send only pending.
 
 4) Global daily statement:
-   - Streamlit button: “Send Daily Statements to All Chats” iterates every active registration and sends the same balance/pending message to its chat.
+   - Streamlit button: "Send Daily Statements to All Chats" iterates every active registration and sends the same balance/pending message to its chat.
    - Uses rate‑limited async sending with retry/backoff on HTTP 429 (Telegram).
 
 ### Data & Services
@@ -82,8 +82,9 @@ Enable associates and admins to manage funding operations directly from Telegram
 - Story 9.3: Per‑Chat Balance & Pending Message Button
 - Story 9.4: Global Daily Statements (All Chats)
 - Story 9.5: Telegram Rate‑Limiting & Delivery Reliability
+- Story 9.6: Telegram Confirm Before Ingest
 
-See `docs/stories/9.1.telegram-funding-commands.md` through `9.5.telegram-rate-limiting.md`.
+See `docs/stories/9.1.telegram-funding-commands.md` through `9.6.telegram-confirm-before-ingest.md`.
 
 ---
 
@@ -123,4 +124,3 @@ See `docs/stories/9.1.telegram-funding-commands.md` through `9.5.telegram-rate-l
 ---
 
 **End of Epic 9**
-

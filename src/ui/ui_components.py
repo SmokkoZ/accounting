@@ -9,13 +9,14 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional, Tuple, TypeVar
 
 import streamlit as st
 from streamlit.errors import StreamlitAPIException
 
 _STATE_KEY = "_global_styles_loaded"
 _CSS_PATH = Path("src/ui/ui_styles.css")
+T = TypeVar("T")
 
 
 def load_global_styles(force: bool = False) -> None:
@@ -95,4 +96,87 @@ def card(
         st.markdown("</div>", unsafe_allow_html=True)
 
 
-__all__ = ["load_global_styles", "metric_compact", "card"]
+@contextmanager
+def advanced_section(title: str = ":material/tune: Advanced", *, expanded: bool = False) -> Iterator[None]:
+    """
+    Consistent advanced controls expander wrapper.
+    """
+    with st.expander(title, expanded=expanded):
+        yield
+
+
+def form_gated_filters(
+    form_key: str,
+    builder: Callable[[], T],
+    *,
+    submit_label: str = "Apply Filters",
+    help_text: Optional[str] = None,
+) -> Tuple[T, bool]:
+    """
+    Render filters inside an ``st.form`` and return last-applied values.
+
+    Args:
+        form_key: Unique key for the form (used for session storage).
+        builder: Callable that renders widgets and returns a value.
+        submit_label: Label for the submit button.
+        help_text: Optional help tooltip for the submit button.
+
+    Returns:
+        Tuple of (applied_values, submitted_flag)
+    """
+    state_key = f"{form_key}__applied_filters"
+    form_id = f"{form_key}__filters_form"
+    submitted = False
+    form_api = getattr(st, "form", None)
+
+    if callable(form_api):
+        with st.form(form_id):
+            values = builder()
+            submitted = st.form_submit_button(
+                submit_label,
+                use_container_width=True,
+                help=help_text,
+            )
+    else:
+        values = builder()
+        submitted = st.button(
+            submit_label,
+            key=f"{form_id}__fallback_submit",
+            use_container_width=True,
+            help=help_text,
+        )
+
+    if submitted or state_key not in st.session_state:
+        st.session_state[state_key] = values
+
+    return st.session_state[state_key], submitted
+
+
+def show_error(message: str, *, context: Optional[str] = None) -> None:
+    """
+    Display a standardized error block with optional expandable context.
+    """
+    st.error(f":material/error: {message}")
+    if context:
+        with st.expander("Error details", expanded=False):
+            st.code(context)
+
+
+def show_success(message: str, *, action: Optional[str] = None) -> None:
+    """
+    Display a standardized success block with optional toast hint.
+    """
+    st.success(f":material/check_circle: {message}")
+    if action and hasattr(st, "toast"):
+        st.toast(action, icon=":material/celebration:")
+
+
+__all__ = [
+    "advanced_section",
+    "card",
+    "form_gated_filters",
+    "load_global_styles",
+    "metric_compact",
+    "show_error",
+    "show_success",
+]

@@ -11,6 +11,8 @@ from src.ui.utils.formatters import (
     format_timestamp_relative,
     format_eur,
     format_percentage,
+    format_utc_datetime,
+    format_utc_datetime_compact,
     format_utc_datetime_local,
     get_risk_badge_html,
     format_currency_with_symbol,
@@ -43,6 +45,20 @@ class TestConfidenceBadge:
         assert "Low" in label
         assert "30%" in label
         assert color == "error"
+
+
+class TestTimezoneFormatting:
+    """Tests for timezone-aware datetime helpers."""
+
+    def test_format_utc_datetime_converts_to_awst(self):
+        result = format_utc_datetime("2025-01-01T12:00:00Z")
+        assert result.endswith("AWST")
+        assert "2025-01-01 20:00:00" in result
+
+    def test_format_utc_datetime_compact(self):
+        result = format_utc_datetime_compact("2025-01-01T12:00:00Z")
+        assert result.endswith("AWST")
+        assert "01/01 20:00" in result
 
     def test_confidence_badge_failed(self):
         """Test failed extraction (None)."""
@@ -249,7 +265,7 @@ class TestUTCDateTimeLocal:
     def test_format_utc_datetime_local_valid(self):
         """Test UTC datetime formatting with valid input."""
         result = format_utc_datetime_local("2025-11-01T15:00:00Z")
-        assert result == "2025-11-01 15:00"
+        assert result == "2025-11-01 23:00:00 AWST"
 
     def test_format_utc_datetime_local_none(self):
         """Test UTC datetime formatting with None."""

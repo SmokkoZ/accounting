@@ -152,6 +152,7 @@ def validate_table_structures(conn: sqlite3.Connection) -> List[str]:
             "market_type": "TEXT",
             "selection": "TEXT",
             "status": "TEXT",
+            "resolve_status": "TEXT",
             "stake_eur": "TEXT",
             "stake_amount": "TEXT",
             "stake_currency": "TEXT",

@@ -15,6 +15,8 @@ from src.ui.helpers.dialogs import (
     open_dialog,
     render_canonical_event_dialog,
 )
+from src.ui.helpers.streaming import show_pdf_preview
+from src.ui.utils.state_management import safe_rerun
 
 
 def render_bet_card(
@@ -55,9 +57,9 @@ def render_bet_card(
                     competition=payload["competition"],
                     kickoff_time_utc=payload["kickoff_time_utc"],
                 )
-                st.success(f"✅ Event created: {payload['event_name']}")
+                st.success(f"âœ… Event created: {payload['event_name']}")
                 st.session_state["newly_created_event_id"] = event_id
-                st.rerun()
+                safe_rerun()
             except ValueError as error:
                 st.error(f"Validation error: {error}")
                 open_dialog(dialog_key)
@@ -96,18 +98,26 @@ def render_bet_card(
 
 
 def _render_screenshot_preview(bet: Dict[str, Any]) -> None:
-    """Render screenshot preview with click-to-enlarge."""
+    """Render screenshot or PDF slip preview."""
     screenshot_path = bet.get("screenshot_path")
 
-    if screenshot_path and Path(screenshot_path).exists():
-        # Thumbnail
-        st.image(screenshot_path, width=150, caption="Click to enlarge")
-
-        # Full-size modal (using expander)
-        with st.expander("🔍 View Full Size"):
-            st.image(screenshot_path, width="stretch")
-    else:
+    if not screenshot_path:
         st.warning("Screenshot\nnot found")
+        return
+
+    file_path = Path(screenshot_path)
+    if not file_path.exists():
+        st.warning("Screenshot\nnot found")
+        return
+
+    if file_path.suffix.lower() == ".pdf":
+        st.caption(":material/picture_as_pdf: Slip Preview")
+        show_pdf_preview(str(file_path), height=420)
+        return
+
+    st.image(str(file_path), width=150, caption="Click to enlarge")
+    with st.expander(":material/zoom_in: View Full Size"):
+        st.image(str(file_path), width="stretch")
 
 
 def _render_bet_details(
@@ -203,11 +213,11 @@ def _render_bet_details_editable(
         if selected_event == "[+] Create New Event":
             with manual_col:
                 open_clicked = st.form_submit_button(
-                    "Open Event Creator", use_container_width=True
+                    "Open Event Creator", width="stretch"
                 )
             if open_clicked:
                 st.session_state[f"show_create_event_modal_{bet_id}"] = True
-                st.rerun()
+                safe_rerun()
             return
         else:
             with manual_col:
@@ -306,11 +316,11 @@ def _render_bet_details_editable(
         col_approve, col_reject = st.columns(2)
         with col_approve:
             approve_submitted = st.form_submit_button(
-                "Approve", type="primary", use_container_width=True
+                "Approve", type="primary", width="stretch"
             )
         with col_reject:
             reject_submitted = st.form_submit_button(
-                "Reject", use_container_width=True
+                "Reject", width="stretch"
             )
 
     if matching_suggestions:
@@ -332,11 +342,11 @@ def _render_bet_details_editable(
             "currency": currency,
             "event_name_input": manual_event_name,
         }
-        st.rerun()
+        safe_rerun()
 
     if reject_submitted:
         st.session_state[f"reject_bet_{bet_id}"] = True
-        st.rerun()
+        safe_rerun()
 
 
 def _render_bet_actions(
@@ -365,10 +375,10 @@ def _render_bet_actions(
             "Approve Suggested",
             key=f"auto_approve_{bet_id}",
             type="primary",
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state[f"approve_bet_{bet_id}"] = auto_payload
-            st.rerun()
+            safe_rerun()
         st.markdown("---")
 
     if show_actions and not editable:
@@ -376,18 +386,18 @@ def _render_bet_actions(
             "Approve",
             key=f"approve_{bet_id}",
             type="primary",
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state[f"approve_bet_{bet_id}"] = True
-            st.rerun()
+            safe_rerun()
 
         if st.button(
             "Reject",
             key=f"reject_{bet_id}",
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state[f"reject_bet_{bet_id}"] = True
-            st.rerun()
+            safe_rerun()
 
 
 def _render_matching_suggestions(
@@ -445,4 +455,3 @@ def _render_market_suggestion(suggestion: MarketSuggestion) -> None:
     message = f"{header}\n\n" + " | ".join(detail_parts)
     renderer = st.success if suggestion.is_high_confidence else st.info
     renderer(message)
-

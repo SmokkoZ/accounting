@@ -17,6 +17,7 @@ from typing import Dict, List, Optional, Tuple
 
 import structlog
 
+from src.ui.utils.state_management import safe_rerun
 try:  # Streamlit is optional for import-time usage in tests
     import streamlit as st
 except ModuleNotFoundError:  # pragma: no cover - executed only in non-UI contexts
@@ -396,7 +397,7 @@ def render_balance_history_tab() -> None:
 
     if st.button("Add Balance Check", width="stretch", disabled=not associates_list):
         st.session_state.show_add_balance_check_form = True
-        st.rerun()
+        safe_rerun()
 
     if st.session_state.get("show_add_balance_check_form", False):
         render_add_balance_check_form(associates_list)
@@ -459,7 +460,7 @@ def render_add_balance_check_form(associates_list: List[Dict]) -> None:
             st.warning("No bookmakers for this associate. Add a bookmaker first.")
             if st.button("Close", key="close_add_balance_form", width="stretch"):
                 st.session_state.show_add_balance_check_form = False
-                st.rerun()
+                safe_rerun()
             return
 
         cursor.execute("SELECT home_currency FROM associates WHERE id = ?", (selected_assoc_id,))
@@ -513,7 +514,7 @@ def render_add_balance_check_form(associates_list: List[Dict]) -> None:
 
             if cancel:
                 st.session_state.show_add_balance_check_form = False
-                st.rerun()
+                safe_rerun()
 
             if submit:
                 amount_valid, amount_error = validate_balance_amount(balance_amount_input)
@@ -539,7 +540,7 @@ def render_add_balance_check_form(associates_list: List[Dict]) -> None:
                     if success:
                         st.success(message)
                         st.session_state.show_add_balance_check_form = False
-                        st.rerun()
+                        safe_rerun()
                     else:
                         st.error(message)
 
@@ -574,11 +575,11 @@ def render_balance_check_row(check: Dict) -> None:
         with col_edit:
             if st.button("Edit", key=f"edit_bc_btn_{check_id}", width="stretch"):
                 st.session_state[f"show_edit_bc_{check_id}"] = True
-                st.rerun()
+                safe_rerun()
         with col_delete:
             if st.button("Delete", key=f"delete_bc_btn_{check_id}", width="stretch"):
                 st.session_state[f"show_delete_bc_{check_id}"] = True
-                st.rerun()
+                safe_rerun()
 
     st.divider()
 
@@ -636,7 +637,7 @@ def render_edit_balance_check_modal(check: Dict) -> None:
             with col_cancel:
                 if st.form_submit_button("Cancel", width="stretch"):
                     st.session_state[modal_key] = False
-                    st.rerun()
+                    safe_rerun()
             with col_save:
                 submit = st.form_submit_button("Save", type="primary", width="stretch")
 
@@ -660,7 +661,7 @@ def render_edit_balance_check_modal(check: Dict) -> None:
                     if success:
                         st.success(message)
                         st.session_state[modal_key] = False
-                        st.rerun()
+                        safe_rerun()
                     else:
                         st.error(message)
 
@@ -691,7 +692,7 @@ def render_delete_balance_check_modal(check: Dict) -> None:
         with col_cancel:
             if st.button("Cancel", key=f"cancel_delete_bc_{check_id}", width="stretch"):
                 st.session_state[modal_key] = False
-                st.rerun()
+                safe_rerun()
         with col_delete:
             if st.button(
                 "Delete",
@@ -703,7 +704,7 @@ def render_delete_balance_check_modal(check: Dict) -> None:
                 if success:
                     st.success(message)
                     st.session_state[modal_key] = False
-                    st.rerun()
+                    safe_rerun()
                 else:
                     st.error(message)
 

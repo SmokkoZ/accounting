@@ -1,4 +1,5 @@
-"""
+from src.ui.utils.state_management import safe_rerun
+﻿"""
 Reusable dialog and action menu helpers with Streamlit feature fallbacks.
 
 These helpers ensure consistent styling for confirmation flows and compact
@@ -60,7 +61,7 @@ def close_dialog(key: str) -> None:
 def render_settlement_confirmation(
     *,
     key: str,
-    button_label: str = "✅ Confirm Settlement",
+    button_label: str = "âœ… Confirm Settlement",
     title: str = "Confirm Settlement",
     warning_text: str = "This action is PERMANENT and will post ledger entries.",
     note_label: Optional[str] = "Optional note for audit trail",
@@ -79,7 +80,7 @@ def render_settlement_confirmation(
         button_label,
         key=f"{key}__open_button",
         type="primary",
-        use_container_width=True,
+        width="stretch",
     ):
         state.open()
 
@@ -131,19 +132,19 @@ def _render_settlement_dialog_modal(
                 "Confirm Settlement",
                 key=f"{key}__confirm",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
             ):
                 state.push_payload(note_value.strip())
                 state.close()
-                st.rerun()
+                safe_rerun()
         with cancel_col:
             if st.button(
                 "Cancel",
                 key=f"{key}__cancel",
-                use_container_width=True,
+                width="stretch",
             ):
                 state.close()
-                st.rerun()
+                safe_rerun()
 
     _modal()
 
@@ -173,19 +174,19 @@ def _render_settlement_dialog_fallback(
                 "Confirm Settlement",
                 key=f"{key}__confirm",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
             ):
                 state.push_payload(note_value.strip())
                 state.close()
-                st.rerun()
+                safe_rerun()
         with cancel_col:
             if st.button(
                 "Cancel",
                 key=f"{key}__cancel",
-                use_container_width=True,
+                width="stretch",
             ):
                 state.close()
-                st.rerun()
+                safe_rerun()
 
 
 def render_confirmation_dialog(
@@ -246,20 +247,20 @@ def _render_confirmation_modal(
                 confirm_label,
                 key=f"{key}__confirm",
                 type=confirm_type,
-                use_container_width=True,
+                width="stretch",
             ):
                 state.push_payload(True)
                 state.close()
-                st.rerun()
+                safe_rerun()
         with cancel_col:
             if st.button(
                 cancel_label,
                 key=f"{key}__cancel",
-                use_container_width=True,
+                width="stretch",
             ):
                 state.push_payload(False)
                 state.close()
-                st.rerun()
+                safe_rerun()
 
     _modal()
 
@@ -283,20 +284,20 @@ def _render_confirmation_fallback(
                 confirm_label,
                 key=f"{key}__confirm",
                 type=confirm_type,
-                use_container_width=True,
+                width="stretch",
             ):
                 state.push_payload(True)
                 state.close()
-                st.rerun()
+                safe_rerun()
         with cancel_col:
             if st.button(
                 cancel_label,
                 key=f"{key}__cancel",
-                use_container_width=True,
+                width="stretch",
             ):
                 state.push_payload(False)
                 state.close()
-                st.rerun()
+                safe_rerun()
 
 
 def render_canonical_event_dialog(
@@ -399,7 +400,7 @@ def _canonical_event_form(
             "Create Event",
             key=f"{key}__submit",
             type="primary",
-            use_container_width=True,
+            width="stretch",
         ):
             errors = _validate_canonical_event_inputs(
                 event_name=event_name,
@@ -419,16 +420,16 @@ def _canonical_event_form(
             }
             state.push_payload(payload)
             state.close()
-            st.rerun()
+            safe_rerun()
 
     with cols[1]:
         if st.button(
             "Cancel",
             key=f"{key}__cancel",
-            use_container_width=True,
+            width="stretch",
         ):
             state.close()
-            st.rerun()
+            safe_rerun()
 
 
 def _validate_canonical_event_inputs(
@@ -490,7 +491,7 @@ def _render_correction_modal(
     key: str,
     defaults: Dict[str, Any],
 ) -> None:
-    title = f"Apply Correction · {defaults.get('bookmaker_name', 'Bookmaker')}"
+    title = f"Apply Correction Â· {defaults.get('bookmaker_name', 'Bookmaker')}"
 
     @st.dialog(title)
     def _modal() -> None:
@@ -506,7 +507,7 @@ def _render_correction_fallback(
     defaults: Dict[str, Any],
 ) -> None:
     st.markdown(
-        f"### Apply Correction · {defaults.get('bookmaker_name', 'Bookmaker')}",
+        f"### Apply Correction Â· {defaults.get('bookmaker_name', 'Bookmaker')}",
     )
     _correction_form(state=state, key=key, defaults=defaults)
 
@@ -524,7 +525,7 @@ def _correction_form(
     native_currency = defaults.get("native_currency", "EUR")
 
     st.warning(
-        f"This will post a correction entry for **{associate_alias} · {bookmaker_name}**."
+        f"This will post a correction entry for **{associate_alias} Â· {bookmaker_name}**."
     )
     st.caption(
         "Positive amounts increase bookmaker holdings; negative amounts decrease holdings."
@@ -559,7 +560,7 @@ def _correction_form(
             "Apply Correction",
             key=f"{key}__apply",
             type="primary",
-            use_container_width=True,
+            width="stretch",
         ):
             payload = _validate_correction_inputs(
                 amount_value=amount_value,
@@ -578,16 +579,16 @@ def _correction_form(
             }
             state.push_payload(result)
             state.close()
-            st.rerun()
+            safe_rerun()
 
     with cols[1]:
         if st.button(
             "Cancel",
             key=f"{key}__cancel",
-            use_container_width=True,
+            width="stretch",
         ):
             state.close()
-            st.rerun()
+            safe_rerun()
 
 
 def _validate_correction_inputs(
@@ -661,18 +662,18 @@ def render_action_menu(
     supports_popovers = supports_popovers if callable(supports_popovers) else (lambda: False)
 
     if supports_popovers():
-        with st.popover(label, use_container_width=True):
+        with st.popover(label, width="stretch"):
             for item, display in zip(actions, button_labels):
                 if st.button(
                     display,
                     key=f"{key}__action_{item.key}",
                     type=item.button_type,
                     disabled=item.disabled,
-                    use_container_width=True,
+                    width="stretch",
                     help=item.description,
                 ):
                     state.push_payload(item.key)
-                    st.rerun()
+                    safe_rerun()
     else:
         st.caption(label)
         for item, display in zip(actions, button_labels):
@@ -682,10 +683,10 @@ def render_action_menu(
                 type=item.button_type,
                 disabled=item.disabled,
                 help=item.description,
-                use_container_width=True,
+                width="stretch",
             ):
                 state.push_payload(item.key)
-                st.rerun()
+                safe_rerun()
 
     return None
 

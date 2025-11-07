@@ -1,4 +1,4 @@
-"""
+﻿"""
 Export Page - Ledger CSV Export
 
 Provides interface for exporting the full ledger to CSV for audit and backup purposes.
@@ -19,63 +19,102 @@ from src.ui.helpers.fragments import (
     render_debug_panel,
     render_debug_toggle,
 )
-from src.ui.ui_components import load_global_styles
+from src.ui.helpers.streaming import (
+    handle_streaming_error,
+    show_success_toast,
+    status_with_steps,
+    stream_with_fallback,
+)
+from src.ui.ui_components import advanced_section, form_gated_filters, load_global_styles
+from src.ui.utils.formatters import format_utc_datetime
+from src.ui.utils.state_management import render_reset_control, safe_rerun
 
 PAGE_TITLE = "Export"
 PAGE_ICON = ":material/ios_share:"
 
-def render_export_button() -> None:
+def render_export_button(*, validate_after_export: bool = True) -> None:
     """Render the main export button and handle export logic."""
     st.subheader("Export Full Ledger")
-    
+
     st.info(
         "Export the complete ledger with all entries, including joins to associate "
         "names and bookmaker names. The export will be saved to `data/exports/` "
         "and a download link will be provided."
     )
-    
-    if st.button("📥 Export Full Ledger", type="primary", use_container_width=True):
-        with st.spinner("Exporting ledger... This may take a moment for large datasets."):
-            try:
-                export_service = LedgerExportService()
-                file_path, row_count = export_service.export_full_ledger()
-                
-                # Success message with download link
-                st.success(f"✅ Ledger exported successfully! **{row_count:,} rows**")
-                
-                # Provide download link
-                st.markdown("### Download Link")
-                st.markdown(
-                    f"📁 [{Path(file_path).name}](file://{Path(file_path).absolute()})"
+
+    if st.button(":material/ios_share: Export Full Ledger", type="primary", width="stretch"):
+        export_service = LedgerExportService()
+        progress: Dict[str, str | int] = {}
+
+        def _run_export_job() -> None:
+            def _export_generator():
+                yield ":material/storage: Querying ledger data..."
+                result = export_service.export_full_ledger()
+                progress["file_path"], progress["row_count"] = result
+                yield f":material/check: Ledger exported with {progress['row_count']:,} rows"
+
+            stream_with_fallback(_export_generator, header=":material/article: Export progress log")
+
+        try:
+            list(
+                status_with_steps(
+                    "Ledger export",
+                    [
+                        ":material/playlist_add_check: Validating export parameters",
+                        (":material/autorenew: Running export job", _run_export_job),
+                        ":material/link: Preparing download link",
+                    ],
                 )
-                
-                # Show file info
-                file_stat = Path(file_path).stat()
-                file_size = export_service.get_file_size_display(file_stat.st_size)
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("File Size", file_size)
-                with col2:
-                    st.metric("Rows Exported", f"{row_count:,}")
-                with col3:
-                    st.metric("Status", "Complete")
-                
-                # Refresh export history
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"❌ Export failed: {str(e)}")
-                st.error("Please check the logs for more details.")
+            )
+        except Exception as exc:
+            handle_streaming_error(exc, "ledger export")
+            return
+
+        file_path = progress.get("file_path")
+        row_count = progress.get("row_count")
+        if not file_path or not row_count:
+            st.error("Export completed without returning file metadata.")
+            return
+
+        show_success_toast(f"Ledger exported successfully ({int(row_count):,} rows)")
+
+        st.markdown("### Download Link")
+        st.markdown(f":material/download: [{Path(file_path).name}](file://{Path(file_path).absolute()})")
+
+        file_stat = Path(file_path).stat()
+        file_size = export_service.get_file_size_display(file_stat.st_size)
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("File Size", file_size)
+        with col2:
+            st.metric("Rows Exported", f"{int(row_count):,}")
+        with col3:
+            st.metric("Status", "Complete")
+
+        if validate_after_export:
+            try:
+                with open(file_path, "r", encoding="utf-8") as handle:
+                    actual_rows = max(sum(1 for _ in handle) - 1, 0)
+                if actual_rows != int(row_count):
+                    st.warning(
+                        f"Validation detected a mismatch ({actual_rows:,} rows vs expected {int(row_count):,})."
+                    )
+                else:
+                    st.caption(":material/task_alt: Validation passed for exported file.")
+            except OSError as exc:
+                st.warning(f"Unable to validate export file: {exc}")
+
+        safe_rerun()
 
 
-def render_export_history() -> None:
+def render_export_history(limit: int) -> None:
     """Render the export history table with re-download functionality."""
     st.subheader("Export History")
     
     try:
         export_service = LedgerExportService()
-        history = export_service.get_export_history(limit=10)
+        history = export_service.get_export_history(limit=limit)
         
         if not history:
             st.info("No export history found. Export files will appear here.")
@@ -93,14 +132,14 @@ def render_export_history() -> None:
                     st.metric("Size", export_service.get_file_size_display(export['file_size']))
                 
                 with col3:
-                    st.metric("Created", export['created_time'])
+                    st.metric("Created", format_utc_datetime(export['created_time']))
                 
                 with col4:
                     # Download button
-                    if st.button(f"📥 Download", key=f"download_{i}"):
+                    if st.button(f"ðŸ“¥ Download", key=f"download_{i}"):
                         file_path = Path(export['file_path'])
                         if file_path.exists():
-                            st.markdown(f"📁 [{export['filename']}](file://{file_path.absolute()})")
+                            st.markdown(f"ðŸ“ [{export['filename']}](file://{file_path.absolute()})")
                         else:
                             st.error("File not found")
                 
@@ -113,7 +152,7 @@ def render_export_history() -> None:
 
 def render_export_instructions() -> None:
     """Render instructions and information about the export functionality."""
-    with st.expander("📖 Export Information", expanded=False):
+    with st.expander("ðŸ“– Export Information", expanded=False):
         st.markdown("""
         ### About Ledger Export
         
@@ -158,24 +197,73 @@ def main() -> None:
         layout="wide"
     )
     load_global_styles()
-    st.title(f"{PAGE_ICON} {PAGE_TITLE}")
-    st.caption("CSV export workflow for ledger data and audit trails.")
+st.title(f"{PAGE_ICON} {PAGE_TITLE}")
+st.caption("CSV export workflow for ledger data and audit trails.")
 
-    toggle_cols = st.columns([6, 2])
-    with toggle_cols[1]:
-        render_debug_toggle(":material/monitor_heart: Performance debug")
+toggle_cols = st.columns([6, 2])
+with toggle_cols[1]:
+    render_debug_toggle(":material/monitor_heart: Performance debug")
+
+action_cols = st.columns([6, 2])
+with action_cols[1]:
+    render_reset_control(
+        key="export_reset",
+        description="Clear export options and dialog state.",
+        prefixes=("export_", "filters_", "advanced_", "dialog_"),
+    )
+
+
+def _render_export_options() -> Dict[str, object]:
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        validate_after_export = st.checkbox(
+            "Validate file after export",
+            value=True,
+            key="export_validate_file",
+            help="Read the generated CSV and verify the row count before completing.",
+        )
+    with col2:
+        history_limit = st.number_input(
+            "History entries",
+            min_value=5,
+            max_value=50,
+            step=5,
+            value=10,
+            key="export_history_limit",
+        )
+    return {
+        "validate_after_export": validate_after_export,
+        "history_limit": int(history_limit),
+    }
+
+
+with advanced_section():
+    export_options, _ = form_gated_filters(
+        "export_filters",
+        _render_export_options,
+        submit_label="Apply Options",
+        help_text="Update export validation and history preferences.",
+    )
     
     # Render main sections
-    call_fragment("export.action", render_export_button)
+    call_fragment(
+        "export.action",
+        render_export_button,
+        validate_after_export=export_options["validate_after_export"],
+    )
     st.divider()
-    call_fragment("export.history", render_export_history)
+    call_fragment(
+        "export.history",
+        render_export_history,
+        limit=export_options["history_limit"],
+    )
     st.divider()
     render_export_instructions()
     
     # Footer info
     st.markdown("---")
     st.caption(
-        "💡 **Tip:** For very large ledgers (10,000+ rows), the export may take "
+        "ðŸ’¡ **Tip:** For very large ledgers (10,000+ rows), the export may take "
         "several seconds. The progress spinner will indicate when the export is complete."
     )
 
@@ -184,3 +272,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

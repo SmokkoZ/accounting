@@ -14,6 +14,7 @@ import streamlit as st
 
 from src.repositories.associate_hub_repository import AssociateHubRepository
 
+from src.ui.utils.state_management import safe_rerun
 ADMIN_LABELS: Dict[bool, str] = {True: "Admin", False: "Non-Admin"}
 STATUS_LABELS: Dict[bool, str] = {True: "Active", False: "Inactive"}
 
@@ -195,7 +196,7 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                         page=0,
                     )
                     should_refresh = True
-                    st.rerun()
+                    safe_rerun()
 
             with col7b:
                 page_size = st.selectbox(
@@ -242,12 +243,12 @@ def render_pagination_info(total_count: int, current_state: Dict[str, Any]) -> N
         with col4a:
             if st.button("Previous", key="hub_prev_page", disabled=current_page == 0):
                 update_filter_state(page=current_page - 1)
-                st.rerun()
+                safe_rerun()
 
         with col4b:
             if st.button("Next", key="hub_next_page", disabled=current_page >= total_pages - 1):
                 update_filter_state(page=current_page + 1)
-                st.rerun()
+                safe_rerun()
 
 
 def get_active_filters_count(current_state: Dict[str, Any]) -> int:

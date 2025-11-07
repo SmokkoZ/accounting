@@ -1,4 +1,4 @@
-# Epic 4: Coverage Proof & Settlement - Implementation Guide
+﻿# Epic 4: Coverage Proof & Settlement - Implementation Guide
 
 **Epic Reference:** [Epic 4: Coverage Proof & Settlement](./epic-4-coverage-settlement.md)
 **Status:** Ready for Implementation
@@ -231,7 +231,7 @@ class CoverageProofService:
         market = surebet.market_code or "Unknown Market"
 
         caption_lines = [
-            f"📋 Coverage Proof - Surebet #{surebet.surebet_id}",
+            f"ðŸ“‹ Coverage Proof - Surebet #{surebet.surebet_id}",
             f"",
             f"Event: {event_name}",
             f"Market: {market}",
@@ -245,7 +245,7 @@ class CoverageProofService:
             f"  Stake: {side_b.stake} {side_b.native_currency} @ {side_b.odds}",
             f"",
             f"Risk: {surebet.risk_classification} (ROI: {surebet.roi:.2%})",
-            f"Worst-case profit: €{surebet.worst_case_profit_eur}",
+            f"Worst-case profit: â‚¬{surebet.worst_case_profit_eur}",
         ]
 
         return "\n".join(caption_lines)
@@ -486,11 +486,11 @@ from src.domain.settlement_service import SettlementService
 
 st.set_page_config(
     page_title="Settlement - Surebet Accounting",
-    page_icon="💰",
+    page_icon="ðŸ’°",
     layout="wide"
 )
 
-st.title("💰 Settlement")
+st.title("ðŸ’° Settlement")
 st.caption("Grade matched surebets and generate ledger entries")
 
 # Initialize repositories and services
@@ -528,7 +528,7 @@ with col_form:
             bet_repo=bet_repo
         )
     else:
-        st.info("👈 Select a surebet from the queue to begin settlement")
+        st.info("ðŸ‘ˆ Select a surebet from the queue to begin settlement")
 ```
 
 ---
@@ -579,10 +579,10 @@ def render_settlement_queue(surebet_repo: SurebetRepository) -> Optional[int]:
 
         # Risk badge
         risk_badge = {
-            "SAFE": "✅",
-            "LOW_ROI": "🟡",
-            "UNSAFE": "❌"
-        }.get(sb.risk_classification, "❓")
+            "SAFE": "âœ…",
+            "LOW_ROI": "ðŸŸ¡",
+            "UNSAFE": "âŒ"
+        }.get(sb.risk_classification, "â“")
 
         # Render selectable card
         with st.container():
@@ -729,7 +729,7 @@ def render_settlement_form(
         # Confirm button
         st.divider()
 
-        if st.button("✅ Confirm Settlement", type="primary", use_container_width=True):
+        if st.button("âœ… Confirm Settlement", type="primary", width="stretch"):
             # Execute settlement
             settlement_service.execute_settlement(
                 surebet_id=surebet_id,
@@ -739,7 +739,7 @@ def render_settlement_form(
                 }
             )
 
-            st.success(f"✅ Surebet #{surebet_id} settled successfully!")
+            st.success(f"âœ… Surebet #{surebet_id} settled successfully!")
             st.balloons()
 
             # Clear selection
@@ -757,10 +757,10 @@ def _render_settlement_preview(preview: Dict):
     st.markdown("**Per-Bet Net Gains:**")
     for bet_id, net_gain_eur in preview['per_bet_net_gains'].items():
         outcome = preview['per_bet_outcomes'][bet_id]
-        st.markdown(f"- Bet #{bet_id} ({outcome.value}): €{net_gain_eur}")
+        st.markdown(f"- Bet #{bet_id} ({outcome.value}): â‚¬{net_gain_eur}")
 
     # Surebet profit
-    st.markdown(f"**Surebet Profit:** €{preview['surebet_profit_eur']}")
+    st.markdown(f"**Surebet Profit:** â‚¬{preview['surebet_profit_eur']}")
 
     # Participants
     st.markdown(f"**Participants (N={preview['num_participants']}):**")
@@ -768,7 +768,7 @@ def _render_settlement_preview(preview: Dict):
         st.markdown(f"- {participant['associate_alias']} ({participant['seat_type']} seat)")
 
     # Per-surebet shares
-    st.markdown(f"**Per-Surebet Share:** €{preview['per_surebet_share_eur']}")
+    st.markdown(f"**Per-Surebet Share:** â‚¬{preview['per_surebet_share_eur']}")
 
     # Ledger entries preview
     st.markdown("### Ledger Entries to Create:")
@@ -776,9 +776,9 @@ def _render_settlement_preview(preview: Dict):
     for entry in preview['ledger_entries']:
         st.markdown(f"""
         - **{entry['associate_alias']}** @ {entry['bookmaker_name']}
-          Principal: €{entry['principal_returned_eur']}
-          Share: €{entry['per_surebet_share_eur']}
-          Total: €{entry['amount_eur']} (FX: {entry['fx_rate_snapshot']})
+          Principal: â‚¬{entry['principal_returned_eur']}
+          Share: â‚¬{entry['per_surebet_share_eur']}
+          Total: â‚¬{entry['amount_eur']} (FX: {entry['fx_rate_snapshot']})
         """)
 ```
 
@@ -1534,15 +1534,15 @@ def test_full_settlement_flow(test_db):
 4. Check multibook Telegram chat
 
 ### Expected Results:
-- ✅ Message received in multibook chat
-- ✅ Both screenshots attached (Side A and Side B)
-- ✅ Caption shows:
+- âœ… Message received in multibook chat
+- âœ… Both screenshots attached (Side A and Side B)
+- âœ… Caption shows:
   - Surebet ID
   - Event name
   - Market code
   - Stake amounts and odds
   - Risk classification
-- ✅ Entry logged in `multibook_message_log` table
+- âœ… Entry logged in `multibook_message_log` table
 
 ### SQL Verification:
 ```sql
@@ -1564,16 +1564,16 @@ WHERE surebet_id = <SUREBET_ID>;
 5. Review settlement preview
 
 ### Expected Results:
-- ✅ Per-bet net gains calculated correctly:
-  - Side A: (stake × odds) - stake
+- âœ… Per-bet net gains calculated correctly:
+  - Side A: (stake Ã— odds) - stake
   - Side B: -stake
-- ✅ Surebet profit = sum of net gains
-- ✅ Participants = 2 (both staked)
-- ✅ Per-surebet share = profit / 2
-- ✅ Ledger entries preview shows:
+- âœ… Surebet profit = sum of net gains
+- âœ… Participants = 2 (both staked)
+- âœ… Per-surebet share = profit / 2
+- âœ… Ledger entries preview shows:
   - Side A: principal + share
   - Side B: 0 + share
-- ✅ FX snapshots displayed
+- âœ… FX snapshots displayed
 
 ### Manual Calculation:
 Use calculator to verify math independently.
@@ -1592,14 +1592,14 @@ Use calculator to verify math independently.
 5. Review settlement preview
 
 ### Expected Results:
-- ✅ Side A net gain = 0.00 (VOID)
-- ✅ Side B net gain = -stake (LOST)
-- ✅ Surebet profit = Side B net gain
-- ✅ Participants = 2:
+- âœ… Side A net gain = 0.00 (VOID)
+- âœ… Side B net gain = -stake (LOST)
+- âœ… Surebet profit = Side B net gain
+- âœ… Participants = 2:
   - Side A: non-staked seat
   - Side B: staked seat
-- ✅ Per-surebet share = profit / 2
-- ✅ Ledger entries:
+- âœ… Per-surebet share = profit / 2
+- âœ… Ledger entries:
   - Side A: 0 (VOID gets no principal or share for non-staked)
   - Side B: 0 + share
 
@@ -1611,18 +1611,18 @@ Use calculator to verify math independently.
 
 ### Steps:
 1. Complete Scenario 2 or 3
-2. Click "✅ Confirm Settlement"
+2. Click "âœ… Confirm Settlement"
 3. Verify success message
 4. Check database
 
 ### Expected Results:
-- ✅ Success message displayed
-- ✅ Surebet removed from settlement queue
-- ✅ Surebet status = "settled"
-- ✅ Bet statuses = "settled"
-- ✅ Bet outcomes recorded (WON/LOST/VOID)
-- ✅ 2 ledger entries created (entry_type = "BET_RESULT")
-- ✅ Ledger entries have:
+- âœ… Success message displayed
+- âœ… Surebet removed from settlement queue
+- âœ… Surebet status = "settled"
+- âœ… Bet statuses = "settled"
+- âœ… Bet outcomes recorded (WON/LOST/VOID)
+- âœ… 2 ledger entries created (entry_type = "BET_RESULT")
+- âœ… Ledger entries have:
   - Unique entry_id
   - Same settlement_batch_id (UUID)
   - Frozen FX snapshots
@@ -1664,11 +1664,11 @@ WHERE entry_id = <ENTRY_ID>;
 4. Review preview
 
 ### Expected Results:
-- ✅ All amounts displayed in EUR
-- ✅ FX snapshots shown for each bet
-- ✅ Net gains calculated using snapshot rates
-- ✅ Per-surebet share in EUR
-- ✅ After settlement:
+- âœ… All amounts displayed in EUR
+- âœ… FX snapshots shown for each bet
+- âœ… Net gains calculated using snapshot rates
+- âœ… Per-surebet share in EUR
+- âœ… After settlement:
   - Ledger entries have frozen FX snapshots
   - amount_eur matches preview
   - native_currency recorded
@@ -1705,11 +1705,11 @@ Per-surebet share: -11.00 / 2 = -5.50 EUR
 4. Review preview
 
 ### Expected Results:
-- ✅ Both net gains = 0.00
-- ✅ Surebet profit = 0.00
-- ✅ Participants = 2 (both non-staked)
-- ✅ Per-surebet share = 0.00
-- ✅ Ledger entries:
+- âœ… Both net gains = 0.00
+- âœ… Surebet profit = 0.00
+- âœ… Participants = 2 (both non-staked)
+- âœ… Per-surebet share = 0.00
+- âœ… Ledger entries:
   - Both bets: 0 principal, 0 share
   - amount_eur = 0.00
 
@@ -1722,7 +1722,7 @@ After completing all scenarios:
 1. **Ledger Integrity Check:**
 ```sql
 SELECT COUNT(*) FROM ledger_entries;
--- Should match number of settled bets × 2
+-- Should match number of settled bets Ã— 2
 ```
 
 2. **Settlement Batch IDs Unique:**

@@ -137,7 +137,13 @@ class TestAssociateManagementFlow(unittest.TestCase):
 
         # Act: Update associate
         success, message = update_associate(
-            associate_id, "EditTest Updated", "GBP", True, "987654321", conn=self.conn
+            associate_id,
+            "EditTest Updated",
+            "GBP",
+            True,
+            "987654321",
+            True,
+            conn=self.conn,
         )
 
         # Assert: Update succeeded
@@ -237,7 +243,13 @@ class TestAssociateManagementFlow(unittest.TestCase):
 
         # UPDATE
         success, _ = update_associate(
-            associate_id, "LifecycleTest Modified", "CAD", True, "444555666", conn=self.conn
+            associate_id,
+            "LifecycleTest Modified",
+            "CAD",
+            True,
+            "444555666",
+            True,
+            conn=self.conn,
         )
         self.assertTrue(success)
 

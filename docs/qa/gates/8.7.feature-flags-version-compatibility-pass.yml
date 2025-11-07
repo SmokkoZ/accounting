@@ -1,0 +1,54 @@
+# <!-- Powered by BMAD™ Core -->
+template:
+  id: qa-gate-template-v1
+  name: Quality Gate Decision
+  version: 1.0
+  output:
+    format: yaml
+    filename: qa.qaLocation/gates/{{epic_num}}.{{story_num}}-{{story_slug}}.yml
+    title: "Quality Gate: {{epic_num}}.{{story_num}}"
+
+# Required fields (keep these first)
+schema: 1
+story: "8.7"
+story_title: "Feature Flags & Version Compatibility"
+gate: "PASS"
+status_reason: "Exemplary implementation of comprehensive feature flags with robust fallbacks and excellent testing coverage."
+reviewer: "Quinn (Test Architect)"
+updated: "2025-11-07T21:20:00Z"
+
+# Always present but only active when WAIVED
+waiver: { active: false }
+
+# Issues (if any) - Use fixed severity: low | medium | high
+top_issues: []
+
+# Risk summary (from risk-profile task if run)
+risk_summary:
+  totals: { critical: 0, high: 0, medium: 0, low: 0 }
+  recommendations:
+    must_fix: []
+    monitor: []
+
+# ============ Optional Extended Fields ============
+quality_score: 100
+expires: "2025-11-21T00:00:00Z"
+
+evidence:
+  tests_reviewed: 15
+  risks_identified: 0
+  trace:
+    ac_covered: [1, 2, 3, 4, 5, 6]
+    ac_gaps: []
+
+nfr_validation:
+  security: { status: PASS, notes: "Feature detection approach is safe with no attack surfaces" }
+  performance: { status: PASS, notes: "LRU caching and efficient detection with minimal overhead" }
+  reliability: { status: PASS, notes: "Robust fallback mechanisms ensure graceful degradation" }
+  maintainability: { status: PASS, notes: "Clean separation of concerns and excellent documentation" }
+
+recommendations:
+  immediate: []
+  future:
+    - action: "Consider adding automated compatibility testing in CI pipeline"
+      refs: ["src/ui/utils/feature_flags.py"]

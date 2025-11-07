@@ -82,6 +82,7 @@ class BetIngestionService:
                 period_scope_text=extraction_result.get("period_scope"),
                 side_text=extraction_result.get("side"),
                 line_value=extraction_result.get("line_value"),
+                event_name=extraction_result.get("canonical_event"),
             )
 
             # Merge normalized fields back into extraction_result

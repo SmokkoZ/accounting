@@ -25,6 +25,7 @@ from src.services.coverage_proof_service import CoverageProofService
 from src.services.ledger_entry_service import (
     LedgerEntryService,
     SettlementCommitError,
+    SettlementConfirmation,
 )
 from src.services.settlement_service import SettlementService, BetOutcome
 from src.ui.helpers.dialogs import (
@@ -39,8 +40,14 @@ from src.ui.helpers.fragments import (
     render_debug_panel,
     render_debug_toggle,
 )
-from src.ui.ui_components import load_global_styles
+from src.ui.helpers.streaming import (
+    handle_streaming_error,
+    show_success_toast,
+    status_with_steps,
+)
+from src.ui.ui_components import advanced_section, form_gated_filters, load_global_styles
 from src.ui.utils.navigation_links import render_navigation_link
+from src.ui.utils.state_management import render_reset_control, safe_rerun
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -58,6 +65,14 @@ st.title(f"{PAGE_ICON} {PAGE_TITLE}")
 toggle_cols = st.columns([6, 2])
 with toggle_cols[1]:
     render_debug_toggle(":material/monitor_heart: Performance debug")
+
+action_cols = st.columns([6, 2])
+with action_cols[1]:
+    render_reset_control(
+        key="surebets_page_reset",
+        description="Clear Surebets filters, tab selections, and dialogs.",
+        prefixes=("verified_bets_", "filters_", "advanced_", "dialog_", "settlement_"),
+    )
 
 if "settlement_success_message" in st.session_state:
     st.success(st.session_state.pop("settlement_success_message"))
@@ -723,14 +738,14 @@ def render_surebet_card(surebet: Dict) -> None:
 
         if triggered_action == "send_coverage":
             st.session_state[f"send_coverage_{surebet_id}"] = True
-            st.rerun()
+            safe_rerun()
         elif triggered_action == "resend_coverage":
             open_dialog(f"confirm_resend_{surebet_id}")
             st.session_state[f"pending_resend_id_{surebet_id}"] = True
-            st.rerun()
+            safe_rerun()
         elif triggered_action == "settle":
             st.session_state["pending_settle_tab_click"] = True
-            st.rerun()
+            safe_rerun()
 
         if st.session_state.get(f"pending_resend_id_{surebet_id}", False):
             decision = render_confirmation_dialog(
@@ -745,7 +760,7 @@ def render_surebet_card(surebet: Dict) -> None:
                 if decision:
                     st.session_state[f"resend_coverage_{surebet_id}"] = True
                 st.session_state.pop(f"confirm_resend_{surebet_id}", None)
-                st.rerun()
+                safe_rerun()
 
 
 
@@ -872,45 +887,64 @@ def render_settlement_preview(
             warning_text="This action is PERMANENT and will write ledger entries.",
         )
         if confirmation_note is not None:
-            ledger_service = LedgerEntryService()
-            confirmation = None
-            try:
-                with st.spinner("Writing ledger entries..."):
-                    confirmation = ledger_service.confirm_settlement(
+            confirmation_holder: Dict[str, SettlementConfirmation] = {}
+
+            def _commit_settlement() -> None:
+                service = LedgerEntryService()
+                try:
+                    confirmation_holder["value"] = service.confirm_settlement(
                         preview.surebet_id,
                         preview,
                         created_by="streamlit_ui",
                     )
+                finally:
+                    service.close()
+
+            try:
+                list(
+                    status_with_steps(
+                        f"Settlement for Surebet {surebet_id}",
+                        [
+                            ":material/rule: Validating preview inputs",
+                            (":material/receipt_long: Writing ledger entries", _commit_settlement),
+                            ":material/task_alt: Finalising settlement state",
+                        ],
+                    )
+                )
             except SettlementCommitError as error:
-                st.error(f"Settlement failed: {error}")
+                handle_streaming_error(error, f"settlement_{surebet_id}")
+                return
             except ValueError as error:
                 st.error(str(error))
-            finally:
-                ledger_service.close()
+                return
 
-            if confirmation:
-                logger.info(
-                    "settlement_confirmed_via_dialog",
-                    surebet_id=surebet_id,
-                    settlement_batch_id=confirmation.settlement_batch_id,
-                    confirmation_note=confirmation_note or None,
-                )
-                st.success(
-                    f"Settlement committed. Batch ID: `{confirmation.settlement_batch_id}`"
-                )
-                render_navigation_link(
-                    "pages/6_reconciliation.py",
-                    label="Go To Reconciliation",
-                    icon=":material/account_balance:",
-                    help_text="Open 'Reconciliation' from navigation to confirm settlement impact.",
-                )
-                st.session_state.pop(f"settlement_preview_{surebet_id}", None)
-                st.session_state.pop(f"settlement_preview_outcomes_{surebet_id}", None)
-                st.session_state.pop(f"settlement_preview_base_{surebet_id}", None)
-                st.session_state["settlement_success_message"] = (
-                    f"Settlement complete for surebet {surebet_id} - Batch {confirmation.settlement_batch_id}"
-                )
-                st.rerun()
+            confirmation = confirmation_holder.get("value")
+            if not confirmation:
+                st.error("Settlement did not return a confirmation payload.")
+                return
+
+            logger.info(
+                "settlement_confirmed_via_dialog",
+                surebet_id=surebet_id,
+                settlement_batch_id=confirmation.settlement_batch_id,
+                confirmation_note=confirmation_note or None,
+            )
+            show_success_toast(
+                f"Settlement committed. Batch ID: {confirmation.settlement_batch_id}"
+            )
+            render_navigation_link(
+                "pages/6_reconciliation.py",
+                label="Go To Reconciliation",
+                icon=":material/account_balance:",
+                help_text="Open 'Reconciliation' from navigation to confirm settlement impact.",
+            )
+            st.session_state.pop(f"settlement_preview_{surebet_id}", None)
+            st.session_state.pop(f"settlement_preview_outcomes_{surebet_id}", None)
+            st.session_state.pop(f"settlement_preview_base_{surebet_id}", None)
+            st.session_state["settlement_success_message"] = (
+                f"Settlement complete for surebet {surebet_id} - Batch {confirmation.settlement_batch_id}"
+            )
+            safe_rerun()
 
     with confirm_cols[1]:
         if st.button(
@@ -921,7 +955,7 @@ def render_settlement_preview(
             st.session_state.pop(f"settlement_preview_{surebet_id}", None)
             st.session_state.pop(f"settlement_preview_outcomes_{surebet_id}", None)
             st.session_state.pop(f"settlement_preview_base_{surebet_id}", None)
-            st.rerun()
+            safe_rerun()
 
 
 def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
@@ -1010,10 +1044,10 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                     )
                     st.session_state[outcome_key] = default_value
             st.session_state[previous_base_outcome_key] = base_outcome
-            st.rerun()
+            safe_rerun()
         elif base_outcome and previous_base_outcome is None:
             st.session_state[previous_base_outcome_key] = base_outcome
-            st.rerun()
+            safe_rerun()
 
         bet_col_a, bet_col_b = st.columns(2)
 
@@ -1229,7 +1263,7 @@ for key in list(st.session_state.keys()):
 
         # Clear session state
         del st.session_state[key]
-        st.rerun()
+        safe_rerun()
 
 
 # Main page layout controls
@@ -1257,25 +1291,48 @@ if selected_tab == "📊 Overview":
     counter_cols[1].metric("Unsafe (⚠️)", total_unsafe, delta=None if total_unsafe == 0 else "⚠️ Attention")
     st.markdown("---")
     st.markdown("### Filters & Sorting")
-    control_cols = st.columns([2, 2, 2, 2])
-    with control_cols[0]:
-        sort_by = st.selectbox(
-            "Sort by",
-            ["kickoff", "roi", "staked"],
-            format_func=lambda x: {
-                "kickoff": "Kickoff Time (soonest first)",
-                "roi": "ROI (lowest first - risky at top)",
-                "staked": "Total Staked (largest first)",
-            }[x],
+
+    def _render_filters_form() -> dict[str, object]:
+        control_cols = st.columns([2, 2, 2])
+        with control_cols[0]:
+            sort_by_value = st.selectbox(
+                "Sort by",
+                ["kickoff", "roi", "staked"],
+                format_func=lambda x: {
+                    "kickoff": "Kickoff Time (soonest first)",
+                    "roi": "ROI (lowest first - risky at top)",
+                    "staked": "Total Staked (largest first)",
+                }[x],
+                key="surebets_sort_by",
+            )
+        with control_cols[1]:
+            unsafe_only_value = st.checkbox(
+                "Show only unsafe (⚠️)", key="surebets_show_unsafe"
+            )
+        with control_cols[2]:
+            associates = ["All"] + load_associates()
+            associate_value = st.selectbox(
+                "Filter by associate", associates, key="surebets_filter_associate"
+            )
+        return {
+            "sort_by": sort_by_value,
+            "show_unsafe_only": unsafe_only_value,
+            "filter_associate": associate_value,
+        }
+
+    with advanced_section():
+        filter_state, _ = form_gated_filters(
+            "surebets_filters",
+            _render_filters_form,
+            submit_label="Apply Filters",
+            help_text="Update overview data with the selected filters.",
         )
-    with control_cols[1]:
-        show_unsafe_only = st.checkbox("Show only unsafe (⚠️)")
-    with control_cols[2]:
-        associates = ["All"] + load_associates()
-        filter_associate = st.selectbox("Filter by associate", associates)
-    with control_cols[3]:
+        sort_by = filter_state["sort_by"]
+        show_unsafe_only = filter_state["show_unsafe_only"]
+        filter_associate = filter_state["filter_associate"]
+
         st.caption("FX Rates")
-        if st.button("Update FX Rates Now", width="stretch"):
+        if st.button("Update FX Rates Now", use_container_width=True):
             try:
                 with st.spinner("Updating FX rates from API..."):
                     success = asyncio.run(fetch_daily_fx_rates())

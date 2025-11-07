@@ -7,7 +7,7 @@ with associate/bookmaker selection, file validation, and OCR processing.
 
 import hashlib
 import sqlite3
-from typing import Optional, Any
+from typing import Any, Dict, Iterable, Optional
 
 import streamlit as st
 import structlog
@@ -15,6 +15,13 @@ import structlog
 from src.core.database import get_db_connection
 from src.core.config import Config
 from src.services.bet_ingestion import BetIngestionService
+from src.ui.helpers.streaming import (
+from src.ui.utils.state_management import safe_rerun
+    handle_streaming_error,
+    show_error_toast,
+    show_success_toast,
+    stream_with_fallback,
+)
 from src.utils.file_storage import save_screenshot, validate_file_size, validate_file_type
 from src.utils.datetime_helpers import utc_now_iso
 
@@ -150,7 +157,7 @@ def render_manual_upload_panel() -> None:
                 # Rotate the widget key for next run to clear the uploader
                 st.session_state.pop(uploader_key, None)
                 st.session_state[NONCE_KEY] += 1
-                st.rerun()
+                safe_rerun()
             elif successful_uploads:
                 st.warning(
                     f"Processed {successful_uploads} out of {len(files_to_process)} screenshot(s). "
@@ -159,7 +166,7 @@ def render_manual_upload_panel() -> None:
                 # Rotate the widget key for next run to clear the uploader
                 st.session_state.pop(uploader_key, None)
                 st.session_state[NONCE_KEY] += 1
-                st.rerun()
+                safe_rerun()
 
 
 def _process_manual_upload(
@@ -216,136 +223,139 @@ def _process_manual_upload(
         )
         return True  # treat as a handled item, not a failure
 
-    # Process upload
-    try:
-        with st.spinner("Saving screenshot..."):
-            # Save screenshot to disk
-            abs_path, rel_path = save_screenshot(
-                file_bytes, associate_name, bookmaker_name, source="manual_upload"
-            )
+    context: Dict[str, Any] = {}
 
-            logger.info(
-                "screenshot_saved",
-                path=rel_path,
-                associate_id=associate_id,
-                bookmaker_id=bookmaker_id,
-            )
+    def _ocr_progress() -> Iterable[str]:
+        abs_path, rel_path = save_screenshot(
+            file_bytes, associate_name, bookmaker_name, source="manual_upload"
+        )
+        context["screenshot_path"] = rel_path
+        logger.info(
+            "screenshot_saved",
+            path=rel_path,
+            associate_id=associate_id,
+            bookmaker_id=bookmaker_id,
+        )
+        yield f":material/save_alt: Screenshot saved to `{rel_path}`"
 
-        with st.spinner("Creating bet record..."):
-            # Create bet record in database
-            # Determine associate's home currency to set on bet
-            assoc_cur_row = db.execute(
-                "SELECT home_currency FROM associates WHERE id = ?",
-                (associate_id,),
-            ).fetchone()
-            assoc_currency = assoc_cur_row[0] if assoc_cur_row and assoc_cur_row[0] else "EUR"
+        assoc_cur_row = db.execute(
+            "SELECT home_currency FROM associates WHERE id = ?",
+            (associate_id,),
+        ).fetchone()
+        assoc_currency = assoc_cur_row[0] if assoc_cur_row and assoc_cur_row[0] else "EUR"
 
-            cursor = db.execute(
+        cursor = db.execute(
+            """
+            INSERT INTO bets (
+                associate_id,
+                bookmaker_id,
+                status,
+                stake_eur,
+                odds,
+                currency,
+                screenshot_path,
+                ingestion_source,
+                created_at_utc,
+                updated_at_utc,
+                screenshot_sha256
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                associate_id,
+                bookmaker_id,
+                "incoming",
+                "0.0",
+                "0.0",
+                assoc_currency,
+                rel_path,
+                "manual_upload",
+                utc_now_iso(),
+                utc_now_iso(),
+                file_sha,
+            ),
+        )
+        db.commit()
+        bet_id = cursor.lastrowid
+        if bet_id is None:
+            raise RuntimeError("Failed to create bet record.")
+
+        context["bet_id"] = bet_id
+        yield f":material/assignment_add: Bet #{bet_id} created"
+
+        if note and note.strip():
+            db.execute(
                 """
-                INSERT INTO bets (
-                    associate_id,
-                    bookmaker_id,
-                    status,
-                    stake_eur,
-                    odds,
-                    currency,
-                    screenshot_path,
-                    ingestion_source,
-                    created_at_utc,
-                    updated_at_utc,
-                    screenshot_sha256
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO verification_audit (
+                    bet_id,
+                    actor,
+                    action,
+                    notes,
+                    created_at_utc
+                ) VALUES (?, ?, ?, ?, ?)
                 """,
-                (
-                    associate_id,
-                    bookmaker_id,
-                    "incoming",
-                    "0.0",  # Will be updated by OCR
-                    "0.0",  # Will be updated by OCR
-                    assoc_currency,  # Inherit associate currency
-                    rel_path,
-                    "manual_upload",
-                    utc_now_iso(),
-                    utc_now_iso(),
-                    file_sha,
-                ),
+                (bet_id, "operator", "CREATED", note.strip(), utc_now_iso()),
             )
             db.commit()
-            bet_id = cursor.lastrowid
+            yield ":material/note_alt: Operator note recorded"
 
-            if bet_id is None:
-                st.error("Failed to create bet record")
-                logger.error("bet_creation_failed", error="lastrowid is None")
-                return False
+        logger.info(
+            "bet_created",
+            bet_id=bet_id,
+            ingestion_source="manual_upload",
+            has_note=bool(note and note.strip()),
+        )
 
-            # Add operator note if provided
-            if note and note.strip():
-                db.execute(
-                    """
-                    INSERT INTO verification_audit (
-                        bet_id,
-                        actor,
-                        action,
-                        notes,
-                        created_at_utc
-                    ) VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (bet_id, "operator", "CREATED", note.strip(), utc_now_iso()),
-                )
-                db.commit()
+        ingestion_service = BetIngestionService(db)
+        yield ":material/auto_detect_voice: Running OCR extraction..."
+        extraction_success = ingestion_service.process_bet_extraction(bet_id)
+        context["ocr_success"] = extraction_success
 
-            logger.info(
-                "bet_created",
-                bet_id=bet_id,
-                ingestion_source="manual_upload",
-                has_note=bool(note and note.strip()),
+        if extraction_success:
+            cursor = db.execute(
+                """
+                SELECT normalization_confidence, is_multi
+                FROM bets
+                WHERE id = ?
+                """,
+                (bet_id,),
             )
+            bet_data = cursor.fetchone()
+            confidence = bet_data["normalization_confidence"] if bet_data else None
+            is_multi = bet_data["is_multi"] if bet_data else False
+            context["confidence"] = confidence
+            context["is_multi"] = is_multi
+            yield ":material/verified: OCR extraction succeeded"
+        else:
+            yield ":material/error: OCR extraction failed; manual review required"
 
-        with st.spinner("Running OCR extraction..."):
-            # Run OCR extraction
-            ingestion_service = BetIngestionService(db)
-            extraction_success = ingestion_service.process_bet_extraction(bet_id)
-
-            if extraction_success:
-                # Fetch updated confidence score
-                cursor = db.execute(
-                    """
-                    SELECT normalization_confidence, is_multi
-                    FROM bets
-                    WHERE id = ?
-                    """,
-                    (bet_id,),
-                )
-                bet_data = cursor.fetchone()
-                confidence = bet_data["normalization_confidence"] if bet_data else None
-                is_multi = bet_data["is_multi"] if bet_data else False
-
-                # Display success message
-                st.success(f"Bet #{bet_id} added to review queue!")
-
-                # Display confidence
-                if confidence:
-                    confidence_float = float(confidence)
-                    if confidence_float >= 0.8:
-                        st.info(f"High confidence: {confidence_float:.0%}")
-                    elif confidence_float >= 0.5:
-                        st.warning(f"Medium confidence: {confidence_float:.0%}")
-                    else:
-                        st.error(f"Low confidence: {confidence_float:.0%}")
-
-                # Display multi-leg warning
-                if is_multi:
-                    st.error("Accumulator detected — not supported by system")
-
-            else:
-                st.warning(
-                    f"Bet #{bet_id} created but OCR extraction failed. "
-                    "Please review and enter data manually."
-                )
-            return True
-
-    except Exception as e:
-        logger.error("manual_upload_failed", error=str(e), exc_info=True)
-        st.error(f"Error processing upload: {str(e)}")
-        st.exception(e)
+    try:
+        stream_with_fallback(
+            _ocr_progress,
+            header=":material/smart_toy: OCR Progress",
+        )
+    except Exception as exc:
+        logger.error("manual_upload_failed", error=str(exc), exc_info=True)
+        handle_streaming_error(exc, "OCR processing", key="ocr_manual_upload")
         return False
+
+    bet_id = context.get("bet_id")
+    if context.get("ocr_success"):
+        show_success_toast(f"Bet #{bet_id} added to review queue!")
+        confidence = context.get("confidence")
+        if confidence is not None:
+            confidence_float = float(confidence)
+            if confidence_float >= 0.8:
+                st.info(f"High confidence: {confidence_float:.0%}")
+            elif confidence_float >= 0.5:
+                st.warning(f"Medium confidence: {confidence_float:.0%}")
+            else:
+                show_error_toast(f"Low confidence: {confidence_float:.0%}")
+        if context.get("is_multi"):
+            st.error("Accumulator detected – not supported by system")
+    else:
+        st.warning(
+            f"Bet #{bet_id} created but OCR extraction failed. "
+            "Please review and enter data manually."
+        )
+
+    return True

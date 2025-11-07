@@ -184,6 +184,7 @@ def create_bets_table(conn: sqlite3.Connection) -> None:
             market_type TEXT,
             selection TEXT,
             status TEXT NOT NULL DEFAULT 'incoming',
+            resolve_status TEXT NOT NULL DEFAULT 'needs_review',
             stake_eur TEXT DEFAULT '0.00',
             stake_amount TEXT,
             stake_currency TEXT,
@@ -242,6 +243,18 @@ def create_bets_table(conn: sqlite3.Connection) -> None:
         ON bets(canonical_event_id)
     """
     )
+
+    # Ensure resolve_status column exists for older databases
+    cursor = conn.execute("PRAGMA table_info(bets)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    if "resolve_status" not in existing_columns:
+        conn.execute(
+            "ALTER TABLE bets ADD COLUMN resolve_status TEXT NOT NULL DEFAULT 'needs_review'"
+        )
+    if "confidence_score" not in existing_columns:
+        conn.execute(
+            "ALTER TABLE bets ADD COLUMN confidence_score REAL DEFAULT 0.0"
+        )
 
 
 def create_extraction_log_table(conn: sqlite3.Connection) -> None:

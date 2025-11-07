@@ -15,6 +15,7 @@ from src.ui.ui_components import load_global_styles
 from src.ui.utils.formatters import format_utc_datetime_local
 from src.utils.logging_config import get_logger
 
+from src.ui.utils.state_management import safe_rerun
 logger = get_logger(__name__)
 
 
@@ -322,7 +323,7 @@ with st.form("correction_form", clear_on_submit=True):
                 st.session_state.pop("correction_prefill_bookmaker_id", None)
                 st.session_state["correction_amount"] = ""
                 st.session_state["correction_note"] = ""
-                st.rerun()
+                safe_rerun()
 
             except CorrectionError as e:
                 st.error(f"Correction failed: {e}")

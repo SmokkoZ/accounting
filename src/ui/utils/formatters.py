@@ -4,8 +4,9 @@ All currency amounts are rendered with ISO currency codes (e.g., "AUD 100.00").
 EUR-specific helpers also use the code format ("EUR 100.00").
 """
 
-from datetime import datetime
-from typing import Optional, Tuple
+from datetime import datetime, timezone
+from typing import Optional, Tuple, Union
+import pytz
 from decimal import Decimal, InvalidOperation
 
 CURRENCY_SYMBOLS = {
@@ -23,6 +24,7 @@ CURRENCY_SYMBOLS_WITH_PREFIX = {
     **CURRENCY_SYMBOLS,
     "AUD": "A$",
 }
+PERTH_TZ = pytz.timezone("Australia/Perth")
 
 
 def _to_decimal(value: Optional[Decimal | float | str]) -> Optional[Decimal]:
@@ -220,11 +222,33 @@ def format_utc_datetime_local(iso_string: Optional[str]) -> str:
     if not iso_string:
         return "—"
 
+    return format_utc_datetime(iso_string)
+
+
+def _ensure_perth_datetime(value: Union[str, datetime]) -> datetime:
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(PERTH_TZ)
+
+
+def format_utc_datetime(value: Union[str, datetime]) -> str:
+    """Convert UTC timestamp to Perth local display with AWST suffix."""
     try:
-        dt = datetime.fromisoformat(iso_string.replace("Z", "+00:00"))
-        return dt.strftime("%Y-%m-%d %H:%M")
+        perth_dt = _ensure_perth_datetime(value)
     except Exception:
-        return iso_string
+        return str(value)
+    return f"{perth_dt.strftime('%Y-%m-%d %H:%M:%S')} AWST"
+
+
+def format_utc_datetime_compact(value: Union[str, datetime]) -> str:
+    """Compact Perth local format (MM/DD HH:MM AWST)."""
+    try:
+        perth_dt = _ensure_perth_datetime(value)
+    except Exception:
+        return str(value)
+    return f"{perth_dt.strftime('%m/%d %H:%M')} AWST"
 
 
 def get_risk_badge_html(risk_classification: Optional[str]) -> str:

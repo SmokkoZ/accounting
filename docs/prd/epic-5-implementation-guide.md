@@ -1,4 +1,4 @@
-# Epic 5: Corrections & Reconciliation - Implementation Guide
+﻿# Epic 5: Corrections & Reconciliation - Implementation Guide
 
 **Epic Reference:** [Epic 5: Corrections & Reconciliation](./epic-5-corrections-reconciliation.md)
 **Status:** Ready for Implementation
@@ -15,7 +15,7 @@ Epic 5 implements **forward-only error correction** and **real-time financial he
 3. **Bookmaker Balance Drilldown** (Story 5.3): Compare modeled vs. reported balances
 4. **Pending Funding Events** (Story 5.4): Accept/reject deposits and withdrawals
 5. **Associate Operations Hub** (Story 5.5): Manage associates, bookmakers, balances, and funding from one page
-6. **Delta Provenance & Counterparty Links** (Story 5.6): Trace each associate’s delta back to specific surebets and counterparties
+6. **Delta Provenance & Counterparty Links** (Story 5.6): Trace each associateâ€™s delta back to specific surebets and counterparties
 
 **CRITICAL**: All corrections are **forward-only** (System Law #1 preserved). No UPDATE or DELETE on existing ledger entries.
 
@@ -69,11 +69,11 @@ from src.streamlit_app.components.corrections.corrections_list import render_cor
 
 st.set_page_config(
     page_title="Corrections - Surebet Accounting",
-    page_icon="🔧",
+    page_icon="ðŸ”§",
     layout="wide"
 )
 
-st.title("🔧 Post-Settlement Corrections")
+st.title("ðŸ”§ Post-Settlement Corrections")
 st.caption("Apply forward-only corrections without editing history")
 
 # Info banner
@@ -193,7 +193,7 @@ def render_correction_form(
         )
 
         # Submit button
-        submitted = st.form_submit_button("✅ Apply Correction", type="primary")
+        submitted = st.form_submit_button("âœ… Apply Correction", type="primary")
 
         if submitted:
             # Validation
@@ -218,7 +218,7 @@ def render_correction_form(
 
             if errors:
                 for error in errors:
-                    st.error(f"❌ {error}")
+                    st.error(f"âŒ {error}")
             else:
                 # Apply correction
                 try:
@@ -230,12 +230,12 @@ def render_correction_form(
                         note=note.strip()
                     )
 
-                    st.success(f"✅ Correction applied successfully! Ledger entry #{entry_id} created.")
+                    st.success(f"âœ… Correction applied successfully! Ledger entry #{entry_id} created.")
                     st.balloons()
                     st.rerun()
 
                 except Exception as e:
-                    st.error(f"❌ Failed to apply correction: {e}")
+                    st.error(f"âŒ Failed to apply correction: {e}")
 ```
 
 ---
@@ -276,7 +276,7 @@ def render_corrections_list(ledger_repo: LedgerEntryRepository):
 
         # Format amounts
         amount_native_str = f"{corr.amount_native} {corr.native_currency}" if corr.amount_native else "N/A"
-        amount_eur_str = f"€{corr.amount_eur}"
+        amount_eur_str = f"â‚¬{corr.amount_eur}"
 
         df_data.append({
             "Entry ID": corr.entry_id,
@@ -294,7 +294,7 @@ def render_corrections_list(ledger_repo: LedgerEntryRepository):
     # Display table
     st.dataframe(
         df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "Entry ID": st.column_config.NumberColumn(width="small"),
@@ -408,7 +408,7 @@ class CorrectionService:
         logger.info(
             f"Correction applied: Entry #{entry_id}, "
             f"Associate {associate_id}, Bookmaker {bookmaker_id}, "
-            f"Amount: {amount_native} {native_currency} (€{amount_eur})"
+            f"Amount: {amount_native} {native_currency} (â‚¬{amount_eur})"
         )
 
         return entry_id
@@ -576,11 +576,11 @@ from src.streamlit_app.components.reconciliation.bookmaker_drilldown import rend
 
 st.set_page_config(
     page_title="Reconciliation - Surebet Accounting",
-    page_icon="📊",
+    page_icon="ðŸ“Š",
     layout="wide"
 )
 
-st.title("📊 Reconciliation Dashboard")
+st.title("ðŸ“Š Reconciliation Dashboard")
 st.caption("Financial health: who's overholding vs. who's short")
 
 # Initialize services
@@ -591,7 +591,7 @@ reconciliation_service = ReconciliationService(ledger_repo)
 # Refresh button
 col1, col2, col3 = st.columns([2, 1, 1])
 with col3:
-    if st.button("🔄 Refresh", use_container_width=True):
+    if st.button("ðŸ”„ Refresh", width="stretch"):
         st.rerun()
 
 st.divider()
@@ -635,7 +635,7 @@ class AssociateBalance:
     current_holding_eur: Decimal
     delta_eur: Decimal
     status: str  # "overholder", "balanced", "short"
-    status_icon: str  # 🔴, 🟢, 🟠
+    status_icon: str  # ðŸ”´, ðŸŸ¢, ðŸŸ 
 
 @dataclass
 class BookmakersBalance:
@@ -651,13 +651,13 @@ class BookmakersBalance:
     difference_eur: Optional[Decimal]
     difference_native: Optional[Decimal]
     status: str  # "balanced", "minor_mismatch", "major_mismatch"
-    status_icon: str  # 🟢, 🟡, 🔴
+    status_icon: str  # ðŸŸ¢, ðŸŸ¡, ðŸ”´
     checked_at_utc: Optional[str]
 
 class ReconciliationService:
     """Service for calculating reconciliation metrics."""
 
-    DELTA_THRESHOLD_EUR = Decimal("10.00")  # ±€10 is "balanced"
+    DELTA_THRESHOLD_EUR = Decimal("10.00")  # Â±â‚¬10 is "balanced"
     MINOR_MISMATCH_EUR = Decimal("10.00")
     MAJOR_MISMATCH_EUR = Decimal("50.00")
 
@@ -695,13 +695,13 @@ class ReconciliationService:
             # Status determination
             if delta_eur > self.DELTA_THRESHOLD_EUR:
                 status = "overholder"
-                status_icon = "🔴"
+                status_icon = "ðŸ”´"
             elif delta_eur < -self.DELTA_THRESHOLD_EUR:
                 status = "short"
-                status_icon = "🟠"
+                status_icon = "ðŸŸ "
             else:
                 status = "balanced"
-                status_icon = "🟢"
+                status_icon = "ðŸŸ¢"
 
             balances.append(AssociateBalance(
                 associate_id=associate_id,
@@ -728,24 +728,24 @@ class ReconciliationService:
         """
         if balance.status == "overholder":
             return (
-                f"{balance.associate_alias} is holding €{abs(balance.delta_eur):.2f} more than their entitlement. "
-                f"They funded €{balance.net_deposits_eur:.2f} total and are entitled to €{balance.should_hold_eur:.2f}, "
-                f"but currently hold €{balance.current_holding_eur:.2f} in bookmaker accounts. "
-                f"**Collect €{abs(balance.delta_eur):.2f} from them.**"
+                f"{balance.associate_alias} is holding â‚¬{abs(balance.delta_eur):.2f} more than their entitlement. "
+                f"They funded â‚¬{balance.net_deposits_eur:.2f} total and are entitled to â‚¬{balance.should_hold_eur:.2f}, "
+                f"but currently hold â‚¬{balance.current_holding_eur:.2f} in bookmaker accounts. "
+                f"**Collect â‚¬{abs(balance.delta_eur):.2f} from them.**"
             )
         elif balance.status == "short":
             return (
-                f"{balance.associate_alias} is short €{abs(balance.delta_eur):.2f}. "
-                f"They funded €{balance.net_deposits_eur:.2f} and are entitled to €{balance.should_hold_eur:.2f}, "
-                f"but only hold €{balance.current_holding_eur:.2f} in bookmaker accounts. "
-                f"**Someone else is holding their €{abs(balance.delta_eur):.2f}.**"
+                f"{balance.associate_alias} is short â‚¬{abs(balance.delta_eur):.2f}. "
+                f"They funded â‚¬{balance.net_deposits_eur:.2f} and are entitled to â‚¬{balance.should_hold_eur:.2f}, "
+                f"but only hold â‚¬{balance.current_holding_eur:.2f} in bookmaker accounts. "
+                f"**Someone else is holding their â‚¬{abs(balance.delta_eur):.2f}.**"
             )
         else:
             return (
                 f"{balance.associate_alias} is balanced. "
-                f"They funded €{balance.net_deposits_eur:.2f}, are entitled to €{balance.should_hold_eur:.2f}, "
-                f"and hold €{balance.current_holding_eur:.2f}. "
-                f"Delta: €{balance.delta_eur:.2f} (within threshold)."
+                f"They funded â‚¬{balance.net_deposits_eur:.2f}, are entitled to â‚¬{balance.should_hold_eur:.2f}, "
+                f"and hold â‚¬{balance.current_holding_eur:.2f}. "
+                f"Delta: â‚¬{balance.delta_eur:.2f} (within threshold)."
             )
 
     def get_bookmaker_balances(self) -> List[BookmakersBalance]:
@@ -764,16 +764,16 @@ class ReconciliationService:
 
             if difference_eur is None:
                 status = "no_check"
-                status_icon = "❓"
+                status_icon = "â“"
             elif abs(difference_eur) < self.MINOR_MISMATCH_EUR:
                 status = "balanced"
-                status_icon = "🟢"
+                status_icon = "ðŸŸ¢"
             elif abs(difference_eur) < self.MAJOR_MISMATCH_EUR:
                 status = "minor_mismatch"
-                status_icon = "🟡"
+                status_icon = "ðŸŸ¡"
             else:
                 status = "major_mismatch"
-                status_icon = "🔴"
+                status_icon = "ðŸ”´"
 
             balances.append(BookmakersBalance(
                 associate_id=data['associate_id'],
@@ -967,10 +967,10 @@ def render_associate_summary(reconciliation_service: ReconciliationService):
     for balance in balances:
         df_data.append({
             "Associate": balance.associate_alias,
-            "NET_DEPOSITS_EUR": f"€{balance.net_deposits_eur:.2f}",
-            "SHOULD_HOLD_EUR": f"€{balance.should_hold_eur:.2f}",
-            "CURRENT_HOLDING_EUR": f"€{balance.current_holding_eur:.2f}",
-            "DELTA": f"{balance.status_icon} €{balance.delta_eur:+.2f}",
+            "NET_DEPOSITS_EUR": f"â‚¬{balance.net_deposits_eur:.2f}",
+            "SHOULD_HOLD_EUR": f"â‚¬{balance.should_hold_eur:.2f}",
+            "CURRENT_HOLDING_EUR": f"â‚¬{balance.current_holding_eur:.2f}",
+            "DELTA": f"{balance.status_icon} â‚¬{balance.delta_eur:+.2f}",
             "Status": balance.status.replace('_', ' ').title(),
             "_balance_obj": balance  # Hidden for expandable details
         })
@@ -980,7 +980,7 @@ def render_associate_summary(reconciliation_service: ReconciliationService):
     # Display table
     st.dataframe(
         df.drop(columns=['_balance_obj']),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "Associate": st.column_config.TextColumn(width="medium"),
@@ -993,19 +993,19 @@ def render_associate_summary(reconciliation_service: ReconciliationService):
     st.caption("**Expand for detailed explanations:**")
 
     for i, balance in enumerate(balances):
-        with st.expander(f"{balance.status_icon} {balance.associate_alias} - DELTA: €{balance.delta_eur:+.2f}"):
+        with st.expander(f"{balance.status_icon} {balance.associate_alias} - DELTA: â‚¬{balance.delta_eur:+.2f}"):
             explanation = reconciliation_service.get_explanation(balance)
             st.markdown(explanation)
 
             # Show breakdown
             st.markdown("**Breakdown:**")
-            st.markdown(f"- Net Deposits: €{balance.net_deposits_eur:.2f}")
-            st.markdown(f"- Should Hold (Entitlement): €{balance.should_hold_eur:.2f}")
-            st.markdown(f"- Current Holding: €{balance.current_holding_eur:.2f}")
-            st.markdown(f"- **DELTA**: €{balance.delta_eur:+.2f}")
+            st.markdown(f"- Net Deposits: â‚¬{balance.net_deposits_eur:.2f}")
+            st.markdown(f"- Should Hold (Entitlement): â‚¬{balance.should_hold_eur:.2f}")
+            st.markdown(f"- Current Holding: â‚¬{balance.current_holding_eur:.2f}")
+            st.markdown(f"- **DELTA**: â‚¬{balance.delta_eur:+.2f}")
 
     # Export to CSV
-    if st.button("📥 Export to CSV"):
+    if st.button("ðŸ“¥ Export to CSV"):
         csv = df.drop(columns=['_balance_obj']).to_csv(index=False)
         st.download_button(
             label="Download CSV",
@@ -1046,22 +1046,22 @@ def render_bookmaker_drilldown(reconciliation_service: ReconciliationService):
     for balance in balances:
         # Format modeled balance
         if balance.modeled_balance_native:
-            modeled_display = f"€{balance.modeled_balance_eur:.2f} ({balance.modeled_balance_native:.2f} {balance.native_currency})"
+            modeled_display = f"â‚¬{balance.modeled_balance_eur:.2f} ({balance.modeled_balance_native:.2f} {balance.native_currency})"
         else:
-            modeled_display = f"€{balance.modeled_balance_eur:.2f}"
+            modeled_display = f"â‚¬{balance.modeled_balance_eur:.2f}"
 
         # Format reported balance
         if balance.reported_balance_native:
             reported_eur = balance.modeled_balance_eur + (balance.difference_eur or Decimal("0.00"))
-            reported_display = f"{balance.reported_balance_native:.2f} {balance.native_currency} (€{reported_eur:.2f})"
+            reported_display = f"{balance.reported_balance_native:.2f} {balance.native_currency} (â‚¬{reported_eur:.2f})"
         else:
             reported_display = "Not checked"
 
         # Format difference
         if balance.difference_eur is not None:
-            difference_display = f"{balance.status_icon} €{balance.difference_eur:+.2f}"
+            difference_display = f"{balance.status_icon} â‚¬{balance.difference_eur:+.2f}"
         else:
-            difference_display = "—"
+            difference_display = "â€”"
 
         # Last checked
         if balance.checked_at_utc:
@@ -1089,7 +1089,7 @@ def render_bookmaker_drilldown(reconciliation_service: ReconciliationService):
     # Display table
     st.dataframe(
         df.drop(columns=['_balance_obj']),
-        use_container_width=True,
+        width="stretch",
         hide_index=True
     )
 
@@ -1099,9 +1099,9 @@ def render_bookmaker_drilldown(reconciliation_service: ReconciliationService):
     if st.checkbox("Show only mismatches"):
         mismatches = [b for b in balances if b.status in ['minor_mismatch', 'major_mismatch']]
         if mismatches:
-            st.warning(f"⚠️ {len(mismatches)} bookmaker(s) with mismatches")
+            st.warning(f"âš ï¸ {len(mismatches)} bookmaker(s) with mismatches")
         else:
-            st.success("✅ No mismatches found")
+            st.success("âœ… No mismatches found")
 
     # Manual balance entry form (Story 5.3)
     render_balance_check_form()
@@ -1289,7 +1289,7 @@ def render_funding_events(
 ):
     """Render funding events section."""
 
-    st.subheader("💰 Pending Funding Events")
+    st.subheader("ðŸ’° Pending Funding Events")
     st.caption("Manually enter deposits and withdrawals for associates")
 
     # Manual entry form
@@ -1313,7 +1313,7 @@ def render_funding_events(
         with col3:
             note = st.text_area("Note (Optional)", value="", height=100)
 
-        submitted = st.form_submit_button("➕ Add Funding Event")
+        submitted = st.form_submit_button("âž• Add Funding Event")
 
         if submitted:
             # Validation
@@ -1335,7 +1335,7 @@ def render_funding_events(
                         'note': note.strip() or None
                     })
 
-                    st.success(f"✅ {event_type} added to pending list")
+                    st.success(f"âœ… {event_type} added to pending list")
                     st.rerun()
 
             except InvalidOperation:
@@ -1358,7 +1358,7 @@ def render_funding_events(
                     """)
 
                 with col2:
-                    if st.button("✅ Accept", key=f"accept_{i}"):
+                    if st.button("âœ… Accept", key=f"accept_{i}"):
                         # Accept funding event
                         try:
                             entry_id = funding_service.accept_funding_event(
@@ -1369,7 +1369,7 @@ def render_funding_events(
                                 note=draft['note']
                             )
 
-                            st.success(f"✅ Funding event accepted! Entry #{entry_id}")
+                            st.success(f"âœ… Funding event accepted! Entry #{entry_id}")
                             st.session_state.funding_drafts.pop(i)
                             st.rerun()
 
@@ -1377,7 +1377,7 @@ def render_funding_events(
                             st.error(f"Failed to accept: {e}")
 
                 with col3:
-                    if st.button("❌ Reject", key=f"reject_{i}"):
+                    if st.button("âŒ Reject", key=f"reject_{i}"):
                         st.session_state.funding_drafts.pop(i)
                         st.success("Funding event rejected")
                         st.rerun()
@@ -1400,7 +1400,7 @@ def render_funding_events(
     if all_events:
         for event in all_events:
             st.markdown(f"""
-            - **{event.entry_type}** (Entry #{event.entry_id}): {event.amount_native} {event.native_currency} (€{event.amount_eur})
+            - **{event.entry_type}** (Entry #{event.entry_id}): {event.amount_native} {event.native_currency} (â‚¬{event.amount_eur})
               Associate: {event.associate_id} | {event.created_at_utc}
             """)
     else:
@@ -1491,7 +1491,7 @@ class FundingService:
 
         logger.info(
             f"Funding event accepted: {event_type}, Entry #{entry_id}, "
-            f"Associate {associate_id}, Amount: {amount} {currency} (€{amount_eur})"
+            f"Associate {associate_id}, Amount: {amount} {currency} (â‚¬{amount_eur})"
         )
 
         return entry_id
@@ -1661,8 +1661,8 @@ class FundingTransactionService:
 
 - Create SQL helpers that join associates, bookmakers, latest balance checks, and ledger aggregates.
 - Key methods:
-  - `list_associates_with_metrics(filters)` → returns admin flag, currency, bookmaker count, NET_DEPOSITS_EUR, SHOULD_HOLD_EUR, CURRENT_HOLDING_EUR, DELTA, last activity timestamp.
-  - `list_bookmakers_for_associate(associate_id)` → returns parsing profile, modeled vs reported balance, latest balance check, active status.
+  - `list_associates_with_metrics(filters)` â†’ returns admin flag, currency, bookmaker count, NET_DEPOSITS_EUR, SHOULD_HOLD_EUR, CURRENT_HOLDING_EUR, DELTA, last activity timestamp.
+  - `list_bookmakers_for_associate(associate_id)` â†’ returns parsing profile, modeled vs reported balance, latest balance check, active status.
 - Use the same connection + dict-row pattern as other repositories for consistency.
 
 #### Task 5.5.5: Navigation and Legacy Alignment
@@ -1683,7 +1683,7 @@ class FundingTransactionService:
 
 ### Story 5.6: Delta Provenance & Counterparty Links
 
-**Goal**: Tie every associate’s delta back to the specific surebets and counterparties that generated it so operators can reconcile surpluses/shortfalls precisely.
+**Goal**: Tie every associateâ€™s delta back to the specific surebets and counterparties that generated it so operators can reconcile surpluses/shortfalls precisely.
 
 #### Task 5.6.1: Schema & Migration
 **Files**: `src/core/schema.py`, `src/migrations/2025xxxx_add_surebet_links.py`
@@ -1724,10 +1724,10 @@ CREATE INDEX idx_surebet_links_loser ON surebet_settlement_links(loser_associate
 #### Task 5.6.4: UI Integration
 **Files**: `src/ui/components/associate_hub/drawer.py`, `src/ui/components/associate_hub/listing.py`, `tests/ui/test_associate_hub_delta_breakdown.py`
 
-- Add “Delta Breakdown” tab/section in the associate drawer showing:
+- Add â€œDelta Breakdownâ€ tab/section in the associate drawer showing:
   - Summary chips (surplus, deficit, linked surebets).
   - Table with columns: Surebet ID (link to Story 5.2 view), Counterparty, Amount (signed & color-coded), Event Timestamp, Details (link to ledger entry modal).
-- Handle empty-state messaging (“No provenance data recorded yet”) and pagination for long histories.
+- Handle empty-state messaging (â€œNo provenance data recorded yetâ€) and pagination for long histories.
 - Wire refreshes so new settlements/corrections re-query provenance without full page reload.
 
 #### Task 5.6.5: Exports & Reporting
@@ -1803,19 +1803,19 @@ def test_associate_balances_calculation():
     admin = next(b for b in balances if b.associate_alias == 'Admin')
     assert admin.delta_eur == Decimal('700.00')  # 2800 - 2100
     assert admin.status == "overholder"
-    assert admin.status_icon == "🔴"
+    assert admin.status_icon == "ðŸ”´"
 
     # Partner A: short
     partner_a = next(b for b in balances if b.associate_alias == 'Partner A')
     assert partner_a.delta_eur == Decimal('-200.00')  # 1400 - 1600
     assert partner_a.status == "short"
-    assert partner_a.status_icon == "🟠"
+    assert partner_a.status_icon == "ðŸŸ "
 
     # Partner B: balanced
     partner_b = next(b for b in balances if b.associate_alias == 'Partner B')
     assert partner_b.delta_eur == Decimal('-2.00')  # 1003 - 1005
-    assert partner_b.status == "balanced"  # Within ±€10 threshold
-    assert partner_b.status_icon == "🟢"
+    assert partner_b.status == "balanced"  # Within Â±â‚¬10 threshold
+    assert partner_b.status_icon == "ðŸŸ¢"
 
 def test_explanation_overholder():
     """Test explanation for overholder."""
@@ -1825,8 +1825,8 @@ def test_explanation_overholder():
     admin = next(b for b in balances if b.associate_alias == 'Admin')
     explanation = service.get_explanation(admin)
 
-    assert "holding €700.00 more than their entitlement" in explanation
-    assert "Collect €700.00 from them" in explanation
+    assert "holding â‚¬700.00 more than their entitlement" in explanation
+    assert "Collect â‚¬700.00 from them" in explanation
 
 def test_explanation_short():
     """Test explanation for short associate."""
@@ -1836,8 +1836,8 @@ def test_explanation_short():
     partner_a = next(b for b in balances if b.associate_alias == 'Partner A')
     explanation = service.get_explanation(partner_a)
 
-    assert "short €200.00" in explanation
-    assert "Someone else is holding their €200.00" in explanation
+    assert "short â‚¬200.00" in explanation
+    assert "Someone else is holding their â‚¬200.00" in explanation
 
 def test_sorting_by_delta():
     """Test balances sorted by DELTA (largest overholders first)."""
@@ -1980,10 +1980,10 @@ def test_correction_immutability(test_db):
 3. Click "Apply Correction"
 
 ### Expected Results:
-- ✅ Success message: "Correction applied. Ledger entry created."
-- ✅ Entry appears in Recent Corrections list
-- ✅ Entry shows: +100 AUD, FX snapshot, note
-- ✅ Reconciliation dashboard shows Partner A's CURRENT_HOLDING increased
+- âœ… Success message: "Correction applied. Ledger entry created."
+- âœ… Entry appears in Recent Corrections list
+- âœ… Entry shows: +100 AUD, FX snapshot, note
+- âœ… Reconciliation dashboard shows Partner A's CURRENT_HOLDING increased
 
 ### SQL Verification:
 ```sql
@@ -2003,15 +2003,15 @@ LIMIT 1;
 ### Steps:
 1. Open Reconciliation page
 2. Review Associate Summary table
-3. Find associate with 🔴 status (DELTA > +€10)
+3. Find associate with ðŸ”´ status (DELTA > +â‚¬10)
 4. Expand row for detailed explanation
 
 ### Expected Results:
-- ✅ Table shows NET_DEPOSITS, SHOULD_HOLD, CURRENT_HOLDING, DELTA
-- ✅ Overholders have 🔴 icon and positive DELTA
-- ✅ Short associates have 🟠 icon and negative DELTA
-- ✅ Balanced associates have 🟢 icon
-- ✅ Explanation clearly states: "Collect €X from them" (overholder) or "Someone else holding their €X" (short)
+- âœ… Table shows NET_DEPOSITS, SHOULD_HOLD, CURRENT_HOLDING, DELTA
+- âœ… Overholders have ðŸ”´ icon and positive DELTA
+- âœ… Short associates have ðŸŸ  icon and negative DELTA
+- âœ… Balanced associates have ðŸŸ¢ icon
+- âœ… Explanation clearly states: "Collect â‚¬X from them" (overholder) or "Someone else holding their â‚¬X" (short)
 
 ---
 
@@ -2023,7 +2023,7 @@ LIMIT 1;
 1. Open Reconciliation page
 2. Scroll to Bookmaker Drilldown
 3. Manually check Bet365 website: balance is $450 AUD
-4. In drilldown table, see modeled balance: €500 (approx $830 AUD)
+4. In drilldown table, see modeled balance: â‚¬500 (approx $830 AUD)
 5. Update balance:
    - Associate: Admin
    - Bookmaker: Bet365
@@ -2031,10 +2031,10 @@ LIMIT 1;
 6. Click "Update Balance"
 
 ### Expected Results:
-- ✅ Difference calculated: -€X (modeled higher than reported)
-- ✅ Status icon: 🔴 (major mismatch) or 🟡 (minor)
-- ✅ "Apply Correction" button pre-fills correction form
-- ✅ After correction: difference becomes €0, status 🟢
+- âœ… Difference calculated: -â‚¬X (modeled higher than reported)
+- âœ… Status icon: ðŸ”´ (major mismatch) or ðŸŸ¡ (minor)
+- âœ… "Apply Correction" button pre-fills correction form
+- âœ… After correction: difference becomes â‚¬0, status ðŸŸ¢
 
 ---
 
@@ -2055,9 +2055,9 @@ LIMIT 1;
 5. Click "Accept"
 
 ### Expected Results:
-- ✅ Ledger entry created: entry_type = 'DEPOSIT'
-- ✅ Reconciliation dashboard updates:
-   - NET_DEPOSITS_EUR increases by €500
+- âœ… Ledger entry created: entry_type = 'DEPOSIT'
+- âœ… Reconciliation dashboard updates:
+   - NET_DEPOSITS_EUR increases by â‚¬500
    - SHOULD_HOLD_EUR unchanged
    - DELTA worsens (more short, since deposit doesn't immediately go to bookmakers)
 
@@ -2085,9 +2085,9 @@ LIMIT 1;
 4. Click "Reject"
 
 ### Expected Results:
-- ✅ Draft removed from pending list
-- ✅ No ledger entry created
-- ✅ Success message: "Funding event discarded"
+- âœ… Draft removed from pending list
+- âœ… No ledger entry created
+- âœ… Success message: "Funding event discarded"
 
 ---
 
@@ -2101,9 +2101,9 @@ LIMIT 1;
 3. Download file
 
 ### Expected Results:
-- ✅ CSV file downloaded
-- ✅ Contains columns: Associate, NET_DEPOSITS_EUR, SHOULD_HOLD_EUR, CURRENT_HOLDING_EUR, DELTA, Status
-- ✅ Data matches displayed table
+- âœ… CSV file downloaded
+- âœ… Contains columns: Associate, NET_DEPOSITS_EUR, SHOULD_HOLD_EUR, CURRENT_HOLDING_EUR, DELTA, Status
+- âœ… Data matches displayed table
 
 ---
 

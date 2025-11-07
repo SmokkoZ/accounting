@@ -1,4 +1,4 @@
-# Epic 6: Reporting & Audit - Implementation Guide
+﻿# Epic 6: Reporting & Audit - Implementation Guide
 
 **Epic Reference:** [Epic 6: Reporting & Audit](./epic-6-reporting-audit.md)
 **Status:** Ready for Implementation
@@ -16,10 +16,10 @@ Epic 6 is the **final MVP epic**. It implements comprehensive reporting and audi
 **CRITICAL**: Epic 6 is **read-only**. No ledger writes, only data presentation.
 
 **When Epic 6 is complete**:
-- ✅ All 10 Functional Requirements implemented
-- ✅ All 6 System Laws enforced
-- ✅ End-to-end workflow complete: Screenshot → Settlement → Reconciliation → Export
-- ✅ **MVP is production-ready**
+- âœ… All 10 Functional Requirements implemented
+- âœ… All 6 System Laws enforced
+- âœ… End-to-end workflow complete: Screenshot â†’ Settlement â†’ Reconciliation â†’ Export
+- âœ… **MVP is production-ready**
 
 **Architecture Principles**:
 - CSV exports are full-fidelity (no data loss)
@@ -67,11 +67,11 @@ from src.streamlit_app.components.export/export_history import render_export_his
 
 st.set_page_config(
     page_title="Export - Surebet Accounting",
-    page_icon="📥",
+    page_icon="ðŸ“¥",
     layout="wide"
 )
 
-st.title("📥 Ledger Export")
+st.title("ðŸ“¥ Ledger Export")
 st.caption("Export complete ledger to CSV for audit and backup")
 
 # Initialize services
@@ -84,10 +84,10 @@ st.info("""
 **Full Ledger Export**: All ledger entries with joins to associates, bookmakers, and surebets.
 
 **Use cases:**
-- 💾 Weekly backup (disaster recovery)
-- 📊 External analysis (Excel, Google Sheets)
-- 🔍 Audit trail (compliance)
-- 🚀 Data portability (not locked in)
+- ðŸ’¾ Weekly backup (disaster recovery)
+- ðŸ“Š External analysis (Excel, Google Sheets)
+- ðŸ” Audit trail (compliance)
+- ðŸš€ Data portability (not locked in)
 """)
 
 st.divider()
@@ -130,11 +130,11 @@ def render_export_button(
     st.markdown(f"**Current ledger size:** {row_count:,} entries")
 
     if row_count == 0:
-        st.warning("⚠️ Ledger is empty. No entries to export.")
+        st.warning("âš ï¸ Ledger is empty. No entries to export.")
         return
 
     # Export button
-    if st.button("📥 Export Full Ledger", type="primary", use_container_width=True):
+    if st.button("ðŸ“¥ Export Full Ledger", type="primary", width="stretch"):
         with st.spinner(f"Exporting {row_count:,} entries..."):
             try:
                 # Perform export
@@ -142,7 +142,7 @@ def render_export_button(
 
                 # Success message
                 st.success(f"""
-                ✅ **Ledger exported successfully!**
+                âœ… **Ledger exported successfully!**
 
                 - **File:** `{result['file_path']}`
                 - **Rows:** {result['row_count']:,} entries
@@ -155,11 +155,11 @@ def render_export_button(
                     csv_data = f.read()
 
                 st.download_button(
-                    label="⬇️ Download CSV",
+                    label="â¬‡ï¸ Download CSV",
                     data=csv_data,
                     file_name=Path(result['file_path']).name,
                     mime="text/csv",
-                    use_container_width=True
+                    width="stretch"
                 )
 
                 # Store export in history (session state)
@@ -172,7 +172,7 @@ def render_export_button(
                 st.session_state.export_history = st.session_state.export_history[:10]
 
             except Exception as e:
-                st.error(f"❌ Export failed: {e}")
+                st.error(f"âŒ Export failed: {e}")
                 import traceback
                 st.code(traceback.format_exc())
 ```
@@ -226,7 +226,7 @@ def render_export_history():
     # Display table
     st.dataframe(
         df.drop(columns=['_file_path']),
-        use_container_width=True,
+        width="stretch",
         hide_index=True
     )
 
@@ -241,14 +241,14 @@ def render_export_history():
                 csv_data = f.read()
 
             st.download_button(
-                label=f"⬇️ {file_path.name}",
+                label=f"â¬‡ï¸ {file_path.name}",
                 data=csv_data,
                 file_name=file_path.name,
                 mime="text/csv",
                 key=f"redownload_{i}"
             )
         else:
-            st.caption(f"❌ {file_path.name} (file not found)")
+            st.caption(f"âŒ {file_path.name} (file not found)")
 ```
 
 ---
@@ -366,8 +366,8 @@ class ExportService:
         Convert ledger entry dict to CSV row.
 
         Handles:
-        - NULL values → empty strings
-        - Decimal → string (preserve precision)
+        - NULL values â†’ empty strings
+        - Decimal â†’ string (preserve precision)
         """
         row = {}
 
@@ -473,11 +473,11 @@ from src.streamlit_app.components.statements.statement_display import render_sta
 
 st.set_page_config(
     page_title="Monthly Statements - Surebet Accounting",
-    page_icon="📄",
+    page_icon="ðŸ“„",
     layout="wide"
 )
 
-st.title("📄 Monthly Statements")
+st.title("ðŸ“„ Monthly Statements")
 st.caption("Generate partner-facing profit/loss reports")
 
 # Initialize services
@@ -581,10 +581,10 @@ def render_statement_form(associate_repo: AssociateRepository) -> Tuple[Optional
 
         # Validation
         if cutoff_datetime > datetime.utcnow():
-            st.warning("⚠️ Cutoff date is in the future. Results may be incomplete.")
+            st.warning("âš ï¸ Cutoff date is in the future. Results may be incomplete.")
 
         # Generate button
-        submitted = st.form_submit_button("📊 Generate Statement", type="primary")
+        submitted = st.form_submit_button("ðŸ“Š Generate Statement", type="primary")
 
         if submitted:
             return associate_id, cutoff_datetime
@@ -631,14 +631,14 @@ def render_statement_display(
         st.divider()
 
         # Partner-Facing Section
-        st.subheader("📋 Partner-Facing Section (Shareable)")
+        st.subheader("ðŸ“‹ Partner-Facing Section (Shareable)")
 
         _render_partner_section(statement)
 
         st.divider()
 
         # Internal-Only Section
-        with st.expander("🔒 Internal-Only Section (DO NOT SHARE)", expanded=False):
+        with st.expander("ðŸ”’ Internal-Only Section (DO NOT SHARE)", expanded=False):
             _render_internal_section(statement)
 
         st.divider()
@@ -653,7 +653,7 @@ def render_statement_display(
             partner_text = _format_partner_section_text(statement, cutoff_date)
 
             st.download_button(
-                label="📋 Copy Partner Section",
+                label="ðŸ“‹ Copy Partner Section",
                 data=partner_text,
                 file_name=f"statement_{statement['associate_alias']}_{cutoff_date.strftime('%Y%m')}.txt",
                 mime="text/plain"
@@ -664,17 +664,17 @@ def render_statement_display(
             full_text = _format_full_statement_text(statement, cutoff_date)
 
             st.download_button(
-                label="📄 Export Full Statement",
+                label="ðŸ“„ Export Full Statement",
                 data=full_text,
                 file_name=f"statement_full_{statement['associate_alias']}_{cutoff_date.strftime('%Y%m')}.txt",
                 mime="text/plain"
             )
 
         with col3:
-            st.button("📊 Export to CSV", disabled=True, help="Coming soon")
+            st.button("ðŸ“Š Export to CSV", disabled=True, help="Coming soon")
 
     except Exception as e:
-        st.error(f"❌ Failed to generate statement: {e}")
+        st.error(f"âŒ Failed to generate statement: {e}")
         import traceback
         st.code(traceback.format_exc())
 
@@ -684,18 +684,18 @@ def _render_partner_section(statement: dict):
 
     # Funding summary
     st.markdown(f"""
-    ### 💰 Funding Summary
+    ### ðŸ’° Funding Summary
 
-    **You funded:** €{statement['net_deposits_eur']:,.2f} total
+    **You funded:** â‚¬{statement['net_deposits_eur']:,.2f} total
 
     *This is the cash you personally put in.*
     """)
 
     # Entitlement summary
     st.markdown(f"""
-    ### 🎯 Entitlement Summary
+    ### ðŸŽ¯ Entitlement Summary
 
-    **You're entitled to:** €{statement['should_hold_eur']:,.2f}
+    **You're entitled to:** â‚¬{statement['should_hold_eur']:,.2f}
 
     *If we froze time right now, this much of the pot is yours.*
     """)
@@ -713,9 +713,9 @@ def _render_partner_section(statement: dict):
         explanation = "How far behind you are compared to what you funded."
 
     st.markdown(f"""
-    ### 📈 Profit/Loss Summary
+    ### ðŸ“ˆ Profit/Loss Summary
 
-    **{profit_label}:** :{profit_color}[€{abs(raw_profit):,.2f}]
+    **{profit_label}:** :{profit_color}[â‚¬{abs(raw_profit):,.2f}]
 
     *{explanation}*
     """)
@@ -726,12 +726,12 @@ def _render_partner_section(statement: dict):
         admin_share = raw_profit / 2
 
         st.markdown(f"""
-        ### 🤝 50/50 Split Calculation
+        ### ðŸ¤ 50/50 Split Calculation
 
         Our deal is 50/50, so:
 
-        - **Your share:** €{your_share:,.2f} (half of profit)
-        - **Admin share:** €{admin_share:,.2f} (half of profit)
+        - **Your share:** â‚¬{your_share:,.2f} (half of profit)
+        - **Admin share:** â‚¬{admin_share:,.2f} (half of profit)
 
         *Note: This is for transparency. In our system, profit is already split equally through per-surebet shares.*
         """)
@@ -740,12 +740,12 @@ def _render_partner_section(statement: dict):
         admin_share_of_loss = abs(raw_profit) / 2
 
         st.markdown(f"""
-        ### 🤝 50/50 Split Calculation
+        ### ðŸ¤ 50/50 Split Calculation
 
         Our deal is 50/50, so:
 
-        - **Your share of loss:** €{your_share_of_loss:,.2f} (half of loss)
-        - **Admin share of loss:** €{admin_share_of_loss:,.2f} (half of loss)
+        - **Your share of loss:** â‚¬{your_share_of_loss:,.2f} (half of loss)
+        - **Admin share of loss:** â‚¬{admin_share_of_loss:,.2f} (half of loss)
 
         *Note: This is for transparency. Losses are also split equally.*
         """)
@@ -754,13 +754,13 @@ def _render_partner_section(statement: dict):
 def _render_internal_section(statement: dict):
     """Render internal-only section."""
 
-    st.warning("⚠️ **DO NOT SHARE THIS SECTION WITH PARTNERS**")
+    st.warning("âš ï¸ **DO NOT SHARE THIS SECTION WITH PARTNERS**")
 
     # Current holdings
     st.markdown(f"""
-    ### 💼 Current Holdings
+    ### ðŸ’¼ Current Holdings
 
-    **Currently holding:** €{statement['current_holding_eur']:,.2f}
+    **Currently holding:** â‚¬{statement['current_holding_eur']:,.2f}
 
     *What model thinks you're physically holding in bookmaker accounts.*
     """)
@@ -769,22 +769,22 @@ def _render_internal_section(statement: dict):
     delta = statement['delta_eur']
 
     if delta > 10:
-        status_icon = "🔴"
-        status_text = f"Holding €{abs(delta):,.2f} more than entitlement (collect from associate)"
+        status_icon = "ðŸ”´"
+        status_text = f"Holding â‚¬{abs(delta):,.2f} more than entitlement (collect from associate)"
         status_color = "red"
     elif delta < -10:
-        status_icon = "🟠"
-        status_text = f"Short €{abs(delta):,.2f} (owed to associate)"
+        status_icon = "ðŸŸ "
+        status_text = f"Short â‚¬{abs(delta):,.2f} (owed to associate)"
         status_color = "orange"
     else:
-        status_icon = "🟢"
+        status_icon = "ðŸŸ¢"
         status_text = "Balanced"
         status_color = "green"
 
     st.markdown(f"""
-    ### 📊 Reconciliation Delta
+    ### ðŸ“Š Reconciliation Delta
 
-    **DELTA:** {status_icon} :{status_color}[€{delta:+,.2f}]
+    **DELTA:** {status_icon} :{status_color}[â‚¬{delta:+,.2f}]
 
     *{status_text}*
     """)
@@ -796,11 +796,11 @@ def _format_partner_section_text(statement: dict, cutoff_date: datetime) -> str:
     raw_profit = statement['raw_profit_eur']
 
     if raw_profit >= 0:
-        profit_line = f"Your profit: €{abs(raw_profit):,.2f}"
-        split_line = f"Your share: €{raw_profit / 2:,.2f} (half of profit)\nAdmin share: €{raw_profit / 2:,.2f} (half of profit)"
+        profit_line = f"Your profit: â‚¬{abs(raw_profit):,.2f}"
+        split_line = f"Your share: â‚¬{raw_profit / 2:,.2f} (half of profit)\nAdmin share: â‚¬{raw_profit / 2:,.2f} (half of profit)"
     else:
-        profit_line = f"Your loss: €{abs(raw_profit):,.2f}"
-        split_line = f"Your share of loss: €{abs(raw_profit) / 2:,.2f} (half of loss)\nAdmin share of loss: €{abs(raw_profit) / 2:,.2f} (half of loss)"
+        profit_line = f"Your loss: â‚¬{abs(raw_profit):,.2f}"
+        split_line = f"Your share of loss: â‚¬{abs(raw_profit) / 2:,.2f} (half of loss)\nAdmin share of loss: â‚¬{abs(raw_profit) / 2:,.2f} (half of loss)"
 
     return f"""
 Monthly Statement for {statement['associate_alias']}
@@ -809,10 +809,10 @@ Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}
 
 --- Partner-Facing Section ---
 
-You funded: €{statement['net_deposits_eur']:,.2f} total
+You funded: â‚¬{statement['net_deposits_eur']:,.2f} total
 This is the cash you personally put in.
 
-You're entitled to: €{statement['should_hold_eur']:,.2f}
+You're entitled to: â‚¬{statement['should_hold_eur']:,.2f}
 If we froze time right now, this much of the pot is yours.
 
 {profit_line}
@@ -833,21 +833,21 @@ def _format_full_statement_text(statement: dict, cutoff_date: datetime) -> str:
     delta = statement['delta_eur']
 
     if delta > 10:
-        delta_text = f"🔴 Holding €{abs(delta):,.2f} more than entitlement (collect from associate)"
+        delta_text = f"ðŸ”´ Holding â‚¬{abs(delta):,.2f} more than entitlement (collect from associate)"
     elif delta < -10:
-        delta_text = f"🟠 Short €{abs(delta):,.2f} (owed to associate)"
+        delta_text = f"ðŸŸ  Short â‚¬{abs(delta):,.2f} (owed to associate)"
     else:
-        delta_text = "🟢 Balanced"
+        delta_text = "ðŸŸ¢ Balanced"
 
     return f"""
 {partner_section}
 
 --- Internal-Only Section (DO NOT SHARE) ---
 
-Currently holding: €{statement['current_holding_eur']:,.2f}
+Currently holding: â‚¬{statement['current_holding_eur']:,.2f}
 What model thinks you're physically holding in bookmaker accounts.
 
-Reconciliation Delta: €{delta:+,.2f}
+Reconciliation Delta: â‚¬{delta:+,.2f}
 {delta_text}
     """.strip()
 ```
@@ -937,8 +937,8 @@ class StatementService:
 
         logger.info(
             f"Statement generated for {associate.display_alias}: "
-            f"NET_DEPOSITS=€{net_deposits_eur}, SHOULD_HOLD=€{should_hold_eur}, "
-            f"PROFIT=€{raw_profit_eur}, DELTA=€{delta_eur}"
+            f"NET_DEPOSITS=â‚¬{net_deposits_eur}, SHOULD_HOLD=â‚¬{should_hold_eur}, "
+            f"PROFIT=â‚¬{raw_profit_eur}, DELTA=â‚¬{delta_eur}"
         )
 
         return {
@@ -1149,7 +1149,7 @@ def test_export_full_ledger(tmp_path):
     # Check second row (DEPOSIT)
     assert rows[1]['entry_id'] == '2'
     assert rows[1]['entry_type'] == 'DEPOSIT'
-    assert rows[1]['bookmaker_id'] == ''  # NULL → empty string
+    assert rows[1]['bookmaker_id'] == ''  # NULL â†’ empty string
     assert rows[1]['amount_eur'] == '1000.00'
 
     # Check third row (CORRECTION)
@@ -1410,16 +1410,16 @@ def test_full_export_integration(test_db, tmp_path):
 4. Wait for export to complete
 
 ### Expected Results:
-- ✅ Success message: "Ledger exported successfully"
-- ✅ File path shown: `data/exports/ledger_YYYYMMDD_HHMMSS.csv`
-- ✅ Row count matches database: 150 entries
-- ✅ File size shown (KB)
-- ✅ Duration shown (seconds)
-- ✅ "Download CSV" button appears
-- ✅ Export appears in "Recent Exports" list
+- âœ… Success message: "Ledger exported successfully"
+- âœ… File path shown: `data/exports/ledger_YYYYMMDD_HHMMSS.csv`
+- âœ… Row count matches database: 150 entries
+- âœ… File size shown (KB)
+- âœ… Duration shown (seconds)
+- âœ… "Download CSV" button appears
+- âœ… Export appears in "Recent Exports" list
 
 ### Verification:
-1. Click "Download CSV" → file downloads
+1. Click "Download CSV" â†’ file downloads
 2. Open in Excel/Google Sheets:
    - Header row: entry_id, entry_type, associate_alias, ...
    - 150 data rows
@@ -1453,26 +1453,26 @@ SELECT COUNT(*) FROM ledger_entries;
 ### Expected Results:
 
 **Partner-Facing Section:**
-- ✅ Heading: "Monthly Statement for Partner A"
-- ✅ Period ending: 2025-10-31 23:59:59 UTC
-- ✅ **Funding Summary:**
-  - "You funded: €2,000.00 total"
-- ✅ **Entitlement Summary:**
-  - "You're entitled to: €2,300.00"
-- ✅ **Profit/Loss Summary:**
-  - "Your profit: €300.00" (green text)
-- ✅ **50/50 Split:**
-  - "Your share: €150.00 (half of profit)"
-  - "Admin share: €150.00 (half of profit)"
+- âœ… Heading: "Monthly Statement for Partner A"
+- âœ… Period ending: 2025-10-31 23:59:59 UTC
+- âœ… **Funding Summary:**
+  - "You funded: â‚¬2,000.00 total"
+- âœ… **Entitlement Summary:**
+  - "You're entitled to: â‚¬2,300.00"
+- âœ… **Profit/Loss Summary:**
+  - "Your profit: â‚¬300.00" (green text)
+- âœ… **50/50 Split:**
+  - "Your share: â‚¬150.00 (half of profit)"
+  - "Admin share: â‚¬150.00 (half of profit)"
 
 **Internal-Only Section (collapsed):**
-- ✅ "Currently holding: €2,500.00"
-- ✅ "🔴 Holding €200.00 more than entitlement (collect from associate)"
+- âœ… "Currently holding: â‚¬2,500.00"
+- âœ… "ðŸ”´ Holding â‚¬200.00 more than entitlement (collect from associate)"
 
 ### Actions:
-1. Click "Copy Partner Section" → download text file
-2. Open text file → verify shareable format (no DELTA)
-3. Click "Export Full Statement" → verify includes internal section
+1. Click "Copy Partner Section" â†’ download text file
+2. Open text file â†’ verify shareable format (no DELTA)
+3. Click "Export Full Statement" â†’ verify includes internal section
 
 ---
 
@@ -1485,15 +1485,15 @@ SELECT COUNT(*) FROM ledger_entries;
 2. Generate statement
 
 ### Expected Results:
-- ✅ "You funded: €1,000.00 total"
-- ✅ "You're entitled to: €850.00"
-- ✅ "Your loss: €150.00" (red text)
-- ✅ **50/50 Split:**
-  - "Your share of loss: €75.00 (half of loss)"
-  - "Admin share of loss: €75.00 (half of loss)"
-- ✅ **Internal-Only:**
-  - "Currently holding: €800.00"
-  - "🟠 Short €50.00 (owed to associate)"
+- âœ… "You funded: â‚¬1,000.00 total"
+- âœ… "You're entitled to: â‚¬850.00"
+- âœ… "Your loss: â‚¬150.00" (red text)
+- âœ… **50/50 Split:**
+  - "Your share of loss: â‚¬75.00 (half of loss)"
+  - "Admin share of loss: â‚¬75.00 (half of loss)"
+- âœ… **Internal-Only:**
+  - "Currently holding: â‚¬800.00"
+  - "ðŸŸ  Short â‚¬50.00 (owed to associate)"
 
 ---
 
@@ -1504,19 +1504,19 @@ SELECT COUNT(*) FROM ledger_entries;
 ### Steps:
 1. Generate statement for "Partner A" at cutoff: **2025-09-30**
 2. Note values:
-   - NET_DEPOSITS: €1,500
-   - SHOULD_HOLD: €1,600
-   - PROFIT: €100
+   - NET_DEPOSITS: â‚¬1,500
+   - SHOULD_HOLD: â‚¬1,600
+   - PROFIT: â‚¬100
 3. Generate again at cutoff: **2025-10-31**
 4. Note values:
-   - NET_DEPOSITS: €2,000 (includes October deposit)
-   - SHOULD_HOLD: €2,300 (includes October settlements)
-   - PROFIT: €300
+   - NET_DEPOSITS: â‚¬2,000 (includes October deposit)
+   - SHOULD_HOLD: â‚¬2,300 (includes October settlements)
+   - PROFIT: â‚¬300
 
 ### Expected Results:
-- ✅ September cutoff shows lower values (only transactions before Sept 30)
-- ✅ October cutoff shows higher values (includes October transactions)
-- ✅ Difference matches October activity
+- âœ… September cutoff shows lower values (only transactions before Sept 30)
+- âœ… October cutoff shows higher values (includes October transactions)
+- âœ… Difference matches October activity
 
 ### Manual Calculation:
 ```sql
@@ -1545,16 +1545,16 @@ AND created_at_utc <= '2025-10-31T23:59:59Z';
 1. Insert test associate with special characters:
 ```sql
 INSERT INTO associates (associate_id, display_alias)
-VALUES (99, 'José García-López');
+VALUES (99, 'JosÃ© GarcÃ­a-LÃ³pez');
 ```
 2. Insert ledger entry for this associate
 3. Export full ledger
 4. Open CSV in Excel
 
 ### Expected Results:
-- ✅ CSV opens without encoding errors
-- ✅ Special characters displayed correctly: "José García-López"
-- ✅ No corruption or replacement characters
+- âœ… CSV opens without encoding errors
+- âœ… Special characters displayed correctly: "JosÃ© GarcÃ­a-LÃ³pez"
+- âœ… No corruption or replacement characters
 
 ---
 
@@ -1570,11 +1570,11 @@ VALUES (99, 'José García-López');
 5. Click "Re-download" for file 1
 
 ### Expected Results:
-- ✅ Both exports listed with timestamps
-- ✅ Row counts shown
-- ✅ File sizes shown
-- ✅ Re-download button works
-- ✅ Downloaded file matches original export
+- âœ… Both exports listed with timestamps
+- âœ… Row counts shown
+- âœ… File sizes shown
+- âœ… Re-download button works
+- âœ… Downloaded file matches original export
 
 ---
 
@@ -1618,25 +1618,25 @@ DELTA = CURRENT_HOLDING - SHOULD_HOLD
 
 ---
 
-## 🎉 MVP COMPLETION 🎉
+## ðŸŽ‰ MVP COMPLETION ðŸŽ‰
 
 **When all 6 scenarios pass, Epic 6 is complete.**
 
 This marks the completion of the entire MVP:
 
-✅ **Epic 0:** Foundation (database, FX, Telegram)
-✅ **Epic 1:** Bet Ingestion Pipeline
-✅ **Epic 2:** Bet Review & Approval
-✅ **Epic 3:** Surebet Matching & Safety
-✅ **Epic 4:** Coverage Proof & Settlement
-✅ **Epic 5:** Corrections & Reconciliation
-✅ **Epic 6:** Reporting & Audit
+âœ… **Epic 0:** Foundation (database, FX, Telegram)
+âœ… **Epic 1:** Bet Ingestion Pipeline
+âœ… **Epic 2:** Bet Review & Approval
+âœ… **Epic 3:** Surebet Matching & Safety
+âœ… **Epic 4:** Coverage Proof & Settlement
+âœ… **Epic 5:** Corrections & Reconciliation
+âœ… **Epic 6:** Reporting & Audit
 
 **All 10 Functional Requirements implemented!**
 **All 6 System Laws enforced!**
 **System is production-ready!**
 
-🚀 Ready for real-world testing with actual bets! 🚀
+ðŸš€ Ready for real-world testing with actual bets! ðŸš€
 ```
 
 ---
@@ -1695,7 +1695,7 @@ with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
 
 If Excel still has issues:
 1. Open Excel
-2. Data → From Text/CSV
+2. Data â†’ From Text/CSV
 3. Select file
 4. File origin: **65001: Unicode (UTF-8)**
 5. Import
@@ -1787,13 +1787,13 @@ for i, entry in enumerate(entries):
 
 ---
 
-## 🎉 Congratulations on Completing the MVP! 🎉
+## ðŸŽ‰ Congratulations on Completing the MVP! ðŸŽ‰
 
 **Epic 6 is the final MVP epic.** When this epic is complete, you have built a **production-ready surebet accounting system** from scratch.
 
 ### What You've Built:
 
-1. **Ingestion:** Screenshot → OCR → Manual upload
+1. **Ingestion:** Screenshot â†’ OCR â†’ Manual upload
 2. **Review:** Inline editing, approval workflow
 3. **Matching:** Deterministic pairing, risk classification
 4. **Settlement:** Equal-split calculation, frozen FX, append-only ledger
@@ -1802,15 +1802,15 @@ for i, entry in enumerate(entries):
 
 ### System Characteristics:
 
-- ✅ **Append-only ledger** (System Law #1)
-- ✅ **Frozen FX snapshots** (System Law #2)
-- ✅ **Equal-split settlement** (System Law #3)
-- ✅ **VOID participation** (System Law #4)
-- ✅ **Manual grading** (System Law #5)
-- ✅ **No silent messaging** (System Law #6)
-- ✅ **Financial precision** (Decimal throughout, no float)
-- ✅ **Data portability** (CSV exports, not locked in)
-- ✅ **Audit trail** (complete history, no edits)
+- âœ… **Append-only ledger** (System Law #1)
+- âœ… **Frozen FX snapshots** (System Law #2)
+- âœ… **Equal-split settlement** (System Law #3)
+- âœ… **VOID participation** (System Law #4)
+- âœ… **Manual grading** (System Law #5)
+- âœ… **No silent messaging** (System Law #6)
+- âœ… **Financial precision** (Decimal throughout, no float)
+- âœ… **Data portability** (CSV exports, not locked in)
+- âœ… **Audit trail** (complete history, no edits)
 
 ### Next Steps:
 
@@ -1818,7 +1818,7 @@ for i, entry in enumerate(entries):
 2. **Bug fixes and polish**
 3. **Performance optimization** (if needed)
 4. **Operator training** on workflow
-5. **Go live!** 🚀
+5. **Go live!** ðŸš€
 
 ---
 

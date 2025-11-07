@@ -1098,7 +1098,7 @@ def render_create_event_modal(bet_id: int):
     col1, col2 = st.columns(2)
 
     with col1:
-        if st.button("Create Event", type="primary", use_container_width=True):
+        if st.button("Create Event", type="primary", width="stretch"):
             if not event_name:
                 st.error("Event name is required")
                 return None
@@ -1122,7 +1122,7 @@ def render_create_event_modal(bet_id: int):
                 return None
 
     with col2:
-        if st.button("Cancel", use_container_width=True):
+        if st.button("Cancel", width="stretch"):
             st.rerun()
 
     # Return newly created event from session state if exists

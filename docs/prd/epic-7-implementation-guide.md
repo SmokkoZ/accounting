@@ -1,4 +1,4 @@
-# Epic 7: System Administration - Implementation Guide
+﻿# Epic 7: System Administration - Implementation Guide
 
 **Epic Reference**: [epic-7-system-administration.md](./epic-7-system-administration.md)
 **Status**: Ready for Development
@@ -13,10 +13,10 @@ This guide provides detailed, step-by-step implementation instructions for Epic 
 **Epic Goal**: Build web-based CRUD interface for associates, bookmakers, and balance checks.
 
 **Prerequisites**:
-- ✅ Database schema created (Epic 0)
-- ✅ Existing Streamlit app structure
-- ✅ Telegram bot operational (optional, for testing integration)
-- ✅ FXManager service available (for Story 7.3 balance checks)
+- âœ… Database schema created (Epic 0)
+- âœ… Existing Streamlit app structure
+- âœ… Telegram bot operational (optional, for testing integration)
+- âœ… FXManager service available (for Story 7.3 balance checks)
 
 **Key Principle**: Epic 7 uses **existing tables only** (no migrations, no schema changes).
 
@@ -28,34 +28,34 @@ This guide provides detailed, step-by-step implementation instructions for Epic 
 
 ```
 Final_App/
-├── src/
-│   ├── ui/
-│   │   ├── pages/
-│   │   │   ├── 1_incoming_bets.py         # Existing
-│   │   │   ├── 2_verified_bets.py          # Existing
-│   │   │   ├── 3_verified_bets_queue.py    # Existing
-│   │   │   └── 7_admin_associates.py       # NEW (Story 7.1, 7.2, 7.3)
-│   │   └── components/
-│   │       ├── bet_card.py                 # Existing
-│   │       ├── manual_upload.py            # Existing
-│   │       └── associate_forms.py          # NEW (Story 7.1, 7.2)
-│   ├── services/
-│   │   ├── bet_verification.py             # Existing
-│   │   ├── fx_manager.py                   # Existing
-│   │   └── associate_management.py         # NEW (Story 7.1, 7.2, 7.3)
-│   ├── core/
-│   │   ├── database.py                     # Existing
-│   │   └── schema.py                       # Existing (NO CHANGES)
-│   └── integrations/
-│       └── telegram_bot.py                 # Existing (NO CHANGES)
-├── tests/
-│   └── unit/
-│       ├── test_associate_management.py    # NEW
-│       └── test_admin_ui.py                # NEW (optional)
-└── docs/
-    └── prd/
-        ├── epic-7-system-administration.md         # Created in Task 0
-        └── epic-7-implementation-guide.md          # This file
+â”œâ”€â”€ src/
+â”‚   â”œâ”€â”€ ui/
+â”‚   â”‚   â”œâ”€â”€ pages/
+â”‚   â”‚   â”‚   â”œâ”€â”€ 1_incoming_bets.py         # Existing
+â”‚   â”‚   â”‚   â”œâ”€â”€ 2_verified_bets.py          # Existing
+â”‚   â”‚   â”‚   â”œâ”€â”€ 3_verified_bets_queue.py    # Existing
+â”‚   â”‚   â”‚   â””â”€â”€ 7_admin_associates.py       # NEW (Story 7.1, 7.2, 7.3)
+â”‚   â”‚   â””â”€â”€ components/
+â”‚   â”‚       â”œâ”€â”€ bet_card.py                 # Existing
+â”‚   â”‚       â”œâ”€â”€ manual_upload.py            # Existing
+â”‚   â”‚       â””â”€â”€ associate_forms.py          # NEW (Story 7.1, 7.2)
+â”‚   â”œâ”€â”€ services/
+â”‚   â”‚   â”œâ”€â”€ bet_verification.py             # Existing
+â”‚   â”‚   â”œâ”€â”€ fx_manager.py                   # Existing
+â”‚   â”‚   â””â”€â”€ associate_management.py         # NEW (Story 7.1, 7.2, 7.3)
+â”‚   â”œâ”€â”€ core/
+â”‚   â”‚   â”œâ”€â”€ database.py                     # Existing
+â”‚   â”‚   â””â”€â”€ schema.py                       # Existing (NO CHANGES)
+â”‚   â””â”€â”€ integrations/
+â”‚       â””â”€â”€ telegram_bot.py                 # Existing (NO CHANGES)
+â”œâ”€â”€ tests/
+â”‚   â””â”€â”€ unit/
+â”‚       â”œâ”€â”€ test_associate_management.py    # NEW
+â”‚       â””â”€â”€ test_admin_ui.py                # NEW (optional)
+â””â”€â”€ docs/
+    â””â”€â”€ prd/
+        â”œâ”€â”€ epic-7-system-administration.md         # Created in Task 0
+        â””â”€â”€ epic-7-implementation-guide.md          # This file
 ```
 
 **Note**: No new database files, no schema migrations. All database tables already exist.
@@ -367,7 +367,7 @@ class AssociateManagementService:
         cursor.close()
 
         if bet_count > 0:
-            return True, f"⚠️ This bookmaker has {bet_count} bets. Deleting will orphan these records.", bet_count
+            return True, f"âš ï¸ This bookmaker has {bet_count} bets. Deleting will orphan these records.", bet_count
 
         return True, "OK", 0
 
@@ -729,7 +729,7 @@ from src.core.database import get_db_connection
 from src.services.associate_management import AssociateManagementService
 
 
-st.set_page_config(page_title="Associate Management", page_icon="🧑‍💼")
+st.set_page_config(page_title="Associate Management", page_icon="ðŸ§‘â€ðŸ’¼")
 
 # Initialize database connection
 @st.cache_resource
@@ -743,7 +743,7 @@ service = AssociateManagementService(db)
 
 def main():
     """Main page layout."""
-    st.title("🧑‍💼 Associate & Bookmaker Management")
+    st.title("ðŸ§‘â€ðŸ’¼ Associate & Bookmaker Management")
 
     # Tabs
     tab1, tab2 = st.tabs(["Associates & Bookmakers", "Balance History"])
@@ -762,9 +762,9 @@ def render_associates_tab():
     # Search bar and Add button
     col1, col2 = st.columns([3, 1])
     with col1:
-        search_query = st.text_input("🔍 Search by alias", key="search_associates")
+        search_query = st.text_input("ðŸ” Search by alias", key="search_associates")
     with col2:
-        if st.button("➕ Add Associate", use_container_width=True):
+        if st.button("âž• Add Associate", width="stretch"):
             st.session_state.show_add_associate_modal = True
 
     # Get associates
@@ -773,7 +773,7 @@ def render_associates_tab():
 
     # Display associates table
     for associate in associates:
-        with st.expander(f"{'▼' if st.session_state.get(f'expand_{associate['id']}', False) else '▶'} {associate['display_alias']}"):
+        with st.expander(f"{'â–¼' if st.session_state.get(f'expand_{associate['id']}', False) else 'â–¶'} {associate['display_alias']}"):
             render_associate_row(associate)
 
     # Add Associate Modal
@@ -788,13 +788,13 @@ def render_associate_row(associate: dict):
     with col1:
         st.write(f"**Currency:** {associate['home_currency']}")
     with col2:
-        st.write(f"**Admin:** {'✓' if associate['is_admin'] else ''}")
+        st.write(f"**Admin:** {'âœ“' if associate['is_admin'] else ''}")
     with col3:
         st.write(f"**Bookmakers:** {associate['bookmaker_count']}")
     with col4:
-        if st.button("✏️ Edit", key=f"edit_assoc_{associate['id']}"):
+        if st.button("âœï¸ Edit", key=f"edit_assoc_{associate['id']}"):
             st.session_state[f"edit_associate_{associate['id']}"] = True
-        if st.button("🗑️ Delete", key=f"del_assoc_{associate['id']}"):
+        if st.button("ðŸ—‘ï¸ Delete", key=f"del_assoc_{associate['id']}"):
             handle_delete_associate(associate['id'], associate['display_alias'])
 
     # Show bookmakers if expanded
@@ -820,16 +820,16 @@ def render_bookmakers_for_associate(associate_id: int):
             with col1:
                 st.write(f"**{bm['bookmaker_name']}**")
             with col2:
-                status = "✅ Active" if bm['is_active'] else "⚠️ Inactive"
+                status = "âœ… Active" if bm['is_active'] else "âš ï¸ Inactive"
                 st.write(status)
             with col3:
-                chat_status = "✅ Registered" if bm['chat_id'] else "⚠️ Not Registered"
+                chat_status = "âœ… Registered" if bm['chat_id'] else "âš ï¸ Not Registered"
                 st.write(chat_status)
             with col4:
-                if st.button("🗑️", key=f"del_bm_{bm['id']}"):
+                if st.button("ðŸ—‘ï¸", key=f"del_bm_{bm['id']}"):
                     handle_delete_bookmaker(bm['id'], bm['bookmaker_name'])
 
-    if st.button("➕ Add Bookmaker", key=f"add_bm_{associate_id}"):
+    if st.button("âž• Add Bookmaker", key=f"add_bm_{associate_id}"):
         st.session_state[f"show_add_bookmaker_{associate_id}"] = True
 
 
@@ -845,13 +845,13 @@ def render_add_associate_modal():
 
         col1, col2 = st.columns(2)
         with col1:
-            submitted = st.form_submit_button("Save", use_container_width=True)
+            submitted = st.form_submit_button("Save", width="stretch")
         with col2:
-            canceled = st.form_submit_button("Cancel", use_container_width=True)
+            canceled = st.form_submit_button("Cancel", width="stretch")
 
         if submitted:
             if not display_alias:
-                st.error("❌ Alias is required")
+                st.error("âŒ Alias is required")
             else:
                 try:
                     service.create_associate(
@@ -860,11 +860,11 @@ def render_add_associate_modal():
                         is_admin=is_admin,
                         multibook_chat_id=multibook_chat_id if multibook_chat_id else None
                     )
-                    st.success(f"✅ Associate '{display_alias}' created")
+                    st.success(f"âœ… Associate '{display_alias}' created")
                     st.session_state.show_add_associate_modal = False
                     st.rerun()
                 except sqlite3.IntegrityError:
-                    st.error("❌ Alias already exists")
+                    st.error("âŒ Alias already exists")
 
         if canceled:
             st.session_state.show_add_associate_modal = False
@@ -890,9 +890,9 @@ def render_edit_associate_modal(associate: dict):
 
         col1, col2 = st.columns(2)
         with col1:
-            submitted = st.form_submit_button("Save", use_container_width=True)
+            submitted = st.form_submit_button("Save", width="stretch")
         with col2:
-            canceled = st.form_submit_button("Cancel", use_container_width=True)
+            canceled = st.form_submit_button("Cancel", width="stretch")
 
         if submitted:
             try:
@@ -903,11 +903,11 @@ def render_edit_associate_modal(associate: dict):
                     is_admin=is_admin,
                     multibook_chat_id=multibook_chat_id if multibook_chat_id else None
                 )
-                st.success(f"✅ Associate updated")
+                st.success(f"âœ… Associate updated")
                 st.session_state[f"edit_associate_{associate['id']}"] = False
                 st.rerun()
             except sqlite3.IntegrityError:
-                st.error("❌ Alias already exists")
+                st.error("âŒ Alias already exists")
 
         if canceled:
             st.session_state[f"edit_associate_{associate['id']}"] = False
@@ -919,11 +919,11 @@ def handle_delete_associate(associate_id: int, display_alias: str):
     can_delete, reason = service.can_delete_associate(associate_id)
 
     if not can_delete:
-        st.error(f"❌ Cannot delete associate: {reason}")
+        st.error(f"âŒ Cannot delete associate: {reason}")
     else:
-        if st.button(f"⚠️ Confirm delete '{display_alias}'?", key=f"confirm_del_{associate_id}"):
+        if st.button(f"âš ï¸ Confirm delete '{display_alias}'?", key=f"confirm_del_{associate_id}"):
             service.delete_associate(associate_id)
-            st.success(f"✅ Associate '{display_alias}' deleted")
+            st.success(f"âœ… Associate '{display_alias}' deleted")
             st.rerun()
 
 
@@ -934,9 +934,9 @@ def handle_delete_bookmaker(bookmaker_id: int, bookmaker_name: str):
     if bet_count > 0:
         st.warning(warning)
 
-    if st.button(f"⚠️ Confirm delete '{bookmaker_name}'?", key=f"confirm_del_bm_{bookmaker_id}"):
+    if st.button(f"âš ï¸ Confirm delete '{bookmaker_name}'?", key=f"confirm_del_bm_{bookmaker_id}"):
         service.delete_bookmaker(bookmaker_id)
-        st.success(f"✅ Bookmaker '{bookmaker_name}' deleted")
+        st.success(f"âœ… Bookmaker '{bookmaker_name}' deleted")
         st.rerun()
 
 
@@ -983,13 +983,13 @@ def render_add_bookmaker_modal(associate_id: int):
 
         col1, col2 = st.columns(2)
         with col1:
-            submitted = st.form_submit_button("Save", use_container_width=True)
+            submitted = st.form_submit_button("Save", width="stretch")
         with col2:
-            canceled = st.form_submit_button("Cancel", use_container_width=True)
+            canceled = st.form_submit_button("Cancel", width="stretch")
 
         if submitted:
             if not bookmaker_name:
-                st.error("❌ Bookmaker name is required")
+                st.error("âŒ Bookmaker name is required")
             else:
                 try:
                     service.create_bookmaker(
@@ -998,11 +998,11 @@ def render_add_bookmaker_modal(associate_id: int):
                         parsing_profile=parsing_profile if parsing_profile else None,
                         is_active=is_active
                     )
-                    st.success(f"✅ Bookmaker '{bookmaker_name}' added")
+                    st.success(f"âœ… Bookmaker '{bookmaker_name}' added")
                     st.session_state[f"show_add_bookmaker_{associate_id}"] = False
                     st.rerun()
                 except sqlite3.IntegrityError:
-                    st.error("❌ Bookmaker already exists for this associate")
+                    st.error("âŒ Bookmaker already exists for this associate")
 
         if canceled:
             st.session_state[f"show_add_bookmaker_{associate_id}"] = False
@@ -1072,17 +1072,17 @@ def render_balance_history_tab():
 
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Latest Balance", f"€{latest_eur:,.2f}")
+                st.metric("Latest Balance", f"â‚¬{latest_eur:,.2f}")
             with col2:
-                st.metric("Modeled Balance", f"€{modeled_balance_eur:,.2f}")
+                st.metric("Modeled Balance", f"â‚¬{modeled_balance_eur:,.2f}")
             with col3:
-                delta_label = "✅ Balanced" if abs(delta) < 1.0 else f"{'❌' if delta > 1.0 else '⚠️'} {delta:+,.2f} EUR"
+                delta_label = "âœ… Balanced" if abs(delta) < 1.0 else f"{'âŒ' if delta > 1.0 else 'âš ï¸'} {delta:+,.2f} EUR"
                 st.metric("Difference", delta_label)
         else:
             st.info("No balance checks recorded yet")
 
         # Add balance check button
-        if st.button("➕ Add Balance Check"):
+        if st.button("âž• Add Balance Check"):
             st.session_state.show_add_balance_modal = True
 
         # Balance history table
@@ -1100,13 +1100,13 @@ def render_balance_history_tab():
                 with col2:
                     st.write(f"{bc['balance_native']} {bc['native_currency']}")
                 with col3:
-                    st.write(f"€{Decimal(bc['balance_eur']):,.2f}")
+                    st.write(f"â‚¬{Decimal(bc['balance_eur']):,.2f}")
                 with col4:
                     st.write(bc['note'] or "")
                 with col5:
-                    if st.button("🗑️", key=f"del_bc_{bc['id']}"):
+                    if st.button("ðŸ—‘ï¸", key=f"del_bc_{bc['id']}"):
                         service.delete_balance_check(bc['id'])
-                        st.success("✅ Balance check deleted")
+                        st.success("âœ… Balance check deleted")
                         st.rerun()
         else:
             st.info("No balance checks yet")
@@ -1128,18 +1128,18 @@ def render_balance_history_tab():
 
 ## Integration Testing
 
-### Test Scenario 1: Telegram → Web Integration
+### Test Scenario 1: Telegram â†’ Web Integration
 
 1. Add associate via Telegram: `/add_associate "Test Partner" GBP`
-2. Open web UI → verify "Test Partner" appears in table
+2. Open web UI â†’ verify "Test Partner" appears in table
 3. Add bookmaker via web UI: "Bet365"
 4. Telegram bot can now reference: `/list_bookmakers "Test Partner"`
 
-### Test Scenario 2: Web → Telegram Integration
+### Test Scenario 2: Web â†’ Telegram Integration
 
 1. Add associate via web UI: "Web Partner", EUR
 2. Telegram: `/add_bookmaker "Web Partner" "Pinnacle"`
-3. Web UI → verify "Pinnacle" appears under "Web Partner"
+3. Web UI â†’ verify "Pinnacle" appears under "Web Partner"
 
 ### Test Scenario 3: Delete Bookmaker
 

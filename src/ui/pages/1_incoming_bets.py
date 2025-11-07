@@ -1,4 +1,4 @@
-"""
+﻿"""
 Incoming Bets page - displays bets awaiting review.
 
 This page provides:
@@ -14,7 +14,7 @@ import streamlit as st
 import structlog
 from decimal import Decimal
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from src.core.database import get_db_connection
 from src.services.bet_verification import BetVerificationService
@@ -27,7 +27,8 @@ from src.ui.helpers.fragments import (
     render_debug_panel,
     render_debug_toggle,
 )
-from src.ui.ui_components import load_global_styles
+from src.ui.ui_components import advanced_section, form_gated_filters, load_global_styles
+from src.ui.utils.state_management import render_reset_control, safe_rerun
 from src.ui.utils.navigation_links import render_navigation_link
 
 logger = structlog.get_logger()
@@ -95,7 +96,7 @@ def _handle_bet_actions(verification_service: BetVerificationService) -> None:
                     )
                 finally:
                     del st.session_state[key]
-                    st.rerun()
+                    safe_rerun()
                 return
 
             # Process approval with edits
@@ -108,7 +109,7 @@ def _handle_bet_actions(verification_service: BetVerificationService) -> None:
                     # Hand over to the modal flow handled by bet_card
                     st.session_state[f"show_create_event_modal_{bet_id}"] = True
                     del st.session_state[key]
-                    st.rerun()
+                    safe_rerun()
                     return
                 elif event_selection != "(None - Select Event)":
                     # Find event ID from selection
@@ -164,15 +165,15 @@ def _handle_bet_actions(verification_service: BetVerificationService) -> None:
                 logger.info("bet_approved_via_ui", bet_id=bet_id)
 
             except ValueError as e:
-                st.error(f"❌ Validation error: {str(e)}")
+                st.error(f"âŒ Validation error: {str(e)}")
                 logger.error("bet_approval_failed", bet_id=bet_id, error=str(e))
             except Exception as e:
-                st.error(f"❌ Failed to approve bet: {str(e)}")
+                st.error(f"âŒ Failed to approve bet: {str(e)}")
                 logger.error("bet_approval_exception", bet_id=bet_id, error=str(e), exc_info=True)
 
             # Clean up session state
             del st.session_state[key]
-            st.rerun()
+            safe_rerun()
         else:
             # Simple approval without edits (from non-editable mode)
             del st.session_state[key]
@@ -183,57 +184,97 @@ def _handle_bet_actions(verification_service: BetVerificationService) -> None:
         bet_id = int(key.replace("reject_bet_", ""))
 
         # Show rejection modal (modal handles its own state management)
-        _show_rejection_modal(bet_id, verification_service, key)
+        _show_rejection_modal(bet_id, key)
 
 
-def _show_rejection_modal(bet_id: int, verification_service: BetVerificationService, session_key: str) -> None:
-    """Show modal dialog for bet rejection.
+def _reject_bet_with_fresh_connection(
+    bet_id: int, rejection_reason: Optional[str] = None
+) -> None:
+    """Reject a bet using a one-off database connection."""
+    db_action = get_db_connection()
+    try:
+        BetVerificationService(db_action).reject_bet(bet_id, rejection_reason)
+    finally:
+        try:
+            db_action.close()
+        except Exception:
+            pass
 
-    Args:
-        bet_id: ID of bet to reject
-        verification_service: BetVerificationService instance
-        session_key: The session state key that triggered this modal
-    """
-    @st.dialog(f"Reject Bet #{bet_id}?")
-    def rejection_dialog():
-        st.warning("Are you sure you want to reject this bet?")
 
-        reason = st.text_area(
-            "Rejection Reason (optional)",
-            placeholder="e.g., 'Accumulator bet', 'Duplicate', 'Invalid screenshot'",
-            max_chars=500,
-            key=f"rejection_reason_{bet_id}"
-        )
+def _render_rejection_content(bet_id: int, session_key: str) -> None:
+    """Shared UI between dialog and fallback container."""
+    st.warning("Are you sure you want to reject this bet?")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("❌ Confirm Rejection", type="primary", width="stretch", key=f"confirm_reject_{bet_id}"):
-                try:
-                    verification_service.reject_bet(bet_id, reason if reason else None)
-                    # Clean up session state
-                    if session_key in st.session_state:
-                        del st.session_state[session_key]
-                    st.success(f":material/highlight_off: Bet #{bet_id} rejected successfully!")
-                    render_navigation_link(
-                        "pages/5_corrections.py",
-                        label="Track Corrections",
-                        icon=":material/edit_note:",
-                        help_text="Open 'Corrections' via navigation to review rejection fallout.",
-                    )
-                    logger.info("bet_rejected_via_ui", bet_id=bet_id, reason=reason)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Failed to reject bet: {str(e)}")
-                    logger.error("bet_rejection_exception", bet_id=bet_id, error=str(e), exc_info=True)
+    reason = st.text_area(
+        "Rejection Reason (optional)",
+        placeholder="e.g., 'Accumulator bet', 'Duplicate', 'Invalid screenshot'",
+        max_chars=500,
+        key=f"rejection_reason_{bet_id}",
+    )
 
-        with col2:
-            if st.button("Cancel", width="content", key=f"cancel_reject_{bet_id}"):
-                # Clean up session state
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button(
+            ":material/highlight_off: Confirm Rejection",
+            type="primary",
+            width="stretch",
+            key=f"confirm_reject_{bet_id}",
+        ):
+            try:
+                cleaned_reason = reason.strip() if isinstance(reason, str) else None
+                _reject_bet_with_fresh_connection(bet_id, cleaned_reason)
                 if session_key in st.session_state:
                     del st.session_state[session_key]
-                st.rerun()
+                st.success(f":material/highlight_off: Bet #{bet_id} rejected successfully!")
+                render_navigation_link(
+                    "pages/5_corrections.py",
+                    label="Track Corrections",
+                    icon=":material/edit_note:",
+                    help_text="Open 'Corrections' via navigation to review rejection fallout.",
+                )
+                logger.info(
+                    "bet_rejected_via_ui",
+                    bet_id=bet_id,
+                    reason=cleaned_reason,
+                )
+                safe_rerun()
+            except Exception as e:
+                st.error(f":material/error: Failed to reject bet: {str(e)}")
+                logger.error(
+                    "bet_rejection_exception",
+                    bet_id=bet_id,
+                    error=str(e),
+                    exc_info=True,
+                )
 
-    rejection_dialog()
+    with col2:
+        if st.button("Cancel", width="content", key=f"cancel_reject_{bet_id}"):
+            if session_key in st.session_state:
+                del st.session_state[session_key]
+            safe_rerun()
+
+
+def _show_rejection_modal(bet_id: int, session_key: str) -> None:
+    """Show modal dialog for bet rejection with graceful fallback."""
+
+    def _render() -> None:
+        _render_rejection_content(bet_id, session_key)
+
+    title = f"Reject Bet #{bet_id}?"
+    if feature_flags.supports_dialogs():
+
+        @st.dialog(title)
+        def rejection_dialog() -> None:
+            _render()
+
+        rejection_dialog()
+    else:
+        with st.container(border=True):
+            st.markdown(f"### {title}")
+            _render()
+
+
+
 
 
 def _approve_selected_bets(
@@ -301,7 +342,7 @@ def _approve_selected_bets(
         "rejected": 0,
         "errors": failures,
     }
-    st.rerun()
+    safe_rerun()
 
 
 def _reject_selected_bets(
@@ -328,7 +369,7 @@ def _reject_selected_bets(
         "rejected": successes,
         "errors": failures,
     }
-    st.rerun()
+    safe_rerun()
 
 
 _AUTO_REFRESH_INTERVAL_SECONDS = 30
@@ -453,12 +494,12 @@ def _render_incoming_bets_queue(
         approve_clicked = batch_col_approve.button(
             "Approve Selected",
             disabled=not selected_batch_ids,
-            use_container_width=True,
+            width="stretch",
         )
         reject_clicked = batch_col_reject.button(
             "Reject Selected",
             disabled=not selected_batch_ids,
-            use_container_width=True,
+            width="stretch",
         )
 
         if approve_clicked:
@@ -515,6 +556,14 @@ with st.expander(":material/cloud_upload: Upload Manual Bet", expanded=False):
 
 st.markdown("---")
 
+action_cols = st.columns([6, 2])
+with action_cols[1]:
+    render_reset_control(
+        key="incoming_reset",
+        description="Clear filters, dialogs, and auto-refresh toggles for Incoming Bets.",
+        prefixes=("incoming_", "filters_", "dialog_", "advanced_", "approve_", "reject_"),
+    )
+
 # Database connection
 db = get_db_connection()
 
@@ -540,7 +589,7 @@ try:
 
     st.markdown("---")
 
-    with st.expander(":material/tune: Filters", expanded=False):
+    def _render_filter_controls() -> dict[str, object]:
         filter_col1, filter_col2 = st.columns(2)
 
         with filter_col1:
@@ -558,6 +607,7 @@ try:
                 "Filter by Associate",
                 options=associate_options,
                 default=associate_options[:1],
+                key="incoming_filters_associates",
             )
 
         with filter_col2:
@@ -572,7 +622,24 @@ try:
                 "Filter by Confidence",
                 options=confidence_options,
                 index=0,
+                key="incoming_filters_confidence",
             )
+
+        return {
+            "associate_filter": associate_filter,
+            "confidence_filter": confidence_filter,
+        }
+
+    with advanced_section():
+        filter_state, _ = form_gated_filters(
+            "incoming_filters",
+            _render_filter_controls,
+            submit_label="Apply Filters",
+            help_text="Update the queue with the selected filters.",
+        )
+
+    associate_filter = filter_state["associate_filter"]
+    confidence_filter = filter_state["confidence_filter"]
 
     st.markdown("---")
 finally:

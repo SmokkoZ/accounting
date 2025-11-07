@@ -1,4 +1,5 @@
-"""
+from src.ui.utils.state_management import safe_rerun
+﻿"""
 Drawer component for Associate Operations Hub (Story 5.5)
 
 Multi-tab detail surface for associate profile, balance management, and transaction history.
@@ -43,34 +44,34 @@ def render_detail_drawer(
     current_tab = st.session_state.get("hub_drawer_tab", "profile")
     
     if not associate_id:
-        st.error("❌ Associate ID not found")
+        st.error("âŒ Associate ID not found")
         return
     
     # Get associate data
     associate = repository.get_associate_for_edit(associate_id)
     if not associate:
-        st.error(f"❌ Associate {associate_id} not found")
+        st.error(f"âŒ Associate {associate_id} not found")
         return
     
     # Render drawer with tabs
     with st.sidebar:
-        st.markdown("## 👤 Associate Details")
+        st.markdown("## ðŸ‘¤ Associate Details")
         st.markdown(f"**{associate['display_alias']}** (ID: {associate_id})")
         st.divider()
         
         # Close button
-        if st.button("❌ Close", key="hub_drawer_close", use_container_width=True):
+        if st.button("âŒ Close", key="hub_drawer_close", width="stretch"):
             st.session_state["hub_drawer_open"] = False
             # Clear drawer-specific state
             for key in ["hub_drawer_associate_id", "hub_drawer_bookmaker_id", "hub_drawer_tab", "hub_funding_action"]:
                 if key in st.session_state:
                     del st.session_state[key]
-            st.rerun()
+            safe_rerun()
         
         st.divider()
         
         # Tab navigation
-        tab1, tab2, tab3 = st.tabs(["👤 Profile", "💰 Balances", "📊 Transactions"])
+        tab1, tab2, tab3 = st.tabs(["ðŸ‘¤ Profile", "ðŸ’° Balances", "ðŸ“Š Transactions"])
         
         with tab1:
             render_profile_tab(repository, associate, bookmaker_id)
@@ -95,11 +96,11 @@ def render_profile_tab(
         associate: Associate data
         bookmaker_id: Optional bookmaker ID to focus on
     """
-    st.markdown("### 📝 Edit Profile")
+    st.markdown("### ðŸ“ Edit Profile")
     
     # Associate editing form
     with st.form("associate_edit_form"):
-        st.markdown("#### 👤 Associate Information")
+        st.markdown("#### ðŸ‘¤ Associate Information")
         
         col1, col2 = st.columns(2)
         
@@ -144,15 +145,15 @@ def render_profile_tab(
         # Submit button for associate
         col1, col2 = st.columns(2)
         with col1:
-            if st.form_submit_button("💾 Save Associate", type="primary"):
+            if st.form_submit_button("ðŸ’¾ Save Associate", type="primary"):
                 try:
                     # Validation
                     if not display_alias.strip():
-                        st.error("❌ Display alias is required")
+                        st.error("âŒ Display alias is required")
                         return
                     
                     if not validate_currency_code(home_currency):
-                        st.error("❌ Invalid currency code")
+                        st.error("âŒ Invalid currency code")
                         return
                     
                     # Update associate
@@ -165,20 +166,20 @@ def render_profile_tab(
                         telegram_chat_id=telegram_chat_id.strip() or None
                     )
                     
-                    st.success("✅ Associate updated successfully!")
-                    st.rerun()
+                    st.success("âœ… Associate updated successfully!")
+                    safe_rerun()
                     
                 except Exception as e:
-                    st.error(f"❌ Failed to update associate: {e}")
+                    st.error(f"âŒ Failed to update associate: {e}")
         
         with col2:
-            if st.form_submit_button("🔄 Reset"):
+            if st.form_submit_button("ðŸ”„ Reset"):
                 # Reset form to current values
                 for key in ["associate_display_alias", "associate_home_currency", 
                            "associate_telegram_chat_id", "associate_is_admin", "associate_is_active"]:
                     if key in st.session_state:
                         del st.session_state[key]
-                st.rerun()
+                safe_rerun()
     
     st.divider()
     
@@ -194,18 +195,18 @@ def render_bookmaker_management(repository: AssociateHubRepository, associate_id
         repository: AssociateHubRepository instance
         associate_id: Associate ID
     """
-    st.markdown("#### 📊 Bookmaker Management")
+    st.markdown("#### ðŸ“Š Bookmaker Management")
     
     # Get bookmakers for this associate
     bookmakers = repository.list_bookmakers_for_associate(associate_id)
     
     if not bookmakers:
-        st.info("📭 No bookmakers configured for this associate.")
+        st.info("ðŸ“­ No bookmakers configured for this associate.")
         return
     
     # Display existing bookmakers with edit forms
     for bookmaker in bookmakers:
-        with st.expander(f"📊 {bookmaker.bookmaker_name}", expanded=False):
+        with st.expander(f"ðŸ“Š {bookmaker.bookmaker_name}", expanded=False):
             bookmaker_data = {
                 "id": bookmaker.bookmaker_id,
                 "bookmaker_name": bookmaker.bookmaker_name,
@@ -256,10 +257,10 @@ def render_bookmaker_edit_form(
         
         col1, col2 = st.columns(2)
         with col1:
-            if st.form_submit_button("💾 Save Bookmaker", type="primary"):
+            if st.form_submit_button("ðŸ’¾ Save Bookmaker", type="primary"):
                 try:
                     if not bookmaker_name.strip():
-                        st.error("❌ Bookmaker name is required")
+                        st.error("âŒ Bookmaker name is required")
                         return
                     
                     repository.update_bookmaker(
@@ -269,21 +270,21 @@ def render_bookmaker_edit_form(
                         parsing_profile=parsing_profile.strip() or None
                     )
                     
-                    st.success("✅ Bookmaker updated successfully!")
-                    st.rerun()
+                    st.success("âœ… Bookmaker updated successfully!")
+                    safe_rerun()
                     
                 except Exception as e:
-                    st.error(f"❌ Failed to update bookmaker: {e}")
+                    st.error(f"âŒ Failed to update bookmaker: {e}")
         
         with col2:
-            if st.form_submit_button("🔄 Reset"):
+            if st.form_submit_button("ðŸ”„ Reset"):
                 # Reset form
                 for key in [f"bookmaker_name_{bookmaker_data['id']}", 
                            f"bookmaker_active_{bookmaker_data['id']}",
                            f"bookmaker_profile_{bookmaker_data['id']}"]:
                     if key in st.session_state:
                         del st.session_state[key]
-                st.rerun()
+                safe_rerun()
 
 
 def render_balances_tab(
@@ -299,7 +300,7 @@ def render_balances_tab(
         associate: Associate data
         bookmaker_id: Optional bookmaker ID to focus on
     """
-    st.markdown("### 💰 Balance Management")
+    st.markdown("### ðŸ’° Balance Management")
     
     # Get bookmakers for associate
     try:
@@ -309,15 +310,15 @@ def render_balances_tab(
             if b.associate_id == associate["id"]
         ]
     except Exception as e:
-        st.error(f"❌ Failed to load bookmaker balances: {e}")
+        st.error(f"âŒ Failed to load bookmaker balances: {e}")
         return
     
     if not associate_bookmakers:
-        st.info("📭 No bookmakers found for this associate.")
+        st.info("ðŸ“­ No bookmakers found for this associate.")
         return
     
     # Balance check form
-    st.markdown("#### 📝 Add Balance Check")
+    st.markdown("#### ðŸ“ Add Balance Check")
     
     # Bookmaker selection
     bookmaker_options = {
@@ -368,24 +369,24 @@ def render_balances_tab(
                     height=80
                 )
             
-            if st.form_submit_button("💾 Record Balance Check", type="primary"):
+            if st.form_submit_button("ðŸ’¾ Record Balance Check", type="primary"):
                 try:
                     # Validation
                     if not balance_native.strip():
-                        st.error("❌ Balance amount is required")
+                        st.error("âŒ Balance amount is required")
                         return
                     
                     if not validate_currency_code(native_currency):
-                        st.error("❌ Invalid currency code")
+                        st.error("âŒ Invalid currency code")
                         return
                     
                     amount = validate_decimal_input(balance_native)
                     if amount is None:
-                        st.error("❌ Invalid balance amount")
+                        st.error("âŒ Invalid balance amount")
                         return
                     
                     if amount <= 0:
-                        st.error("❌ Balance must be positive")
+                        st.error("âŒ Balance must be positive")
                         return
                     
                     # Record balance check
@@ -397,16 +398,16 @@ def render_balances_tab(
                         note=check_note.strip() or None
                     )
                     
-                    st.success(f"✅ Balance check recorded successfully (ID: {record_id})!")
-                    st.rerun()
+                    st.success(f"âœ… Balance check recorded successfully (ID: {record_id})!")
+                    safe_rerun()
                     
                 except Exception as e:
-                    st.error(f"❌ Failed to record balance check: {e}")
+                    st.error(f"âŒ Failed to record balance check: {e}")
     
     st.divider()
     
     # Balance history
-    st.markdown("#### 📊 Recent Balance Checks")
+    st.markdown("#### ðŸ“Š Recent Balance Checks")
     
     # Filter bookmaker if specified
     display_bookmakers = associate_bookmakers
@@ -417,7 +418,7 @@ def render_balances_tab(
         ]
     
     for bookmaker in display_bookmakers:
-        with st.expander(f"📊 {bookmaker.bookmaker_name}", expanded=False):
+        with st.expander(f"ðŸ“Š {bookmaker.bookmaker_name}", expanded=False):
             render_bookmaker_balance_summary(bookmaker)
 
 
@@ -433,7 +434,7 @@ def render_bookmaker_balance_summary(bookmaker) -> None:
     with col1:
         st.metric(
             "Modeled Balance",
-            f"€{bookmaker.modeled_balance_eur:,.2f}",
+            f"â‚¬{bookmaker.modeled_balance_eur:,.2f}",
             delta="From ledger"
         )
     
@@ -441,23 +442,23 @@ def render_bookmaker_balance_summary(bookmaker) -> None:
         if bookmaker.reported_balance_eur:
             st.metric(
                 "Reported Balance",
-                f"€{bookmaker.reported_balance_eur:,.2f}",
+                f"â‚¬{bookmaker.reported_balance_eur:,.2f}",
                 delta=f"In {bookmaker.native_currency}"
             )
         else:
-            st.metric("Reported Balance", "Not reported", delta="—")
+            st.metric("Reported Balance", "Not reported", delta="â€”")
     
     with col3:
         if bookmaker.difference_eur:
             delta_color = "normal" if abs(bookmaker.difference_eur) <= 10 else "inverse"
             st.metric(
                 "Difference",
-                f"€{abs(bookmaker.difference_eur):,.2f}",
+                f"â‚¬{abs(bookmaker.difference_eur):,.2f}",
                 delta=bookmaker.status_label,
                 delta_color=delta_color
             )
         else:
-            st.metric("Difference", "—", delta="No comparison")
+            st.metric("Difference", "â€”", delta="No comparison")
     
     with col4:
         if bookmaker.last_checked_at_utc:
@@ -487,25 +488,25 @@ def render_transactions_tab(
         associate: Associate data
         bookmaker_id: Optional bookmaker ID to focus on
     """
-    st.markdown("### 📊 Funding & Transactions")
+    st.markdown("### ðŸ“Š Funding & Transactions")
     
     # Funding action
     funding_action = st.session_state.get("hub_funding_action", "deposit")
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("💰 Deposit", key="switch_deposit", use_container_width=True):
+        if st.button("ðŸ’° Deposit", key="switch_deposit", width="stretch"):
             st.session_state["hub_funding_action"] = "deposit"
-            st.rerun()
+            safe_rerun()
     
     with col2:
-        if st.button("💸 Withdraw", key="switch_withdraw", use_container_width=True):
+        if st.button("ðŸ’¸ Withdraw", key="switch_withdraw", width="stretch"):
             st.session_state["hub_funding_action"] = "withdraw"
-            st.rerun()
+            safe_rerun()
     
     # Funding form
     action_text = "Deposit" if funding_action == "deposit" else "Withdrawal"
-    st.markdown(f"#### 💰 Record {action_text}")
+    st.markdown(f"#### ðŸ’° Record {action_text}")
     
     with st.form("funding_transaction_form"):
         col1, col2 = st.columns(2)
@@ -556,24 +557,24 @@ def render_transactions_tab(
                 height=80
             )
         
-        if st.form_submit_button(f"💾 Record {action_text}", type="primary"):
+        if st.form_submit_button(f"ðŸ’¾ Record {action_text}", type="primary"):
             try:
                 # Validation
                 if not amount_native.strip():
-                    st.error("❌ Amount is required")
+                    st.error("âŒ Amount is required")
                     return
                 
                 if not validate_currency_code(native_currency):
-                    st.error("❌ Invalid currency code")
+                    st.error("âŒ Invalid currency code")
                     return
                 
                 amount = validate_decimal_input(amount_native)
                 if amount is None:
-                    st.error("❌ Invalid amount")
+                    st.error("âŒ Invalid amount")
                     return
                 
                 if amount <= 0:
-                    st.error("❌ Amount must be positive")
+                    st.error("âŒ Amount must be positive")
                     return
                 
                 # Create and record transaction
@@ -588,24 +589,24 @@ def render_transactions_tab(
                 
                 ledger_id = funding_service.record_transaction(transaction)
                 
-                st.success(f"✅ {action_text} recorded successfully (ID: {ledger_id})!")
+                st.success(f"âœ… {action_text} recorded successfully (ID: {ledger_id})!")
                 
                 # Clear form
                 for key in ["funding_amount", "funding_currency", "funding_bookmaker", "funding_note"]:
                     if key in st.session_state:
                         del st.session_state[key]
                 
-                st.rerun()
+                safe_rerun()
                 
             except FundingTransactionError as e:
-                st.error(f"❌ {e}")
+                st.error(f"âŒ {e}")
             except Exception as e:
-                st.error(f"❌ Failed to record transaction: {e}")
+                st.error(f"âŒ Failed to record transaction: {e}")
     
     st.divider()
     
     # Transaction history
-    st.markdown("#### 📜 Recent Transactions")
+    st.markdown("#### ðŸ“œ Recent Transactions")
     
     try:
         history = funding_service.get_transaction_history(
@@ -615,13 +616,13 @@ def render_transactions_tab(
         )
         
         if not history:
-            st.info("📭 No recent transactions found.")
+            st.info("ðŸ“­ No recent transactions found.")
             return
         
         # Display transactions
         for transaction in history:
             with st.expander(
-                f"{'💰' if transaction['transaction_type'] == 'DEPOSIT' else '💸'} "
+                f"{'ðŸ’°' if transaction['transaction_type'] == 'DEPOSIT' else 'ðŸ’¸'} "
                 f"{transaction['transaction_type']} - "
                 f"{transaction['created_at_utc'][:10]}",
                 expanded=False
@@ -629,7 +630,7 @@ def render_transactions_tab(
                 render_transaction_details(transaction)
                 
     except Exception as e:
-        st.error(f"❌ Failed to load transaction history: {e}")
+        st.error(f"âŒ Failed to load transaction history: {e}")
 
 
 def render_transaction_details(transaction: Dict[str, Any]) -> None:
@@ -644,7 +645,7 @@ def render_transaction_details(transaction: Dict[str, Any]) -> None:
     with col1:
         st.write(f"**Type:** {transaction['transaction_type']}")
         st.write(f"**Amount:** {transaction['native_currency']} {transaction['amount_native']:,.2f}")
-        st.write(f"**EUR Equivalent:** €{transaction['amount_eur']:,.2f}")
+        st.write(f"**EUR Equivalent:** â‚¬{transaction['amount_eur']:,.2f}")
         st.write(f"**FX Rate:** {transaction['fx_rate_snapshot']}")
     
     with col2:
