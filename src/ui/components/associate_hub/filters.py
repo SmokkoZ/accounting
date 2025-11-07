@@ -13,8 +13,8 @@ from typing import Any, Dict, Iterable, List, Tuple
 import streamlit as st
 
 from src.repositories.associate_hub_repository import AssociateHubRepository
-
 from src.ui.utils.state_management import safe_rerun
+
 ADMIN_LABELS: Dict[bool, str] = {True: "Admin", False: "Non-Admin"}
 STATUS_LABELS: Dict[bool, str] = {True: "Active", False: "Inactive"}
 

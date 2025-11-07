@@ -1,4 +1,4 @@
-﻿"""
+"""
 Incoming Bets page - displays bets awaiting review.
 
 This page provides:
@@ -16,7 +16,7 @@ from decimal import Decimal
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
-from src.core.database import get_db_connection
+from src.ui.cache import get_cached_connection, invalidate_query_cache, query_df
 from src.services.bet_verification import BetVerificationService
 from src.services.matching_service import MatchingService, MatchingSuggestions
 from src.ui.components.manual_upload import render_manual_upload_panel
@@ -28,8 +28,10 @@ from src.ui.helpers.fragments import (
     render_debug_toggle,
 )
 from src.ui.ui_components import advanced_section, form_gated_filters, load_global_styles
-from src.ui.utils.state_management import render_reset_control, safe_rerun
 from src.ui.utils.navigation_links import render_navigation_link
+from src.ui.utils.pagination import apply_pagination, get_total_count, paginate
+from src.ui.utils.performance import track_timing
+from src.ui.utils.state_management import render_reset_control, safe_rerun
 
 logger = structlog.get_logger()
 
@@ -89,6 +91,7 @@ def _handle_bet_actions(verification_service: BetVerificationService) -> None:
                         f":material/flash_on: Bet #{bet_id} approved with suggested match."
                     )
                     logger.info("bet_auto_approved", bet_id=bet_id)
+                    invalidate_query_cache()
                 except Exception as exc:
                     st.error(f"Auto-approval failed: {exc}")
                     logger.error(
@@ -163,6 +166,7 @@ def _handle_bet_actions(verification_service: BetVerificationService) -> None:
                     help_text="Open 'Surebets' from navigation to continue coverage review.",
                 )
                 logger.info("bet_approved_via_ui", bet_id=bet_id)
+                invalidate_query_cache()
 
             except ValueError as e:
                 st.error(f"âŒ Validation error: {str(e)}")
@@ -190,15 +194,10 @@ def _handle_bet_actions(verification_service: BetVerificationService) -> None:
 def _reject_bet_with_fresh_connection(
     bet_id: int, rejection_reason: Optional[str] = None
 ) -> None:
-    """Reject a bet using a one-off database connection."""
-    db_action = get_db_connection()
-    try:
-        BetVerificationService(db_action).reject_bet(bet_id, rejection_reason)
-    finally:
-        try:
-            db_action.close()
-        except Exception:
-            pass
+    """Reject a bet using the cached database connection."""
+    db_action = get_cached_connection()
+    BetVerificationService(db_action).reject_bet(bet_id, rejection_reason)
+    invalidate_query_cache()
 
 
 def _render_rejection_content(bet_id: int, session_key: str) -> None:
@@ -329,6 +328,7 @@ def _approve_selected_bets(
 
             verification_service.approve_bet(bet_id, edited_fields)
             successes += 1
+            invalidate_query_cache()
         except Exception as exc:
             failures.append(f"Bet #{bet_id}: {exc}")
 
@@ -356,6 +356,7 @@ def _reject_selected_bets(
         try:
             verification_service.reject_bet(bet_id)
             successes += 1
+            invalidate_query_cache()
         except Exception as exc:
             failures.append(f"Bet #{bet_id}: {exc}")
 
@@ -385,147 +386,158 @@ def _render_incoming_bets_queue(
     """Render the incoming bets queue within an isolated fragment."""
     st.subheader(":material/list_alt: Bets Awaiting Review")
 
-    try:
-        db = get_db_connection()
-        verification_service = BetVerificationService(db)
-        matching_service = MatchingService(db)
-
-        # Handle any pending approval/rejection actions stored in session state.
-        _handle_bet_actions(verification_service)
-
-        query = """
-            SELECT
-                b.id as bet_id,
-                b.screenshot_path,
-                a.display_alias as associate,
-                bk.bookmaker_name as bookmaker,
-                b.ingestion_source,
-                ce.normalized_event_name as canonical_event,
-                b.selection_text,
-                b.market_code,
-                b.period_scope,
-                b.line_value,
-                b.side,
-                b.stake_original as stake,
-                b.odds_original as odds,
-                b.payout,
-                b.currency,
-                b.kickoff_time_utc,
-                b.normalization_confidence,
-                b.is_multi,
-                b.created_at_utc
-            FROM bets b
-            JOIN associates a ON b.associate_id = a.id
-            JOIN bookmakers bk ON b.bookmaker_id = bk.id
-            LEFT JOIN canonical_events ce ON b.canonical_event_id = ce.id
-            WHERE b.status = 'incoming'
-        """
-
-        query_params: List[Any] = []
-
-        if "All" not in associate_filter and associate_filter:
-            placeholders = ",".join(["?" for _ in associate_filter])
-            query += f" AND a.display_alias IN ({placeholders})"
-            query_params.extend(associate_filter)
-
-        if confidence_filter != "All":
-            if confidence_filter == "High (>=80%)":
-                query += " AND CAST(b.normalization_confidence AS REAL) >= 0.8"
-            elif confidence_filter == "Medium (50-79%)":
-                query += (
-                    " AND CAST(b.normalization_confidence AS REAL) >= 0.5"
-                    " AND CAST(b.normalization_confidence AS REAL) < 0.8"
-                )
-            elif confidence_filter == "Low (<50%)":
-                query += " AND CAST(b.normalization_confidence AS REAL) < 0.5"
-            elif confidence_filter == "Failed":
-                query += (
-                    " AND (b.normalization_confidence IS NULL"
-                    " OR b.normalization_confidence = '')"
-                )
-
-        query += " ORDER BY b.created_at_utc DESC"
-
-        incoming_bets = db.execute(query, query_params).fetchall()
-
-        if not incoming_bets:
-            st.info(":material/inbox: No bets awaiting review! Queue is empty.")
-            return
-
-        st.caption(f"Showing {len(incoming_bets)} bet(s)")
-
-        suggestions_by_bet: Dict[int, MatchingSuggestions] = {}
-        bets_by_id: Dict[int, Dict[str, Any]] = {}
-        selected_batch_ids: List[int] = []
-
-        for bet in incoming_bets:
-            bet_dict = dict(bet)
-            bet_id = bet_dict["bet_id"]
-
-            bets_by_id[bet_id] = bet_dict
-            suggestions = matching_service.suggest_for_bet(bet_dict)
-            suggestions_by_bet[bet_id] = suggestions
-
-            checkbox_key = f"select_bet_{bet_id}"
-            if checkbox_key not in st.session_state:
-                st.session_state[checkbox_key] = False
-
-            select_col, card_col = st.columns([0.1, 0.9])
-            with select_col:
-                selected = st.checkbox("Select", key=checkbox_key)
-            with card_col:
-                render_bet_card(
-                    bet_dict,
-                    show_actions=True,
-                    editable=True,
-                    verification_service=verification_service,
-                    matching_suggestions=suggestions,
-                )
-
-            if selected:
-                selected_batch_ids.append(bet_id)
-
-        st.markdown("---")
-
-        if selected_batch_ids:
-            st.info(f"{len(selected_batch_ids)} bet(s) selected for batch actions.")
-
-        batch_col_approve, batch_col_reject = st.columns(2)
-        approve_clicked = batch_col_approve.button(
-            "Approve Selected",
-            disabled=not selected_batch_ids,
-            width="stretch",
-        )
-        reject_clicked = batch_col_reject.button(
-            "Reject Selected",
-            disabled=not selected_batch_ids,
-            width="stretch",
-        )
-
-        if approve_clicked:
-            _approve_selected_bets(
-                selected_batch_ids,
-                verification_service,
-                bets_by_id,
-                suggestions_by_bet,
-            )
-        if reject_clicked:
-            _reject_selected_bets(selected_batch_ids, verification_service)
-
-        if auto_refresh_enabled and fragments_supported():
-            st.caption(
-                f":material/autorenew: Auto-refreshing every {_AUTO_REFRESH_INTERVAL_SECONDS}s"
-            )
-
-    except Exception as exc:
-        logger.error("failed_to_load_incoming_bets", error=str(exc), exc_info=True)
-        st.error(f"Failed to load incoming bets: {str(exc)}")
-        st.exception(exc)
-    finally:
+    with track_timing("incoming_queue"):
         try:
-            db.close()
-        except Exception:
-            pass
+            db = get_cached_connection()
+            verification_service = BetVerificationService(db)
+            matching_service = MatchingService(db)
+
+            _handle_bet_actions(verification_service)
+
+            base_from = """
+                FROM bets b
+                JOIN associates a ON b.associate_id = a.id
+                JOIN bookmakers bk ON b.bookmaker_id = bk.id
+                LEFT JOIN canonical_events ce ON b.canonical_event_id = ce.id
+            """
+            filters = ["b.status = 'incoming'"]
+            query_params: List[Any] = []
+
+            if "All" not in associate_filter and associate_filter:
+                placeholders = ",".join(["?" for _ in associate_filter])
+                filters.append(f"a.display_alias IN ({placeholders})")
+                query_params.extend(associate_filter)
+
+            if confidence_filter != "All":
+                if confidence_filter == "High (>=80%)":
+                    filters.append("CAST(b.normalization_confidence AS REAL) >= 0.8")
+                elif confidence_filter == "Medium (50-79%)":
+                    filters.append(
+                        "("
+                        "CAST(b.normalization_confidence AS REAL) >= 0.5"
+                        " AND CAST(b.normalization_confidence AS REAL) < 0.8"
+                        ")"
+                    )
+                elif confidence_filter == "Low (<50%)":
+                    filters.append("CAST(b.normalization_confidence AS REAL) < 0.5")
+                elif confidence_filter == "Failed":
+                    filters.append(
+                        "(b.normalization_confidence IS NULL OR b.normalization_confidence = '')"
+                    )
+
+            where_clause = " AND ".join(filters)
+            select_sql = f"""
+                SELECT
+                    b.id as bet_id,
+                    b.screenshot_path,
+                    a.display_alias as associate,
+                    bk.bookmaker_name as bookmaker,
+                    b.ingestion_source,
+                    ce.normalized_event_name as canonical_event,
+                    b.selection_text,
+                    b.market_code,
+                    b.period_scope,
+                    b.line_value,
+                    b.side,
+                    b.stake_original as stake,
+                    b.odds_original as odds,
+                    b.payout,
+                    b.currency,
+                    b.kickoff_time_utc,
+                    b.normalization_confidence,
+                    b.is_multi,
+                    b.created_at_utc
+                {base_from}
+                WHERE {where_clause}
+                ORDER BY b.created_at_utc DESC
+            """
+            count_sql = f"""
+                SELECT COUNT(*)
+                {base_from}
+                WHERE {where_clause}
+            """
+
+            total_rows = get_total_count(count_sql, tuple(query_params))
+            pagination = paginate("incoming_bets", total_rows, label="bets")
+
+            paginated_sql, extra_params = apply_pagination(select_sql, pagination)
+            final_params = tuple(query_params) + extra_params
+            incoming_df = query_df(paginated_sql, final_params)
+            incoming_bets = incoming_df.to_dict(orient="records")
+
+            if not incoming_bets:
+                st.info(":material/inbox: No bets awaiting review! Queue is empty.")
+                return
+
+            st.caption(
+                f"Showing {pagination.start_row}-{pagination.end_row} of {pagination.total_rows} bets"
+            )
+
+            suggestions_by_bet: Dict[int, MatchingSuggestions] = {}
+            bets_by_id: Dict[int, Dict[str, Any]] = {}
+            selected_batch_ids: List[int] = []
+
+            for bet_dict in incoming_bets:
+                bet_id = bet_dict["bet_id"]
+                bets_by_id[bet_id] = bet_dict
+                suggestions = matching_service.suggest_for_bet(bet_dict)
+                suggestions_by_bet[bet_id] = suggestions
+
+                checkbox_key = f"select_bet_{bet_id}"
+                if checkbox_key not in st.session_state:
+                    st.session_state[checkbox_key] = False
+
+                select_col, card_col = st.columns([0.1, 0.9])
+                with select_col:
+                    selected = st.checkbox("Select", key=checkbox_key)
+                with card_col:
+                    render_bet_card(
+                        bet_dict,
+                        show_actions=True,
+                        editable=True,
+                        verification_service=verification_service,
+                        matching_suggestions=suggestions,
+                    )
+
+                if selected:
+                    selected_batch_ids.append(bet_id)
+
+            st.markdown("---")
+
+            if selected_batch_ids:
+                st.info(f"{len(selected_batch_ids)} bet(s) selected for batch actions.")
+
+            batch_col_approve, batch_col_reject = st.columns(2)
+            approve_clicked = batch_col_approve.button(
+                "Approve Selected",
+                disabled=not selected_batch_ids,
+                width="stretch",
+            )
+            reject_clicked = batch_col_reject.button(
+                "Reject Selected",
+                disabled=not selected_batch_ids,
+                width="stretch",
+            )
+
+            if approve_clicked:
+                _approve_selected_bets(
+                    selected_batch_ids,
+                    verification_service,
+                    bets_by_id,
+                    suggestions_by_bet,
+                )
+            if reject_clicked:
+                _reject_selected_bets(selected_batch_ids, verification_service)
+
+            if auto_refresh_enabled and fragments_supported():
+                st.caption(
+                    f":material/autorenew: Auto-refreshing every {_AUTO_REFRESH_INTERVAL_SECONDS}s"
+                )
+
+        except Exception as exc:
+            logger.error("failed_to_load_incoming_bets", error=str(exc), exc_info=True)
+            st.error(f"Failed to load incoming bets: {str(exc)}")
+            st.exception(exc)
 
 
 # Configure page
@@ -564,12 +576,15 @@ with action_cols[1]:
         prefixes=("incoming_", "filters_", "dialog_", "advanced_", "approve_", "reject_"),
     )
 
-# Database connection
-db = get_db_connection()
+# Metrics and filters
+filter_state: dict[str, object] = {
+    "associate_filter": ["All"],
+    "confidence_filter": "All",
+}
 
 try:
     try:
-        counts = db.execute(
+        counts_df = query_df(
             """
             SELECT
                 SUM(CASE WHEN status='incoming' THEN 1 ELSE 0 END) as waiting,
@@ -577,12 +592,16 @@ try:
                 SUM(CASE WHEN status='rejected' AND date(updated_at_utc)=date('now') THEN 1 ELSE 0 END) as rejected_today
             FROM bets
             """
-        ).fetchone()
+        )
+        if counts_df.empty:
+            counts = {"waiting": 0, "approved_today": 0, "rejected_today": 0}
+        else:
+            counts = counts_df.iloc[0]
 
         col1, col2, col3 = st.columns(3)
-        col1.metric("Waiting Review", counts["waiting"] or 0)
-        col2.metric("Approved Today", counts["approved_today"] or 0)
-        col3.metric("Rejected Today", counts["rejected_today"] or 0)
+        col1.metric("Waiting Review", int(counts.get("waiting") or 0))
+        col2.metric("Approved Today", int(counts.get("approved_today") or 0))
+        col3.metric("Rejected Today", int(counts.get("rejected_today") or 0))
     except Exception as exc:
         logger.error("failed_to_load_counters", error=str(exc))
         st.error("Failed to load counters")
@@ -594,15 +613,15 @@ try:
 
         with filter_col1:
             try:
-                associates_data = db.execute(
+                associates_df = query_df(
                     "SELECT DISTINCT display_alias FROM associates ORDER BY display_alias"
-                ).fetchall()
+                )
+                associate_options = ["All"] + associates_df["display_alias"].dropna().tolist()
             except Exception as exc:
                 logger.error("failed_to_load_associates", error=str(exc))
                 st.warning("Unable to load associate list. Showing only 'All'.")
-                associates_data = []
+                associate_options = ["All"]
 
-            associate_options = ["All"] + [a["display_alias"] for a in associates_data]
             associate_filter = st.multiselect(
                 "Filter by Associate",
                 options=associate_options,
@@ -638,12 +657,13 @@ try:
             help_text="Update the queue with the selected filters.",
         )
 
-    associate_filter = filter_state["associate_filter"]
-    confidence_filter = filter_state["confidence_filter"]
-
     st.markdown("---")
-finally:
-    db.close()
+except Exception as exc:
+    logger.error("incoming_filter_failure", error=str(exc), exc_info=True)
+    st.error("Failed to prepare filters; falling back to defaults.")
+
+associate_filter = filter_state["associate_filter"]
+confidence_filter = filter_state["confidence_filter"]
 
 auto_refresh_supported = fragments_supported()
 auto_refresh_enabled = st.toggle(

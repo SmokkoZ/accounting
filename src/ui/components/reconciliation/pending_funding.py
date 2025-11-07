@@ -1,5 +1,4 @@
-from src.ui.utils.state_management import safe_rerun
-﻿"""
+"""
 Pending Funding Events Component.
 
 Implements Story 5.4: Manual entry form and draft management interface
@@ -16,13 +15,14 @@ from src.core.database import get_db_connection
 from src.ui.utils.formatters import format_eur, format_currency_amount
 from src.ui.utils.validators import validate_balance_amount
 from src.utils.logging_config import get_logger
+from src.ui.utils.state_management import safe_rerun
 
 logger = get_logger(__name__)
 
 
 def render_pending_funding_section() -> None:
     """Render the complete pending funding section with form and draft management."""
-    st.markdown("### ðŸ’³ Pending Funding Events")
+    st.markdown(":material/credit_card: Pending Funding Events")
     st.markdown("*Review and approve deposit/withdrawal events so associate balances reflect cash movements.*")
     
     # Initialize funding service in session state if not exists
@@ -48,10 +48,10 @@ def render_pending_funding_section() -> None:
 
 def render_funding_entry_form(funding_service: FundingService) -> None:
     """Render the manual funding entry form."""
-    with st.expander("âž• Add Funding Event", expanded=not funding_service.get_pending_drafts()):
+    with st.expander(":material/playlist_add: Add Funding Event", expanded=not funding_service.get_pending_drafts()):
         associates = get_active_associates()
         if not associates:
-            st.error("âŒ No active associates found. Please add associates first.")
+            st.error("No active associates found. Please add associates first.")
             return
 
         selected_associate = st.selectbox(
@@ -64,7 +64,7 @@ def render_funding_entry_form(funding_service: FundingService) -> None:
         bookmakers = get_bookmakers_for_associate(selected_associate["id"])
         if not bookmakers:
             st.error(
-                "âŒ No bookmakers found for this associate. Add a bookmaker before recording funding."
+                "No bookmakers found for this associate. Add a bookmaker before recording funding."
             )
             st.caption("Tip: Use the Admin & Associates page to register bookmakers.")
             return
@@ -126,9 +126,9 @@ def render_funding_entry_form(funding_service: FundingService) -> None:
             
             # Submit button
             submit_button = st.form_submit_button(
-                "âž• Add Funding Event",
+                ":material/done: Save Funding Entry",
                 type="primary",
-                width="stretch"
+                width="stretch",
             )
             
             if submit_button:
@@ -146,7 +146,7 @@ def render_funding_entry_form(funding_service: FundingService) -> None:
 
 def render_pending_drafts_list(drafts: List[FundingDraft], funding_service: FundingService) -> None:
     """Render the list of pending funding drafts."""
-    st.markdown("#### ðŸ“‹ Pending Funding Drafts")
+    st.markdown("#### Pending Funding Drafts")
     
     for draft in drafts:
         with st.container():
@@ -155,16 +155,15 @@ def render_pending_drafts_list(drafts: List[FundingDraft], funding_service: Fund
             
             with col_info:
                 # Draft details
-                st.markdown(f"**{draft.associate_alias}** â†’ {draft.bookmaker_name} Â· {draft.event_type}")
-                
-                amount_display = format_currency_amount(
-                    draft.amount_native,
-                    draft.currency
+                st.markdown(
+                    f"**{draft.associate_alias}** @ {draft.bookmaker_name} - {draft.event_type}"
                 )
-                st.markdown(f"{amount_display} â€¢ {draft.created_at_utc}")
-                
+
+                amount_display = format_currency_amount(draft.amount_native, draft.currency)
+                st.caption(f"{amount_display} - {draft.created_at_utc}")
+
                 if draft.note:
-                    st.caption(f"ðŸ“ {draft.note}")
+                    st.caption(f":material/sticky_note_2: {draft.note}")
             
             with col_actions:
                 # Action buttons
@@ -172,18 +171,18 @@ def render_pending_drafts_list(drafts: List[FundingDraft], funding_service: Fund
                 
                 with col_accept:
                     if st.button(
-                        "âœ…",
+                        ":material/check:",
                         key=f"accept_{draft.draft_id}",
                         help="Accept and create ledger entry",
-                        type="primary"
+                        type="primary",
                     ):
                         handle_accept_draft(funding_service, draft.draft_id)
-                
+
                 with col_reject:
                     if st.button(
-                        "âŒ",
+                        ":material/close:",
                         key=f"reject_{draft.draft_id}",
-                        help="Reject and discard draft"
+                        help="Reject and discard draft",
                     ):
                         handle_reject_draft(funding_service, draft.draft_id)
         
@@ -192,13 +191,13 @@ def render_pending_drafts_list(drafts: List[FundingDraft], funding_service: Fund
 
 def render_funding_history(funding_service: FundingService) -> None:
     """Render the funding history section."""
-    st.markdown("#### ðŸ“š Recent Funding History")
+    st.markdown("#### Recent Funding History")
     
     try:
         history = funding_service.get_funding_history(days=30)
         
         if not history:
-            st.info("ðŸ“Š No funding events in the last 30 days.")
+            st.info("No funding events in the last 30 days.")
             return
         
         # Display history in a table
@@ -220,17 +219,17 @@ def render_funding_history(funding_service: FundingService) -> None:
                     amount_eur = format_eur(entry['amount_eur'])
                     
                     st.markdown(
-                        f"**{entry['associate_alias']}** â†’ {entry['bookmaker_name']} - {amount_native} ({amount_eur})"
+                        f"**{entry['associate_alias']}** @ {entry['bookmaker_name']} - {amount_native} ({amount_eur})"
                     )
-                    st.caption(f"{entry['created_at_utc']}")
+                    st.caption(entry["created_at_utc"])
                     
                     if entry['note']:
-                        st.caption(f"ðŸ“ {entry['note']}")
+                        st.caption(f":material/sticky_note_2: {entry['note']}")
                 
                 st.divider()
     
     except FundingError as e:
-        st.error(f"âŒ Failed to load funding history: {e}")
+        st.error(f"Failed to load funding history: {e}")
 
 
 def handle_funding_form_submit(
@@ -248,7 +247,7 @@ def handle_funding_form_submit(
         # Validate amount
         is_valid, error_msg = validate_balance_amount(amount_str)
         if not is_valid:
-            st.error(f"âŒ {error_msg}")
+            st.error(f" {error_msg}")
             return
         
         amount = Decimal(amount_str)
@@ -264,11 +263,11 @@ def handle_funding_form_submit(
             bookmaker_name=bookmaker_name
         )
         
-        st.success(f"âœ… Funding draft created for {bookmaker_name}!")
+        st.success(f"Funding draft created for {bookmaker_name}.")
         safe_rerun()
         
     except FundingError as e:
-        st.error(f"âŒ Failed to create funding draft: {e}")
+        st.error(f"Failed to create funding draft: {e}")
         logger.error(
             "funding_draft_creation_failed",
             associate_id=associate_id,
@@ -285,11 +284,11 @@ def handle_accept_draft(funding_service: FundingService, draft_id: str) -> None:
     try:
         ledger_id = funding_service.accept_funding_draft(draft_id)
         
-        st.success(f"âœ… Funding event accepted! Ledger entry #{ledger_id} created.")
+        st.success(f" Funding event accepted! Ledger entry #{ledger_id} created.")
         safe_rerun()
         
     except FundingError as e:
-        st.error(f"âŒ Failed to accept funding draft: {e}")
+        st.error(f"Failed to accept funding draft: {e}")
         logger.error(
             "funding_draft_acceptance_failed",
             draft_id=draft_id,
@@ -302,11 +301,11 @@ def handle_reject_draft(funding_service: FundingService, draft_id: str) -> None:
     try:
         funding_service.reject_funding_draft(draft_id)
         
-        st.info("ðŸ“‹ Funding event discarded.")
+        st.info("Funding event discarded.")
         safe_rerun()
         
     except FundingError as e:
-        st.error(f"âŒ Failed to reject funding draft: {e}")
+        st.error(f"Failed to reject funding draft: {e}")
         logger.error(
             "funding_draft_rejection_failed",
             draft_id=draft_id,
@@ -338,7 +337,7 @@ def get_active_associates() -> List[dict]:
         
     except Exception as e:
         logger.error("failed_to_load_associates", error=str(e))
-        st.error("âŒ Failed to load associates from database.")
+        st.error("Failed to load associates from database.")
         return []
 
 
@@ -368,7 +367,7 @@ def get_bookmakers_for_associate(associate_id: int) -> List[dict]:
         return bookmakers
     except Exception as e:
         logger.error("failed_to_load_bookmakers", associate_id=associate_id, error=str(e))
-        st.error("âŒ Failed to load bookmakers for the selected associate.")
+        st.error("Failed to load bookmakers for the selected associate.")
         return []
 
 
@@ -386,3 +385,5 @@ def get_supported_currencies() -> List[str]:
         "SEK",  # Swedish Krona
         "DKK",  # Danish Krone
     ]
+
+

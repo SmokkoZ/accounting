@@ -1,4 +1,4 @@
-﻿"""
+"""
 Monthly Statements Page
 
 Generate per-associate statements showing funding, entitlement, and 50/50 split.
@@ -123,7 +123,7 @@ def get_associates() -> List[Dict[str, int]]:
 
 def render_input_panel() -> tuple[int, str]:
     """Render input panel with associate selector and date picker."""
-    st.subheader("ðŸ“Š Statement Parameters")
+    st.subheader(":material/insights: Statement Parameters")
     
     col1, col2 = st.columns(2)
     
@@ -158,7 +158,7 @@ def render_input_panel() -> tuple[int, str]:
         # Convert to ISO format with time
         cutoff_datetime = cutoff_date.strftime("%Y-%m-%dT23:59:59Z")
     
-    st.caption("ðŸ’¡ All transactions up to and including this date will be included")
+    st.caption(":material/lightbulb: All transactions up to and including this date will be included")
     
     return associate_id, cutoff_datetime
 
@@ -166,7 +166,7 @@ def render_input_panel() -> tuple[int, str]:
 def render_statement_header(calc: StatementCalculations) -> None:
     """Render statement header with associate info and timestamps."""
     st.markdown("---")
-    st.header(f"ðŸ“‹ Monthly Statement for {calc.associate_name}")
+    st.header(f":material/description: Monthly Statement for {calc.associate_name}")
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -180,7 +180,7 @@ def render_statement_header(calc: StatementCalculations) -> None:
 def render_partner_facing_section(partner_section: PartnerFacingSection) -> None:
     """Render partner-facing statement section."""
     st.markdown("---")
-    st.subheader("ðŸ’° Partner Statement")
+    st.subheader(":material/savings: Partner Statement")
     
     # Funding Summary
     st.markdown("##### Funding Summary")
@@ -194,12 +194,13 @@ def render_partner_facing_section(partner_section: PartnerFacingSection) -> None
     
     # Profit/Loss Summary
     st.markdown("##### Profit/Loss Summary")
-    if "ðŸŸ¢" in partner_section.profit_loss_summary:
-        st.success(partner_section.profit_loss_summary)
-    elif "ðŸ”´" in partner_section.profit_loss_summary:
-        st.error(partner_section.profit_loss_summary)
+    summary = partner_section.profit_loss_summary
+    if summary.startswith("Profit:"):
+        st.success(summary)
+    elif summary.startswith("Loss:"):
+        st.error(summary)
     else:
-        st.info(partner_section.profit_loss_summary)
+        st.info(summary)
     st.caption("Raw profit = Entitlement - Funding")
     
     # 50/50 Split Calculation
@@ -216,7 +217,7 @@ def render_partner_facing_section(partner_section: PartnerFacingSection) -> None
 def render_internal_section(internal_section: InternalSection) -> None:
     """Render internal-only statement section."""
     st.markdown("---")
-    st.subheader("ðŸ”’ Internal Reconciliation")
+    st.subheader(":material/lock: Internal Reconciliation")
     
     # Current Holdings
     st.markdown("##### Current Holdings")
@@ -225,15 +226,15 @@ def render_internal_section(internal_section: InternalSection) -> None:
     
     # Reconciliation Delta
     st.markdown("##### Reconciliation Delta")
-    delta_emoji = internal_section.delta_emoji
+    delta_indicator = internal_section.delta_indicator
     delta_status = internal_section.reconciliation_delta
     
-    if delta_emoji == "ðŸŸ¢":
-        st.success(f"{delta_emoji} {delta_status}")
-    elif delta_emoji == "ðŸ”´":
-        st.error(f"{delta_emoji} {delta_status}")
+    if delta_indicator == "balanced":
+        st.success(delta_status)
+    elif delta_indicator == "over":
+        st.error(delta_status)
     else:
-        st.warning(f"{delta_emoji} {delta_status}")
+        st.warning(delta_status)
     
     st.caption("Delta = Current Holdings - Should Hold")
 
@@ -241,7 +242,7 @@ def render_internal_section(internal_section: InternalSection) -> None:
 def render_export_options(calc: StatementCalculations, partner_section: PartnerFacingSection) -> None:
     """Render export functionality buttons."""
     st.markdown("---")
-    st.subheader("ðŸ“¤ Export Options")
+    st.subheader(":material/upload_file: Export Options")
     
     col1, col2, col3 = st.columns(3)
     
@@ -262,14 +263,14 @@ Period Ending: {calc.cutoff_date.split('T')[0]}
 {partner_section.split_calculation["explanation"]}
         """.strip()
         
-        if st.button("ðŸ“‹ Copy to Clipboard", key="copy_clipboard", width="stretch"):
+        if st.button(":material/content_copy: Copy to Clipboard", key="copy_clipboard", width="stretch"):
             st.session_state.clipboard_text = clipboard_text
-            st.success("âœ… Partner statement copied to session state!")
+            st.success("Partner statement copied to session state.")
             st.code(clipboard_text)
     
     with col2:
         # Export to CSV
-        if st.button("ðŸ“„ Export to CSV", key="export_csv", width="stretch"):
+        if st.button(":material/grid_on: Export to CSV", key="export_csv", width="stretch"):
             with st.spinner("Generating CSV export..."):
                 try:
                     export_service = StatementService()
@@ -286,9 +287,9 @@ Period Ending: {calc.cutoff_date.split('T')[0]}
                             df.to_csv(f.name, index=False)
                             temp_path = f.name
                         
-                        st.success(f"âœ… CSV exported with {len(transactions)} transactions")
+                        st.success(f"CSV exported with {len(transactions)} transactions")
                         st.download_button(
-                            label="ðŸ“¥ Download CSV",
+                            label="Download CSV",
                             data=open(temp_path, 'rb').read(),
                             file_name=f"statement_{calc.associate_name}_{calc.cutoff_date.split('T')[0]}.csv",
                             mime="text/csv"
@@ -300,7 +301,7 @@ Period Ending: {calc.cutoff_date.split('T')[0]}
                         st.info("No transactions found for this period")
                         
                 except Exception as e:
-                    st.error(f"âŒ CSV export failed: {str(e)}")
+                    st.error(f"CSV export failed: {str(e)}")
     
     with col3:
         st.markdown("### PDF Preview")
@@ -310,17 +311,17 @@ Period Ending: {calc.cutoff_date.split('T')[0]}
 def render_generate_button(associate_id: int, cutoff_date: str) -> bool:
     """Render generate statement button with validation."""
     if not associate_id or not cutoff_date:
-        st.warning("âš ï¸ Please select an associate and cutoff date")
+        st.warning("Please select an associate and cutoff date.")
         return False
     
     # Validate cutoff date is not in future
     statement_service = StatementService()
     if not statement_service.validate_cutoff_date(cutoff_date):
-        st.error("âŒ Cutoff date cannot be in future")
+        st.error("Cutoff date cannot be in future.")
         return False
     
     return st.button(
-        "ðŸš€ Generate Statement",
+        ":material/rocket_launch: Generate Statement",
         type="primary",
         width="stretch",
         key="generate_statement"
@@ -329,7 +330,7 @@ def render_generate_button(associate_id: int, cutoff_date: str) -> bool:
 
 def render_statement_details(calc: StatementCalculations, *, expanded: bool = False) -> None:
     """Render detailed transaction table."""
-    with st.expander("ðŸ“Š Transaction Details", expanded=expanded):
+    with st.expander(":material/insights: Transaction Details", expanded=expanded):
         try:
             statement_service = StatementService()
             transactions = statement_service.get_associate_transactions(
@@ -412,7 +413,7 @@ def _render_statement_output(
 def render_validation_errors(errors: List[str]) -> None:
     """Render validation error messages."""
     for error in errors:
-        st.error(f"âŒ {error}")
+        st.error(f"{error}")
 
 
 def main() -> None:
@@ -492,14 +493,14 @@ def main() -> None:
                     
                     st.session_state.current_statement = calc
                     st.session_state.statement_generated = True
-                    st.success(f"Ã¢ÂœÂ… Statement generated for {calc.associate_name}")
+                    st.success(f"Statement generated for {calc.associate_name}")
                     show_success_toast(f"Statement generated for {calc.associate_name}")
                     safe_rerun()
                     
                 except ValueError as e:
-                    st.error(f"âŒ Validation Error: {str(e)}")
+                    st.error(f"Validation Error: {str(e)}")
                 except Exception as e:
-                    st.error(f"âŒ Statement generation failed: {str(e)}")
+                    st.error(f"Statement generation failed: {str(e)}")
     
     # Display generated statement
     if st.session_state.statement_generated and st.session_state.current_statement:
@@ -514,7 +515,7 @@ def main() -> None:
 
     # Instructions
     # Instructions
-    with st.expander("ðŸ“– Statement Information", expanded=False):
+    with st.expander(":material/menu_book: Statement Information", expanded=False):
         st.markdown("""
         ### About Monthly Statements
         
@@ -545,6 +546,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
 
 
 

@@ -12,7 +12,7 @@ from decimal import Decimal
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from src.core.database import get_db_connection
+from src.ui.cache import get_cached_connection
 from src.services.reconciliation_service import ReconciliationService, AssociateBalance
 from src.services.bookmaker_balance_service import BookmakerBalanceService
 from src.services.correction_service import CorrectionService, CorrectionError
@@ -23,6 +23,8 @@ from src.ui.components.reconciliation.pending_funding import (
     render_pending_funding_section,
 )
 from src.ui.ui_components import advanced_section, form_gated_filters, load_global_styles
+from src.ui.utils.pagination import paginate
+from src.ui.utils.performance import track_timing
 from src.ui.utils.state_management import render_reset_control, safe_rerun
 from src.ui.helpers.dialogs import open_dialog, render_correction_dialog
 from src.ui.helpers.fragments import (
@@ -81,7 +83,7 @@ def _render_filter_controls() -> Dict[str, object]:
         slider_api = getattr(st, "slider", None)
         if callable(slider_api):
             min_delta = slider_api(
-                "Min |Δ| (EUR)",
+                "Min |Delta| (EUR)",
                 min_value=0,
                 max_value=200,
                 value=10,
@@ -91,7 +93,7 @@ def _render_filter_controls() -> Dict[str, object]:
             )
         else:
             min_delta = st.number_input(
-                "Min |Δ| (EUR)",
+                "Min |Delta| (EUR)",
                 min_value=0,
                 max_value=200,
                 value=10,
@@ -118,11 +120,11 @@ with advanced_section():
 def format_currency_with_sign(value: Decimal) -> str:
     """Format currency with explicit + or - sign."""
     if value > 0:
-        return f"+€{value:,.2f}"
+        return f"+EUR {value:,.2f}"
     elif value < 0:
-        return f"-€{abs(value):,.2f}"
+        return f"-EUR {abs(value):,.2f}"
     else:
-        return f"€{value:,.2f}"
+        return f"EUR {value:,.2f}"
 
 
 def get_status_color(status: str) -> str:
@@ -166,62 +168,77 @@ def _render_reconciliation_details_fragment(
     bookmaker_balances,
 ) -> None:
     """Render associate cards, drilldowns, and correction flows inside a fragment."""
-    for entry in balance_entries:
-        balance: AssociateBalance = entry["balance"]
-        explanation: str = entry["explanation"]
+    total_rows = len(balance_entries)
+    pagination = paginate(
+        "reconciliation_balances",
+        total_rows,
+        label="associates",
+    )
+    start = pagination.offset
+    end = start + pagination.limit
+    page_entries = balance_entries[start:end]
 
-        with st.container():
-            col_icon, col_alias, col_deposits, col_should, col_current, col_delta = st.columns(
-                [0.5, 2, 1.5, 1.5, 1.5, 1.5]
-            )
+    if total_rows:
+        st.caption(
+            f"Showing {pagination.start_row}-{pagination.end_row} of {total_rows} associates"
+        )
 
-            with col_icon:
-                st.markdown(f"<h2 style='margin:0'>{balance.status_icon}</h2>", unsafe_allow_html=True)
+    with track_timing("reconciliation_cards"):
+        for entry in page_entries:
+            balance: AssociateBalance = entry["balance"]
+            explanation: str = entry["explanation"]
 
-            with col_alias:
-                st.markdown(f"**{balance.associate_alias}**")
-                st.caption(balance.status.capitalize())
+            with st.container():
+                cols = st.columns([0.5, 2, 1.5, 1.5, 1.5, 1.5])
+                col_icon, col_alias, col_deposits, col_should, col_current, col_delta = cols
 
-            with col_deposits:
-                st.metric(
-                    "NET DEPOSITS",
-                    f"EUR {balance.net_deposits_eur:,.2f}",
-                    help="Cash you put in (deposits - withdrawals)",
-                )
+                with col_icon:
+                    st.markdown(f"<h2 style='margin:0'>{balance.status_icon}</h2>", unsafe_allow_html=True)
 
-            with col_should:
-                st.metric(
-                    "SHOULD HOLD",
-                    f"EUR {balance.should_hold_eur:,.2f}",
-                    help="Your share of the pot (entitlement from settled bets)",
-                )
+                with col_alias:
+                    st.markdown(f"**{balance.associate_alias}**")
+                    st.caption(balance.status.capitalize())
 
-            with col_current:
-                st.metric(
-                    "CURRENT HOLDING",
-                    f"EUR {balance.current_holding_eur:,.2f}",
-                    help="What you're holding in bookmaker accounts",
-                )
+                with col_deposits:
+                    st.metric(
+                        "NET DEPOSITS",
+                        f"EUR {balance.net_deposits_eur:,.2f}",
+                        help="Cash you put in (deposits - withdrawals)",
+                    )
 
-            with col_delta:
-                delta_formatted = format_currency_with_sign(balance.delta_eur)
-                st.metric(
-                    "DELTA",
-                    delta_formatted,
-                    help="Difference between current holdings and entitlement",
-                )
+                with col_should:
+                    st.metric(
+                        "SHOULD HOLD",
+                        f"EUR {balance.should_hold_eur:,.2f}",
+                        help="Your share of the pot (entitlement from settled bets)",
+                    )
 
-            with st.expander(":material/info: View Details"):
-                bg_color = get_status_color(balance.status)
+                with col_current:
+                    st.metric(
+                        "CURRENT HOLDING",
+                        f"EUR {balance.current_holding_eur:,.2f}",
+                        help="What you're holding in bookmaker accounts",
+                    )
 
-                st.markdown(
-                    f"""
-                    <div style='background-color: {bg_color}; padding: 15px; border-radius: 5px; margin: 10px 0;'>
-                        <p style='margin: 0; font-size: 16px;'>{explanation}</p>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                with col_delta:
+                    delta_formatted = format_currency_with_sign(balance.delta_eur)
+                    st.metric(
+                        "DELTA",
+                        delta_formatted,
+                        help="Difference between current holdings and entitlement",
+                    )
+
+                with st.expander(":material/info: View Details"):
+                    bg_color = get_status_color(balance.status)
+
+                    st.markdown(
+                        f"""
+                        <div style='background-color: {bg_color}; padding: 15px; border-radius: 5px; margin: 10px 0;'>
+                            <p style='margin: 0; font-size: 16px;'>{explanation}</p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
                 st.markdown("##### Financial Breakdown")
 
@@ -432,7 +449,7 @@ reconciliation_service: Optional[ReconciliationService] = None
 bookmaker_service: Optional[BookmakerBalanceService] = None
 
 try:
-    db = get_db_connection()
+    db = get_cached_connection()
     reconciliation_service = ReconciliationService(db)
     bookmaker_service = BookmakerBalanceService(db)
     balances = reconciliation_service.get_associate_balances()
@@ -440,7 +457,7 @@ try:
 
     if not balances:
         st.info(
-            "📊 No associate balance data available yet. Add deposits or settle bets to populate this view."
+            "No associate balance data available yet. Add deposits or settle bets to populate this view."
         )
         st.stop()
 
@@ -461,7 +478,7 @@ try:
     csv_data = export_to_csv(filtered_balances)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     export_placeholder.download_button(
-        label="📥 Export CSV",
+        label="Export CSV",
         data=csv_data,
         file_name=f"reconciliation_{timestamp}.csv",
         mime="text/csv",
@@ -475,11 +492,11 @@ try:
 
     metric_col1, metric_col2, metric_col3 = st.columns(3)
     with metric_col1:
-        st.metric("🔴 Overholders", total_overholders)
+        st.metric("Overholders", total_overholders)
     with metric_col2:
-        st.metric("🟢 Balanced", total_balanced)
+        st.metric("Balanced", total_balanced)
     with metric_col3:
-        st.metric("🟠 Short", total_short)
+        st.metric("Short", total_short)
 
     st.divider()
 
@@ -507,14 +524,14 @@ try:
 
 except Exception as e:
     logger.error("reconciliation_dashboard_error", error=str(e), exc_info=True)
-    st.error(f"❌ Error loading reconciliation data: {str(e)}")
-    st.info("💡 Try refreshing the page or contact support if the issue persists.")
+    st.error(f"Error loading reconciliation data: {str(e)}")
+    st.info("Try refreshing the page or contact support if the issue persists.")
 
 finally:
     if bookmaker_service is not None:
         bookmaker_service.close()
     if reconciliation_service is not None:
         reconciliation_service.close()
-    if db is not None:
-        db.close()
+
+
 

@@ -54,7 +54,7 @@ class InternalSection:
     current_holdings: str
     reconciliation_delta: str
     delta_status: str
-    delta_emoji: str
+    delta_indicator: str
 
 
 class StatementService:
@@ -262,37 +262,37 @@ class StatementService:
         current_holdings = self._format_currency(calc.current_holding_eur)
         delta_amount = self._format_currency(abs(calc.delta_eur))
         
-        # Determine delta status and emoji
+        # Determine delta status indicators
         if calc.delta_eur > 0:
             delta_status = f"Holding more by {delta_amount}"
-            delta_emoji = "🔴"
+            delta_indicator = "over"
         elif calc.delta_eur < 0:
             delta_status = f"Short by {delta_amount}"
-            delta_emoji = "🟠"
+            delta_indicator = "short"
         else:
             delta_status = "Balanced"
-            delta_emoji = "🟢"
+            delta_indicator = "balanced"
         
         return InternalSection(
             current_holdings=f"Currently holding: {current_holdings}",
             reconciliation_delta=delta_status,
             delta_status=delta_status,
-            delta_emoji=delta_emoji
+            delta_indicator=delta_indicator
         )
     
     def _format_currency(self, amount: Decimal) -> str:
         """Format Decimal as Euro currency with commas."""
-        return f"€{amount:,.2f}"
+        return f"EUR {amount:,.2f}"
     
     def _format_profit_loss(self, amount: Decimal) -> str:
         """Format profit/loss with color coding indicator."""
         formatted_amount = self._format_currency(amount)
         if amount > 0:
-            return f"🟢 Profit: {formatted_amount}"
+            return f"Profit: {formatted_amount}"
         elif amount < 0:
-            return f"🔴 Loss: {formatted_amount}"
+            return f"Loss: {formatted_amount}"
         else:
-            return f"⚪ Break-even: {formatted_amount}"
+            return f"Break-even: {formatted_amount}"
     
     def get_associate_transactions(self, associate_id: int, cutoff_date: str) -> List[Dict]:
         """

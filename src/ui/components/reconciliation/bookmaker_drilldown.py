@@ -15,9 +15,8 @@ from src.services.bookmaker_balance_service import BookmakerBalance
 from src.ui.utils.formatters import format_currency_with_symbol
 from src.ui.utils.validators import VALID_CURRENCIES, validate_balance_amount
 from src.utils.datetime_helpers import parse_utc_iso
-
-
 from src.ui.utils.state_management import safe_rerun
+
 UpdateBalanceCallback = Callable[
     [int, int, Decimal, str, str, Optional[str]], None
 ]  # associate_id, bookmaker_id, amount_native, currency, check_date_utc, note

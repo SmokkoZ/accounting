@@ -134,7 +134,7 @@ def form_gated_filters(
             values = builder()
             submitted = st.form_submit_button(
                 submit_label,
-                use_container_width=True,
+                width="stretch",
                 help=help_text,
             )
     else:
@@ -142,7 +142,7 @@ def form_gated_filters(
         submitted = st.button(
             submit_label,
             key=f"{form_id}__fallback_submit",
-            use_container_width=True,
+            width="stretch",
             help=help_text,
         )
 

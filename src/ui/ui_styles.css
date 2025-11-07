@@ -205,6 +205,95 @@ footer,
   color: var(--muted);
 }
 
+/* Compact suggestion chip styles */
+.sb-chip{
+  display:inline-block;
+  max-width:100%;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  font-size:12px;
+  line-height:18px;
+  padding:2px 8px;
+  border-radius:9999px;
+  border:1px solid var(--border);
+  background: var(--bg-muted, rgba(255,255,255,0.03));
+  margin-right:6px;
+  color: var(--text);
+}
+
+.suggestion-accordion{
+  border:1px solid var(--border);
+  border-radius:10px;
+  background:rgba(17,25,40,0.85);
+  margin-bottom:10px;
+}
+
+.suggestion-accordion[data-variant="success"]{
+  border-color:rgba(34,197,94,0.4);
+}
+
+.suggestion-accordion[data-variant="warning"]{
+  border-color:rgba(245,158,11,0.4);
+}
+
+.suggestion-accordion summary{
+  list-style:none;
+  padding:10px 12px;
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:space-between;
+  cursor:pointer;
+}
+
+.suggestion-accordion summary::-webkit-details-marker{
+  display:none;
+}
+
+.suggestion-title{
+  font-weight:600;
+  color:var(--text);
+}
+
+.suggestion-meta{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  margin-left:auto;
+}
+
+.suggestion-body{
+  padding:10px 12px 12px;
+  border-top:1px solid var(--border);
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+
+.suggestion-detail-row{
+  display:flex;
+  gap:6px;
+  font-size:13px;
+  color:var(--muted);
+}
+
+.suggestion-detail-row .detail-label{
+  font-weight:600;
+  color:var(--text);
+  min-width:80px;
+}
+
+.suggestion-detail-row .detail-value{
+  flex:1;
+  color:var(--muted);
+}
+
+.stPopover div[data-baseweb="popover"] { 
+  max-width: 420px; 
+}
+
 @media (max-width: 768px) {
   .toolbar {
     flex-direction: column;

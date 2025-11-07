@@ -1,4 +1,3 @@
-from src.ui.utils.state_management import safe_rerun
 ﻿"""
 Listing component for Associate Operations Hub (Story 5.5)
 
@@ -15,7 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 from src.repositories.associate_hub_repository import AssociateMetrics, BookmakerSummary
 from src.ui.components.associate_hub.filters import update_filter_state
-
+from src.ui.utils.state_management import safe_rerun
 
 def render_associate_listing(
     associates: List[AssociateMetrics], 
@@ -29,7 +28,7 @@ def render_associate_listing(
         bookmakers_dict: Dictionary mapping associate_id to their bookmakers
     """
     if not associates:
-        st.warning("ðŸ“­ No associates found matching current filters.")
+        st.warning("No associates found matching current filters.")
         return
     
     # Container for the listing with sticky header
@@ -69,8 +68,8 @@ def render_associate_listing(
             
             # Create expandable row
             with st.expander(
-                label=f"ðŸ‘¤ {associate.associate_alias}",
-                expanded=is_expanded
+                label=f"{associate.associate_alias}",
+                expanded=is_expanded,
             ):
                 # Main row content
                 col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns([2, 1, 1, 1, 1, 1, 1, 1, 1])
@@ -78,10 +77,10 @@ def render_associate_listing(
                 with col1:
                     st.write(associate.associate_alias)
                     if associate.telegram_chat_id:
-                        st.caption(f"ðŸ“± {associate.telegram_chat_id}")
+                        st.caption(f"Telegram: {associate.telegram_chat_id}")
                 
                 with col2:
-                    admin_badge = "ðŸ‘‘ Admin" if associate.is_admin else "ðŸ‘¤ User"
+                    admin_badge = "Admin" if associate.is_admin else "User"
                     st.write(admin_badge)
                 
                 with col3:
@@ -94,13 +93,13 @@ def render_associate_listing(
                         st.caption("Some inactive")
                 
                 with col5:
-                    st.write(f"â‚¬{associate.net_deposits_eur:,.2f}")
+                    st.write(f"{associate.net_deposits_eur:,.2f}")
                 
                 with col6:
-                    st.write(f"â‚¬{associate.should_hold_eur:,.2f}")
+                    st.write(f"{associate.should_hold_eur:,.2f}")
                 
                 with col7:
-                    st.write(f"â‚¬{associate.current_holding_eur:,.2f}")
+                    st.write(f"{associate.current_holding_eur:,.2f}")
                 
                 with col8:
                     delta_color = "green" if associate.delta_eur >= 0 else "red"
@@ -111,10 +110,10 @@ def render_associate_listing(
                 with col9:
                     # Status pill with color
                     status_emoji = {
-                        "balanced": "ðŸŸ¢",
-                        "overholding": "ðŸ”º", 
-                        "short": "ðŸ”»"
-                    }.get(associate.status, "âšª")
+                        "balanced": "",
+                        "overholding": "", 
+                        "short": ""
+                    }.get(associate.status, "")
                     
                     st.markdown(
                         f'<span style="background-color: {associate.status_color}; '
@@ -130,19 +129,19 @@ def render_associate_listing(
                 if associate.associate_id in bookmakers_dict:
                     bookmakers = bookmakers_dict[associate.associate_id]
                     if bookmakers:
-                        st.markdown("**ðŸ“Š Bookmaker Details**")
+                        st.markdown("**Bookmaker Details**")
                         render_bookmaker_subtable(bookmakers)
                     else:
-                        st.info("ðŸ“­ No bookmakers configured for this associate.")
+                        st.info("No bookmakers configured for this associate.")
                 
                 # Last activity info
                 if associate.last_activity_utc:
                     try:
-                        activity_date = datetime.fromisoformat(associate.last_activity_utc.replace('Z', '+00:00'))
-                        local_date = activity_date.strftime('%Y-%m-%d %H:%M')
-                        st.caption(f"ðŸ•’ Last activity: {local_date}")
+                        activity_date = datetime.fromisoformat(associate.last_activity_utc.replace("Z", "+00:00"))
+                        local_date = activity_date.strftime("%Y-%m-%d %H:%M")
+                        st.caption(f"Last activity: {local_date}")
                     except (ValueError, AttributeError):
-                        st.caption(f"ðŸ•’ Last activity: {associate.last_activity_utc}")
+                        st.caption(f"Last activity: {associate.last_activity_utc}")
     
     # Update expand state tracking
     for associate in associates:
@@ -161,7 +160,7 @@ def render_action_buttons(associate: AssociateMetrics) -> None:
     
     with col1:
         if st.button(
-            "ðŸ‘¤ Edit Profile",
+            ":material/edit: Edit Profile",
             key=f"edit_profile_{associate.associate_id}",
             help="Edit associate details",
             width="stretch"
@@ -174,7 +173,7 @@ def render_action_buttons(associate: AssociateMetrics) -> None:
     
     with col2:
         if st.button(
-            "ðŸ’° Deposit",
+            ":material/savings: Deposit",
             key=f"deposit_{associate.associate_id}",
             help="Record deposit transaction",
             width="stretch"
@@ -187,7 +186,7 @@ def render_action_buttons(associate: AssociateMetrics) -> None:
     
     with col3:
         if st.button(
-            "ðŸ’¸ Withdraw",
+            ":material/payments: Withdraw",
             key=f"withdraw_{associate.associate_id}",
             help="Record withdrawal transaction",
             width="stretch"
@@ -200,7 +199,7 @@ def render_action_buttons(associate: AssociateMetrics) -> None:
     
     with col4:
         if st.button(
-            "ðŸ“Š View Details",
+            ":material/visibility: View Details",
             key=f"details_{associate.associate_id}",
             help="View full associate details",
             width="stretch"
@@ -249,35 +248,34 @@ def render_bookmaker_subtable(bookmakers: List[BookmakerSummary]) -> None:
         col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([2, 1, 1, 1, 1, 1, 1, 1])
         
         with col1:
-            status_icon = "âœ…" if bookmaker.is_active else "âŒ"
-            st.write(f"{status_icon} {bookmaker.bookmaker_name}")
+            st.write(bookmaker.bookmaker_name)
         
         with col2:
-            active_text = "âœ… Active" if bookmaker.is_active else "âŒ Inactive"
+            active_text = "Active" if bookmaker.is_active else "Inactive"
             st.write(active_text)
         
         with col3:
             if bookmaker.parsing_profile:
-                st.caption(f"ðŸ“„ {bookmaker.parsing_profile}")
+                st.caption(bookmaker.parsing_profile)
             else:
-                st.caption("ðŸ“„ No profile")
+                st.caption("No profile")
         
         with col4:
-            st.write(f"â‚¬{bookmaker.modeled_balance_eur:,.2f}")
+            st.write(f"{bookmaker.modeled_balance_eur:,.2f}")
         
         with col5:
             if bookmaker.reported_balance_eur is not None:
-                st.write(f"â‚¬{bookmaker.reported_balance_eur:,.2f}")
+                st.write(f"{bookmaker.reported_balance_eur:,.2f}")
             else:
-                st.caption("ðŸ“­ Not reported")
+                st.caption("Not reported")
         
         with col6:
             if bookmaker.delta_eur is not None:
                 delta_color = "green" if bookmaker.delta_eur >= 0 else "red"
-                delta_text = f"+â‚¬{abs(bookmaker.delta_eur):,.2f}" if bookmaker.delta_eur >= 0 else f"-â‚¬{abs(bookmaker.delta_eur):,.2f}"
+                delta_text = f"+{abs(bookmaker.delta_eur):,.2f}" if bookmaker.delta_eur >= 0 else f"-{abs(bookmaker.delta_eur):,.2f}"
                 st.markdown(f":{delta_color}[{delta_text}]")
             else:
-                st.caption("â€”")
+                st.caption("")
         
         with col7:
             if bookmaker.last_balance_check_utc:
@@ -295,10 +293,10 @@ def render_bookmaker_subtable(bookmakers: List[BookmakerSummary]) -> None:
             
             with col8a:
                 if st.button(
-                    "âœï¸",
+                    ":material/edit:",
                     key=f"edit_bookmaker_{bookmaker.bookmaker_id}",
                     help="Edit bookmaker",
-                    width="stretch"
+                    width="stretch",
                 ):
                     st.session_state["hub_drawer_open"] = True
                     st.session_state["hub_drawer_associate_id"] = bookmaker.associate_id
@@ -308,10 +306,10 @@ def render_bookmaker_subtable(bookmakers: List[BookmakerSummary]) -> None:
             
             with col8b:
                 if st.button(
-                    "ðŸ’°",
+                    ":material/account_balance_wallet:",
                     key=f"balance_{bookmaker.bookmaker_id}",
                     help="Manage balance",
-                    width="stretch"
+                    width="stretch",
                 ):
                     st.session_state["hub_drawer_open"] = True
                     st.session_state["hub_drawer_associate_id"] = bookmaker.associate_id
@@ -321,10 +319,10 @@ def render_bookmaker_subtable(bookmakers: List[BookmakerSummary]) -> None:
             
             with col8c:
                 if st.button(
-                    "ðŸ“Š",
+                    ":material/visibility:",
                     key=f"bookmaker_details_{bookmaker.bookmaker_id}",
                     help="Bookmaker details",
-                    width="stretch"
+                    width="stretch",
                 ):
                     st.session_state["hub_drawer_open"] = True
                     st.session_state["hub_drawer_associate_id"] = bookmaker.associate_id
@@ -340,7 +338,7 @@ def render_empty_state(filter_state: Dict) -> None:
     Args:
         filter_state: Current filter state
     """
-    st.warning("ðŸ“­ No associates found matching your filters.")
+    st.warning("No associates found matching your filters.")
     
     # Show what filters are active
     active_filters = []
@@ -368,11 +366,11 @@ def render_empty_state(filter_state: Dict) -> None:
         active_filters.append(f"Currencies: {', '.join(filter_state['currency_filter'])}")
     
     if active_filters:
-        st.caption("ðŸ” **Active filters:**")
+        st.caption("**Active filters:**")
         for filter_text in active_filters:
-            st.caption(f"â€¢ {filter_text}")
+            st.caption(filter_text)
     
-    st.info("ðŸ’¡ **Tip:** Try adjusting your filters or click 'ðŸ”„ Reset Filters' to see all associates.")
+    st.info("**Tip:** Try adjusting your filters or click 'Reset Filters' to see all associates.")
 
 
 def render_summary_metrics(associates: List[AssociateMetrics]) -> None:
@@ -410,15 +408,15 @@ def render_summary_metrics(associates: List[AssociateMetrics]) -> None:
     with col2:
         st.metric(
             "Total Net Deposits",
-            f"â‚¬{total_net_deposits:,.2f}",
+            f"{total_net_deposits:,.2f}",
             delta="Across all associates"
         )
     
     with col3:
         st.metric(
             "Current Holdings", 
-            f"â‚¬{total_current_holdings:,.2f}",
-            delta=f"Delta: â‚¬{total_delta:,.2f}"
+            f"{total_current_holdings:,.2f}",
+            delta=f"Delta: {total_delta:,.2f}"
         )
     
     with col4:
@@ -429,3 +427,4 @@ def render_summary_metrics(associates: List[AssociateMetrics]) -> None:
         )
     
     st.divider()
+

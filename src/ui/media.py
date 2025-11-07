@@ -107,7 +107,7 @@ def render_thumbnail(
 
     st.image(thumb, caption=caption, width=width)
     with st.expander(expander_label):
-        st.image(str(absolute_path), use_container_width=True, caption=caption)
+        st.image(str(absolute_path), width="stretch", caption=caption)
 
 
 __all__ = ["THUMB_CACHE_TTL", "clear_thumbnail_cache", "make_thumb", "render_thumbnail"]

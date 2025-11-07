@@ -33,6 +33,37 @@ def test_apply_pagination_and_params():
     assert params == ("approved", 25, 75)
 
 
+def test_pagination_zero_rows():
+    pagination = Pagination(table_key="empty", page=1, page_size=25, total_rows=0)
+    assert pagination.start_row == 0
+    assert pagination.end_row == 0
+    assert pagination.total_pages == 1
+    assert not pagination.has_prev
+    assert not pagination.has_next
+
+
+def test_paginate_params_extends_iterables():
+    pagination = Pagination(table_key="bets", page=3, page_size=25, total_rows=200)
+    params = paginate_params(("status", "incoming"), pagination)
+    assert params[-2:] == (25, 50)
+
+
+def test_get_total_count_handles_non_numeric(tmp_path):
+    db_path = _make_db(tmp_path)
+    original_db_path = Config.DB_PATH
+    Config.DB_PATH = db_path
+
+    try:
+        invalidate_connection_cache()
+        invalidate_query_cache()
+        total = get_total_count("SELECT 'not_a_number'")
+        assert total == 0
+    finally:
+        Config.DB_PATH = original_db_path
+        invalidate_connection_cache([db_path])
+        invalidate_query_cache()
+
+
 def test_get_total_count(tmp_path):
     db_path = _make_db(tmp_path)
     original_db_path = Config.DB_PATH

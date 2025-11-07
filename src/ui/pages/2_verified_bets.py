@@ -28,6 +28,7 @@ from src.services.ledger_entry_service import (
     SettlementConfirmation,
 )
 from src.services.settlement_service import SettlementService, BetOutcome
+from src.ui.media import render_thumbnail
 from src.ui.helpers.dialogs import (
     ActionItem,
     open_dialog,
@@ -47,6 +48,8 @@ from src.ui.helpers.streaming import (
 )
 from src.ui.ui_components import advanced_section, form_gated_filters, load_global_styles
 from src.ui.utils.navigation_links import render_navigation_link
+from src.ui.utils.pagination import paginate
+from src.ui.utils.performance import track_timing
 from src.ui.utils.state_management import render_reset_control, safe_rerun
 from src.utils.logging_config import get_logger
 
@@ -398,19 +401,29 @@ def _render_surebets_overview_fragment(
     filter_associate: str,
 ) -> None:
     """Render the surebets overview list inside a fragment."""
-    surebets = load_open_surebets(
-        sort_by=sort_by,
-        show_unsafe_only=show_unsafe_only,
-        filter_associate=filter_associate,
-    )
+    with track_timing("surebets_overview"):
+        surebets = load_open_surebets(
+            sort_by=sort_by,
+            show_unsafe_only=show_unsafe_only,
+            filter_associate=filter_associate,
+        )
 
-    if not surebets:
-        st.info("No surebets found matching your filters.")
-        return
+        if not surebets:
+            st.info("No surebets found matching your filters.")
+            return
 
-    st.markdown(f"### Surebets ({len(surebets)} found)")
-    for surebet in surebets:
-        render_surebet_card(surebet)
+        total_rows = len(surebets)
+        pagination = paginate("surebets_overview", total_rows, label="surebets")
+        start = pagination.offset
+        end = start + pagination.limit
+        page_surebets = surebets[start:end]
+
+        st.markdown(f"### Surebets ({total_rows} found)")
+        st.caption(
+            f"Showing {pagination.start_row}-{pagination.end_row} of {total_rows} surebets"
+        )
+        for surebet in page_surebets:
+            render_surebet_card(surebet)
 
 
 def count_open_surebets() -> int:
@@ -1091,11 +1104,12 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                     )
 
                     if bet.get("screenshot_path"):
-                        try:
-                            with st.expander("View Screenshot"):
-                                st.image(bet["screenshot_path"], width="stretch")
-                        except Exception:
-                            st.caption(f"Screenshot: {bet['screenshot_path']}")
+                        render_thumbnail(
+                            bet["screenshot_path"],
+                            caption=f"Screenshot for Bet #{bet_id}",
+                            width=300,
+                            expander_label="View screenshot",
+                        )
 
                     st.markdown("---")
             else:
@@ -1141,11 +1155,12 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                     )
 
                     if bet.get("screenshot_path"):
-                        try:
-                            with st.expander("View Screenshot"):
-                                st.image(bet["screenshot_path"], width="stretch")
-                        except Exception:
-                            st.caption(f"Screenshot: {bet['screenshot_path']}")
+                        render_thumbnail(
+                            bet["screenshot_path"],
+                            caption=f"Screenshot for Bet #{bet_id}",
+                            width=300,
+                            expander_label="View screenshot",
+                        )
 
                     st.markdown("---")
             else:
@@ -1332,7 +1347,7 @@ if selected_tab == "📊 Overview":
         filter_associate = filter_state["filter_associate"]
 
         st.caption("FX Rates")
-        if st.button("Update FX Rates Now", use_container_width=True):
+        if st.button("Update FX Rates Now", width="stretch"):
             try:
                 with st.spinner("Updating FX rates from API..."):
                     success = asyncio.run(fetch_daily_fx_rates())

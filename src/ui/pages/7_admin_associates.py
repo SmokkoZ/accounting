@@ -1,5 +1,4 @@
-from src.ui.utils.state_management import safe_rerun
-﻿"""
+"""
 Admin Associates page - manage associates and bookmakers.
 
 This page provides:
@@ -43,6 +42,17 @@ from src.ui.helpers.editor import (
 )
 from src.ui.ui_components import load_global_styles
 from src.ui.utils import feature_flags
+from src.ui.utils.performance import (
+    clear_performance_alerts,
+    clear_timings,
+    get_performance_alerts,
+    get_recent_timings,
+)
+from src.ui.utils.performance_dashboard import (
+    prepare_recent_timings,
+    summarize_timings,
+)
+from src.ui.utils.state_management import safe_rerun
 from src.ui.utils.validators import (
     validate_currency,
     validate_alias,
@@ -138,7 +148,7 @@ def _format_associate_selection_label(associate: Mapping[str, Any]) -> str:
     alias = associate.get("display_alias") or f"Associate #{associate.get('id', '?')}"
     currency = (associate.get("home_currency") or "N/A").upper()
     status = "Active" if associate.get("is_active") else "Inactive"
-    return f"{alias} Â· {currency} Â· {status} (#{associate.get('id', '?')})"
+    return f"{alias}  {currency}  {status} (#{associate.get('id', '?')})"
 
 
 def _render_selection_picker(
@@ -535,12 +545,12 @@ def _render_feedback(key: str) -> None:
     errors = feedback.get("errors") or []
 
     if success_count:
-        st.success(f"Saved {success_count} change(s).", icon="âœ…")
+        st.success(f"Saved {success_count} change(s).", icon="")
 
     if errors:
         with st.expander("View validation errors", expanded=True):
             for error in errors:
-                st.error(error, icon="âš ï¸")
+                st.error(error, icon="")
 
 
 def render_associates_editor_section(search_filter: Optional[str]) -> List[int]:
@@ -598,7 +608,7 @@ def render_associates_editor_section(search_filter: Optional[str]) -> List[int]:
     with actions_col1:
         save_disabled = not _editor_has_changes(state)
         if st.button(
-            "ðŸ’¾ Save Associate Changes",
+            " Save Associate Changes",
             key="save_associates_button",
             type="primary",
             width="stretch",
@@ -609,7 +619,7 @@ def render_associates_editor_section(search_filter: Optional[str]) -> List[int]:
     with actions_col2:
         bulk_disabled = not selected_ids
         if st.button(
-            "ðŸ›‘ Deactivate Selected",
+            " Deactivate Selected",
             key="bulk_deactivate_button",
             width="stretch",
             disabled=bulk_disabled,
@@ -630,7 +640,7 @@ def render_associates_editor_section(search_filter: Optional[str]) -> List[int]:
             can_deactivate, reasons = can_deactivate_associates(pending_ids)
             if not can_deactivate:
                 for reason in reasons:
-                    st.error(reason, icon="âš ï¸")
+                    st.error(reason, icon="")
                 st.session_state.pop(BULK_DEACTIVATE_IDS_KEY, None)
             else:
                 success, message = bulk_set_associate_active_state(
@@ -700,7 +710,7 @@ def render_bookmakers_editor_section(selected_associate_ids: List[int]) -> None:
     default_associate_id = selected_associate_ids[0] if allow_additions else None
 
     if st.button(
-        "ðŸ’¾ Save Bookmaker Changes",
+        " Save Bookmaker Changes",
         key="save_bookmakers_button",
         type="primary",
         width="stretch",
@@ -871,11 +881,11 @@ def insert_associate(
             is_admin=is_admin,
             is_active=is_active,
         )
-        return True, f"âœ… Associate '{display_alias}' created"
+        return True, f" Associate '{display_alias}' created"
     except Exception as e:
         conn.rollback()
         logger.error("associate_insert_failed", error=str(e), alias=display_alias)
-        return False, f"âŒ Failed to create associate: {str(e)}"
+        return False, f" Failed to create associate: {str(e)}"
 
 
 def update_associate(
@@ -933,11 +943,11 @@ def update_associate(
             alias=display_alias,
             is_active=is_active,
         )
-        return True, "âœ… Associate updated"
+        return True, " Associate updated"
     except Exception as e:
         conn.rollback()
         logger.error("associate_update_failed", error=str(e), associate_id=associate_id)
-        return False, f"âŒ Failed to update associate: {str(e)}"
+        return False, f" Failed to update associate: {str(e)}"
 
 
 def can_delete_associate(
@@ -1000,11 +1010,11 @@ def delete_associate(
         conn.commit()
 
         logger.info("associate_deleted", associate_id=associate_id, alias=alias)
-        return True, f"âœ… Associate '{alias}' deleted"
+        return True, f" Associate '{alias}' deleted"
     except Exception as e:
         conn.rollback()
         logger.error("associate_delete_failed", error=str(e), associate_id=associate_id)
-        return False, f"âŒ Failed to delete associate: {str(e)}"
+        return False, f" Failed to delete associate: {str(e)}"
 
 
 def bulk_set_associate_active_state(
@@ -1040,11 +1050,11 @@ def bulk_set_associate_active_state(
             is_active=is_active,
         )
         action = "activated" if is_active else "deactivated"
-        return True, f"âœ… {len(associate_ids)} associate(s) {action}"
+        return True, f" {len(associate_ids)} associate(s) {action}"
     except Exception as exc:
         conn.rollback()
         logger.error("associates_bulk_state_failed", error=str(exc))
-        return False, f"âŒ Failed to update associate state: {exc}"
+        return False, f" Failed to update associate state: {exc}"
 
 
 def can_deactivate_associates(
@@ -1233,14 +1243,14 @@ def get_chat_registration_status(
     row = cursor.fetchone()
 
     if not row:
-        return "âš ï¸ Not Registered"
+        return " Not Registered"
 
     chat_id, is_active = row["chat_id"], row["is_active"]
 
     if is_active:
-        return f"âœ… Registered (Chat ID: {chat_id})"
+        return f" Registered (Chat ID: {chat_id})"
     else:
-        return "ðŸ”´ Inactive Registration"
+        return " Inactive Registration"
 
 
 
@@ -1359,17 +1369,17 @@ def insert_bookmaker(
             bookmaker_name=bookmaker_name,
             is_active=is_active,
         )
-        return True, f"âœ… Bookmaker '{bookmaker_name}' added"
+        return True, f" Bookmaker '{bookmaker_name}' added"
     except sqlite3.IntegrityError as e:
         conn.rollback()
         if "UNIQUE constraint failed" in str(e):
-            return False, "âŒ Bookmaker already exists for this associate"
+            return False, " Bookmaker already exists for this associate"
         logger.error("bookmaker_insert_failed", error=str(e), bookmaker_name=bookmaker_name)
-        return False, f"âŒ Failed to create bookmaker: {str(e)}"
+        return False, f" Failed to create bookmaker: {str(e)}"
     except Exception as e:
         conn.rollback()
         logger.error("bookmaker_insert_failed", error=str(e), bookmaker_name=bookmaker_name)
-        return False, f"âŒ Failed to create bookmaker: {str(e)}"
+        return False, f" Failed to create bookmaker: {str(e)}"
 
 
 def update_bookmaker(
@@ -1414,17 +1424,17 @@ def update_bookmaker(
         )
         conn.commit()
         logger.info("bookmaker_updated", bookmaker_id=bookmaker_id, bookmaker_name=bookmaker_name)
-        return True, "âœ… Bookmaker updated"
+        return True, " Bookmaker updated"
     except sqlite3.IntegrityError as e:
         conn.rollback()
         if "UNIQUE constraint failed" in str(e):
-            return False, "âŒ Bookmaker name already exists for this associate"
+            return False, " Bookmaker name already exists for this associate"
         logger.error("bookmaker_update_failed", error=str(e), bookmaker_id=bookmaker_id)
-        return False, f"âŒ Failed to update bookmaker: {str(e)}"
+        return False, f" Failed to update bookmaker: {str(e)}"
     except Exception as e:
         conn.rollback()
         logger.error("bookmaker_update_failed", error=str(e), bookmaker_id=bookmaker_id)
-        return False, f"âŒ Failed to update bookmaker: {str(e)}"
+        return False, f" Failed to update bookmaker: {str(e)}"
 
 
 def can_delete_bookmaker(
@@ -1451,7 +1461,7 @@ def can_delete_bookmaker(
     if bet_count > 0:
         return (
             True,
-            f"âš ï¸ This bookmaker has {bet_count} bet(s). Deleting will orphan these records.",
+            f" This bookmaker has {bet_count} bet(s). Deleting will orphan these records.",
             bet_count,
         )
 
@@ -1485,11 +1495,11 @@ def delete_bookmaker(
         conn.commit()
 
         logger.info("bookmaker_deleted", bookmaker_id=bookmaker_id, bookmaker_name=name)
-        return True, f"âœ… Bookmaker '{name}' deleted"
+        return True, f" Bookmaker '{name}' deleted"
     except Exception as e:
         conn.rollback()
         logger.error("bookmaker_delete_failed", error=str(e), bookmaker_id=bookmaker_id)
-        return False, f"âŒ Failed to delete bookmaker: {str(e)}"
+        return False, f" Failed to delete bookmaker: {str(e)}"
 
 
 # ============================================================================
@@ -1499,7 +1509,7 @@ def delete_bookmaker(
 
 def render_add_associate_form() -> None:
     """Render the Add Associate form in an expander."""
-    with st.expander("âž• Add New Associate", expanded=st.session_state.get("show_add_form", False)):
+    with st.expander(" Add New Associate", expanded=st.session_state.get("show_add_form", False)):
         with st.form("add_associate_form", clear_on_submit=True):
             st.subheader("Add New Associate")
 
@@ -1537,11 +1547,11 @@ def render_add_associate_form() -> None:
                 chat_id_valid, chat_id_error = validate_multibook_chat_id(chat_id_input)
 
                 if not alias_valid:
-                    st.error(f"âŒ {alias_error}")
+                    st.error(f" {alias_error}")
                 elif not currency_valid:
-                    st.error(f"âŒ {currency_error}")
+                    st.error(f" {currency_error}")
                 elif not chat_id_valid:
-                    st.error(f"âŒ {chat_id_error}")
+                    st.error(f" {chat_id_error}")
                 else:
                     # Insert associate
                     success, message = insert_associate(
@@ -1565,7 +1575,7 @@ def render_edit_associate_modal(associate: Dict) -> None:
     modal_key = f"show_edit_modal_{associate_id}"
 
     if st.session_state.get(modal_key, False):
-        with st.expander(f"âœï¸ Edit Associate: {associate['display_alias']}", expanded=True):
+        with st.expander(f" Edit Associate: {associate['display_alias']}", expanded=True):
             with st.form(f"edit_associate_form_{associate_id}"):
                 st.subheader(f"Edit: {associate['display_alias']}")
 
@@ -1628,11 +1638,11 @@ def render_edit_associate_modal(associate: Dict) -> None:
                     chat_id_valid, chat_id_error = validate_multibook_chat_id(chat_id_input)
 
                     if not alias_valid:
-                        st.error(f"âŒ {alias_error}")
+                        st.error(f" {alias_error}")
                     elif not currency_valid:
-                        st.error(f"âŒ {currency_error}")
+                        st.error(f" {currency_error}")
                     elif not chat_id_valid:
-                        st.error(f"âŒ {chat_id_error}")
+                        st.error(f" {chat_id_error}")
                     else:
                         # Update associate
                         success, message = update_associate(
@@ -1703,7 +1713,7 @@ def render_add_bookmaker_form(associate: Dict) -> None:
     form_key = f"show_add_bookmaker_{associate_id}"
 
     if st.session_state.get(form_key, False):
-        with st.expander(f"âž• Add Bookmaker to {associate['display_alias']}", expanded=True):
+        with st.expander(f" Add Bookmaker to {associate['display_alias']}", expanded=True):
             with st.form(f"add_bookmaker_form_{associate_id}"):
                 st.subheader(f"Add Bookmaker to {associate['display_alias']}")
 
@@ -1731,12 +1741,12 @@ def render_add_bookmaker_form(associate: Dict) -> None:
                 if submit:
                     # Validate inputs
                     if not name_input or not name_input.strip():
-                        st.error("âŒ Bookmaker name is required")
+                        st.error(" Bookmaker name is required")
                     else:
                         # Validate JSON if provided
                         json_valid, json_error = validate_json(parsing_profile_input)
                         if not json_valid:
-                            st.error(f"âŒ {json_error}")
+                            st.error(f" {json_error}")
                         else:
                             # Insert bookmaker
                             success, message = insert_bookmaker(
@@ -1765,7 +1775,7 @@ def render_edit_bookmaker_modal(bookmaker: Dict, associate_alias: str) -> None:
     modal_key = f"show_edit_bookmaker_{bookmaker_id}"
 
     if st.session_state.get(modal_key, False):
-        with st.expander(f"âœï¸ Edit Bookmaker: {bookmaker['bookmaker_name']}", expanded=True):
+        with st.expander(f" Edit Bookmaker: {bookmaker['bookmaker_name']}", expanded=True):
             with st.form(f"edit_bookmaker_form_{bookmaker_id}"):
                 st.subheader(f"Edit: {bookmaker['bookmaker_name']}")
 
@@ -1801,12 +1811,12 @@ def render_edit_bookmaker_modal(bookmaker: Dict, associate_alias: str) -> None:
                 if submit:
                     # Validate inputs
                     if not name_input or not name_input.strip():
-                        st.error("âŒ Bookmaker name is required")
+                        st.error(" Bookmaker name is required")
                     else:
                         # Validate JSON if provided
                         json_valid, json_error = validate_json(parsing_profile_input)
                         if not json_valid:
-                            st.error(f"âŒ {json_error}")
+                            st.error(f" {json_error}")
                         else:
                             # Update bookmaker
                             success, message = update_bookmaker(
@@ -1877,7 +1887,7 @@ def render_bookmaker_row(bookmaker: Dict, associate_alias: str) -> None:
         st.markdown(f"**{bookmaker['bookmaker_name']}**")
 
     with col2:
-        status_icon = "âœ… Active" if bookmaker["is_active"] else "âš ï¸ Inactive"
+        status_icon = " Active" if bookmaker["is_active"] else " Inactive"
         st.text(status_icon)
 
     with col3:
@@ -1938,11 +1948,11 @@ def render_bookmakers_for_associate(associate: Dict) -> None:
     bookmaker_count = associate["bookmaker_count"]
 
     # Expandable section for bookmakers
-    expander_label = f"â–¶ Bookmakers ({bookmaker_count})"
+    expander_label = f" Bookmakers ({bookmaker_count})"
     with st.expander(expander_label, expanded=False):
         # Add Bookmaker button
         if st.button(
-            "âž• Add Bookmaker",
+            " Add Bookmaker",
             key=f"add_bm_btn_{associate_id}",
             width="stretch",
         ):
@@ -1995,8 +2005,8 @@ def render_feature_status_panel() -> None:
             help=f"Recommended Streamlit {version['recommended']}+",
         )
         st.info(
-            f"Minimum: {version['minimum_required']} Â· "
-            f"Recommended: {version['recommended']} Â· "
+            f"Minimum: {version['minimum_required']}  "
+            f"Recommended: {version['recommended']}  "
             f"Mode: {status['compatibility_mode'].title()}"
         )
 
@@ -2028,6 +2038,61 @@ def render_feature_status_panel() -> None:
                 "### :material/upgrade: Upgrade Recommended\n"
                 + "\n".join(f"- {item}" for item in recommendations)
             )
+
+
+def render_performance_dashboard() -> None:
+    """Show recent UI timing metrics collected via track_timing."""
+    timings = get_recent_timings()
+    alerts = get_performance_alerts()
+
+    with st.expander(":material/speed: Performance Dashboard", expanded=False):
+        if alerts:
+            alert_lines = "\n".join(
+                f"- {item['label']}: {item['duration']:.3f}s "
+                f"(budget {item['threshold']:.2f}s)"
+                for item in alerts[-5:]
+            )
+            st.warning(
+                "### :material/notifications_active: Performance Alerts\n"
+                f"{alert_lines}"
+            )
+
+        if not timings:
+            st.info("No UI timing samples yet. Interact with the queues to collect data.")
+        else:
+            recent_df = prepare_recent_timings(timings)
+            summary = summarize_timings(recent_df)
+            st.dataframe(
+                recent_df,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Duration (s)": st.column_config.NumberColumn(
+                        "Duration (s)",
+                        format="%.3f",
+                        help="Execution time reported by `track_timing` calls.",
+                    )
+                },
+            )
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Average", f"{summary.average_seconds:.3f}s")
+            col2.metric("Slowest", f"{summary.slowest_seconds:.3f}s")
+            col3.metric("Fastest", f"{summary.fastest_seconds:.3f}s")
+
+        if st.button(":material/history_toggle_off: Clear Timing Samples"):
+            clear_timings()
+            clear_performance_alerts()
+            st.success("Cleared recorded timings and alerts for this session.")
+
+        st.markdown("#### UI Performance Playbook")
+        st.markdown(
+            "- Target page load times under **2 seconds**.\n"
+            "- Filter operations should respond in ** 1.5 seconds** for 10k records.\n"
+            "- Aim for cache hit rates above **80%**.\n"
+            "- Confirm indexes are used for high-traffic queries.\n\n"
+            "Refer to the [UI Performance Playbook](docs/performance-playbook.md) "
+            "for detailed remediation steps."
+        )
 
 
 def _format_bytes(value: float) -> str:
@@ -2084,7 +2149,7 @@ def _gather_diagnostics_snapshot() -> Dict[str, Any]:
 def render_system_diagnostics_panel() -> None:
     """Render consolidated diagnostics for admin operators."""
     snapshot = _gather_diagnostics_snapshot()
-    with st.expander("🔧 System Diagnostics", expanded=False):
+    with st.expander(" System Diagnostics", expanded=False):
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("#### Database Health")
@@ -2213,6 +2278,7 @@ if __name__ != "__main__" or "pytest" not in globals():
 
         st.title(f"{PAGE_ICON} {PAGE_TITLE}")
         render_feature_status_panel()
+        render_performance_dashboard()
         render_system_diagnostics_panel()
         st.divider()
 
@@ -2234,3 +2300,4 @@ if __name__ != "__main__" or "pytest" not in globals():
     except Exception:
         # Silently ignore errors during test imports
         pass
+

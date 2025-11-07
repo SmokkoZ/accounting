@@ -12,6 +12,7 @@ import streamlit as st
 
 from src.core.database import get_db_connection
 from src.services.bet_verification import BetVerificationService
+from src.ui.media import render_thumbnail
 from src.ui.components.resolve_triage import render_resolve_queue_with_triage
 from src.ui.ui_components import advanced_section, form_gated_filters, load_global_styles
 from src.ui.utils.navigation_links import render_navigation_link
@@ -328,14 +329,15 @@ else:
     st.markdown("### Selected Bet Context")
     ctx_col1, ctx_col2 = st.columns([1, 2])
     with ctx_col1:
-        if current.get("screenshot_path"):
-            try:
-                st.image(current["screenshot_path"], width=300, caption=f"Bet #{current['bet_id']}")
-                with st.expander("View full-size screenshot"):
-                    st.image(current["screenshot_path"])  # default width (content)
-                    st.caption(current["screenshot_path"]) 
-            except Exception:
-                st.caption(f"Screenshot: {current['screenshot_path']}")
+        screenshot_path = current.get("screenshot_path")
+        if screenshot_path:
+            render_thumbnail(
+                screenshot_path,
+                caption=f"Bet #{current['bet_id']}",
+                width=240,
+                expander_label="View full-size screenshot",
+            )
+            st.caption(screenshot_path)
     with ctx_col2:
         st.write(f"Associate: {current.get('associate')} @ {current.get('bookmaker')}")
         st.write(f"Status: {current.get('status')}  |  Confidence: {current.get('normalization_confidence')}")

@@ -16,12 +16,12 @@ from src.core.database import get_db_connection
 from src.core.config import Config
 from src.services.bet_ingestion import BetIngestionService
 from src.ui.helpers.streaming import (
-from src.ui.utils.state_management import safe_rerun
     handle_streaming_error,
     show_error_toast,
     show_success_toast,
     stream_with_fallback,
 )
+from src.ui.utils.state_management import safe_rerun
 from src.utils.file_storage import save_screenshot, validate_file_size, validate_file_type
 from src.utils.datetime_helpers import utc_now_iso
 

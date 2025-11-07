@@ -76,7 +76,7 @@ def render_reset_control(
         prefixes: Prefixes passed to ``reset_page_state``.
     """
     button_key = f"{key}__button"
-    if st.button(label, key=button_key, type="secondary", help=description, use_container_width=True):
+    if st.button(label, key=button_key, type="secondary", help=description, width="stretch"):
         open_dialog(key)
 
     decision = render_confirmation_dialog(

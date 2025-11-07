@@ -68,7 +68,7 @@ def render_resolve_queue_with_triage(
             "created_local": st.column_config.TextColumn("Created (Perth)"),
         },
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
 
     high_conf_df = display_df[
@@ -94,7 +94,7 @@ def render_resolve_queue_with_triage(
             "Bulk mark as Auto-OK",
             type="primary",
             disabled=not selected,
-            use_container_width=True,
+            width="stretch",
             key=f"{selection_key}__bulk_button",
         ):
             return list(selected)

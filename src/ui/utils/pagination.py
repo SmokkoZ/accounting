@@ -156,13 +156,13 @@ def paginate(
 
     with col_prev:
         disabled = not pagination.has_prev
-        if st.button("◀ Prev", key=_state_key(table_key, "prev"), disabled=disabled, use_container_width=True):
+        if st.button("◀ Prev", key=_state_key(table_key, "prev"), disabled=disabled, width="stretch"):
             session[page_key] = max(1, pagination.page - 1)
             safe_rerun(f"{table_key}_prev")
 
     with col_next:
         disabled = not pagination.has_next
-        if st.button("Next ▶", key=_state_key(table_key, "next"), disabled=disabled, use_container_width=True):
+        if st.button("Next ▶", key=_state_key(table_key, "next"), disabled=disabled, width="stretch"):
             session[page_key] = min(pagination.total_pages, pagination.page + 1)
             safe_rerun(f"{table_key}_next")
 

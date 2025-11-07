@@ -1,5 +1,4 @@
-from src.ui.utils.state_management import safe_rerun
-﻿"""
+"""
 Reusable dialog and action menu helpers with Streamlit feature fallbacks.
 
 These helpers ensure consistent styling for confirmation flows and compact
@@ -18,6 +17,11 @@ import streamlit as st
 from src.ui.utils import feature_flags
 
 
+def _safe_rerun(reason: str = "dialog_action") -> None:
+    """Import safe_rerun lazily to avoid circular imports."""
+    from src.ui.utils.state_management import safe_rerun as _safe_rerun_internal
+
+    _safe_rerun_internal(reason)
 class _InteractionState:
     """State manager for dialog/popover interactions."""
 
@@ -136,7 +140,7 @@ def _render_settlement_dialog_modal(
             ):
                 state.push_payload(note_value.strip())
                 state.close()
-                safe_rerun()
+                _safe_rerun()
         with cancel_col:
             if st.button(
                 "Cancel",
@@ -144,7 +148,7 @@ def _render_settlement_dialog_modal(
                 width="stretch",
             ):
                 state.close()
-                safe_rerun()
+                _safe_rerun()
 
     _modal()
 
@@ -178,7 +182,7 @@ def _render_settlement_dialog_fallback(
             ):
                 state.push_payload(note_value.strip())
                 state.close()
-                safe_rerun()
+                _safe_rerun()
         with cancel_col:
             if st.button(
                 "Cancel",
@@ -186,7 +190,7 @@ def _render_settlement_dialog_fallback(
                 width="stretch",
             ):
                 state.close()
-                safe_rerun()
+                _safe_rerun()
 
 
 def render_confirmation_dialog(
@@ -251,7 +255,7 @@ def _render_confirmation_modal(
             ):
                 state.push_payload(True)
                 state.close()
-                safe_rerun()
+                _safe_rerun()
         with cancel_col:
             if st.button(
                 cancel_label,
@@ -260,7 +264,7 @@ def _render_confirmation_modal(
             ):
                 state.push_payload(False)
                 state.close()
-                safe_rerun()
+                _safe_rerun()
 
     _modal()
 
@@ -288,7 +292,7 @@ def _render_confirmation_fallback(
             ):
                 state.push_payload(True)
                 state.close()
-                safe_rerun()
+                _safe_rerun()
         with cancel_col:
             if st.button(
                 cancel_label,
@@ -297,7 +301,7 @@ def _render_confirmation_fallback(
             ):
                 state.push_payload(False)
                 state.close()
-                safe_rerun()
+                _safe_rerun()
 
 
 def render_canonical_event_dialog(
@@ -420,7 +424,7 @@ def _canonical_event_form(
             }
             state.push_payload(payload)
             state.close()
-            safe_rerun()
+            _safe_rerun()
 
     with cols[1]:
         if st.button(
@@ -429,7 +433,7 @@ def _canonical_event_form(
             width="stretch",
         ):
             state.close()
-            safe_rerun()
+            _safe_rerun()
 
 
 def _validate_canonical_event_inputs(
@@ -579,7 +583,7 @@ def _correction_form(
             }
             state.push_payload(result)
             state.close()
-            safe_rerun()
+            _safe_rerun()
 
     with cols[1]:
         if st.button(
@@ -588,7 +592,7 @@ def _correction_form(
             width="stretch",
         ):
             state.close()
-            safe_rerun()
+            _safe_rerun()
 
 
 def _validate_correction_inputs(
@@ -673,7 +677,7 @@ def render_action_menu(
                     help=item.description,
                 ):
                     state.push_payload(item.key)
-                    safe_rerun()
+                    _safe_rerun()
     else:
         st.caption(label)
         for item, display in zip(actions, button_labels):
@@ -686,7 +690,7 @@ def render_action_menu(
                 width="stretch",
             ):
                 state.push_payload(item.key)
-                safe_rerun()
+                _safe_rerun()
 
     return None
 

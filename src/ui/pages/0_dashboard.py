@@ -8,7 +8,6 @@ page links) while falling back gracefully on older runtimes.
 from __future__ import annotations
 
 import random
-import time
 from datetime import datetime
 from typing import Iterable
 
@@ -40,13 +39,9 @@ def _generate_metrics() -> Iterable[tuple[str, str, str]]:
     )
 
 
-def _simulate_snapshot_fetch() -> None:
-    time.sleep(0.1)
-
-
 for _ in status_with_steps(
     "Fetching latest ledger snapshots...",
-    [("Load snapshots", _simulate_snapshot_fetch)],
+    [("Load snapshots", lambda: None)],
     expanded=False,
 ):
     pass
@@ -82,7 +77,6 @@ with col_activity:
         ]
         for event in events:
             yield f"- {event}\n"
-            time.sleep(0.1)
 
     stream_with_fallback(_activity_feed, header=":material/dvr: Live log output")
 

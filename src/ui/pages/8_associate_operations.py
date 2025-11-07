@@ -18,7 +18,6 @@ from src.repositories.associate_hub_repository import AssociateHubRepository
 from src.services.bookmaker_balance_service import BookmakerBalanceService
 from src.services.funding_transaction_service import FundingTransactionService
 from src.ui.components.associate_hub import (
-from src.ui.utils.state_management import safe_rerun
     render_associate_listing,
     render_detail_drawer,
     render_filters,
@@ -28,6 +27,7 @@ from src.ui.utils.state_management import safe_rerun
 from src.ui.helpers.fragments import fragment
 from src.ui.helpers.streaming import status_with_steps
 from src.ui.ui_components import load_global_styles
+from src.ui.utils.state_management import safe_rerun
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)

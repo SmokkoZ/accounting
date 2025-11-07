@@ -19,10 +19,10 @@ from src.core.database import get_db_connection
 from src.services.delta_provenance_service import DeltaProvenanceService
 from src.ui.ui_components import load_global_styles
 from src.ui.utils.formatters import (
-from src.ui.utils.state_management import safe_rerun
     format_utc_datetime_local,
     format_currency_with_symbol,
 )
+from src.ui.utils.state_management import safe_rerun
 from src.ui.utils.validators import validate_associate_id
 
 logger = structlog.get_logger()

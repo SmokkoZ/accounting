@@ -1,4 +1,4 @@
-﻿"""
+"""
 Export Page - Ledger CSV Export
 
 Provides interface for exporting the full ledger to CSV for audit and backup purposes.
@@ -136,10 +136,10 @@ def render_export_history(limit: int) -> None:
                 
                 with col4:
                     # Download button
-                    if st.button(f"ðŸ“¥ Download", key=f"download_{i}"):
+                    if st.button(f":material/download: Download", key=f"download_{i}"):
                         file_path = Path(export['file_path'])
                         if file_path.exists():
-                            st.markdown(f"ðŸ“ [{export['filename']}](file://{file_path.absolute()})")
+                            st.markdown(f":material/folder: [{export['filename']}](file://{file_path.absolute()})")
                         else:
                             st.error("File not found")
                 
@@ -152,7 +152,7 @@ def render_export_history(limit: int) -> None:
 
 def render_export_instructions() -> None:
     """Render instructions and information about the export functionality."""
-    with st.expander("ðŸ“– Export Information", expanded=False):
+    with st.expander(":material/menu_book: Export Information", expanded=False):
         st.markdown("""
         ### About Ledger Export
         
@@ -263,7 +263,7 @@ with advanced_section():
     # Footer info
     st.markdown("---")
     st.caption(
-        "ðŸ’¡ **Tip:** For very large ledgers (10,000+ rows), the export may take "
+        ":material/lightbulb: **Tip:** For very large ledgers (10,000+ rows), the export may take "
         "several seconds. The progress spinner will indicate when the export is complete."
     )
 

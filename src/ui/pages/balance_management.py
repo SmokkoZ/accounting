@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Tuple
 import structlog
 
 from src.ui.utils.state_management import safe_rerun
+
 try:  # Streamlit is optional for import-time usage in tests
     import streamlit as st
 except ModuleNotFoundError:  # pragma: no cover - executed only in non-UI contexts
