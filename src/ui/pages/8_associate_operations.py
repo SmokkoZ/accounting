@@ -17,6 +17,8 @@ from streamlit.errors import StreamlitAPIException
 from src.repositories.associate_hub_repository import AssociateHubRepository
 from src.services.bookmaker_balance_service import BookmakerBalanceService
 from src.services.funding_transaction_service import FundingTransactionService
+from src.services.funding_service import FundingDraft, FundingError, FundingService
+from src.services.telegram_approval_workflow import TelegramApprovalWorkflow
 from src.ui.components.associate_hub import (
     render_associate_listing,
     render_detail_drawer,
@@ -24,9 +26,14 @@ from src.ui.components.associate_hub import (
     render_pagination_info,
     render_empty_state,
 )
+from src.ui.helpers.dialogs import open_dialog, render_confirmation_dialog
 from src.ui.helpers.fragments import fragment
 from src.ui.helpers.streaming import status_with_steps
 from src.ui.ui_components import load_global_styles
+from src.ui.utils.formatters import (
+    format_currency_amount,
+    format_utc_datetime_compact,
+)
 from src.ui.utils.state_management import safe_rerun
 from src.utils.logging_config import get_logger
 
@@ -58,6 +65,295 @@ st.markdown(
     "Manage associates, bookmakers, balances, and funding movements in one place. "
     "Filters persist across refreshes for fast back-to-back operations."
 )
+
+TELEGRAM_ALERTS_KEY = "telegram_panel_alerts"
+TELEGRAM_ACCEPT_DIALOG_PREFIX = "telegram_accept_draft"
+TELEGRAM_REJECT_DIALOG_PREFIX = "telegram_reject_draft"
+TELEGRAM_NOTIFY_PREFIX = "telegram_notify_sender"
+
+
+def _resolve_operator_identity() -> str:
+    """Return the best operator identifier available for created_by."""
+    candidate_keys = (
+        "operator_name",
+        "operator_email",
+        "user_email",
+        "user_display_name",
+    )
+    for key in candidate_keys:
+        value = st.session_state.get(key)
+        if value:
+            return str(value)
+    return "local_user"
+
+
+def _push_telegram_panel_alert(level: str, message: str) -> None:
+    """Persist toast-style feedback so it survives reruns."""
+    queue: List[Tuple[str, str]] = st.session_state.setdefault(TELEGRAM_ALERTS_KEY, [])
+    queue.append((level, message))
+
+
+def _render_pending_telegram_panel() -> None:
+    """Render the Pending Funding (Telegram) approvals panel."""
+    st.markdown("### :material/smart_toy: Pending Funding (Telegram)")
+    st.caption(
+        "Review deposit/withdrawal drafts that originated from Telegram chats before they hit the ledger."
+    )
+
+    for level, message in st.session_state.pop(TELEGRAM_ALERTS_KEY, []):
+        if level == "success":
+            st.success(message, icon=":material/check_circle:")
+        elif level == "warning":
+            st.warning(message, icon=":material/warning:")
+        elif level == "error":
+            st.error(message, icon=":material/error:")
+        else:
+            st.info(message, icon=":material/info:")
+
+    service = FundingService()
+    try:
+        drafts = service.get_pending_drafts(source="telegram")
+    except FundingError as exc:
+        st.error(f"Failed to load Telegram drafts: {exc}")
+        logger.error("telegram_drafts_load_failed", error=str(exc), exc_info=True)
+        return
+    except Exception as exc:  # pragma: no cover - defensive path
+        st.error("Unexpected error while loading Telegram drafts.")
+        logger.error("telegram_drafts_load_unexpected", error=str(exc), exc_info=True)
+        return
+    finally:
+        service.close()
+
+    if not drafts:
+        st.info("No Telegram funding drafts awaiting approval right now.")
+        return
+
+    for draft in drafts:
+        _render_telegram_draft_card(draft)
+
+
+def _render_telegram_draft_card(draft: FundingDraft) -> None:
+    """Render a single Telegram draft entry with actions."""
+    with st.container():
+        header_cols = st.columns([2, 1, 1])
+
+        with header_cols[0]:
+            st.markdown(f"**{draft.associate_alias}** @ {draft.bookmaker_name}")
+            amount_display = format_currency_amount(draft.amount_native, draft.currency)
+            st.caption(f"{draft.event_type} · {amount_display}")
+
+        with header_cols[1]:
+            st.caption("Created At")
+            st.write(format_utc_datetime_compact(draft.created_at_utc))
+
+        with header_cols[2]:
+            st.caption("Source")
+            st.markdown(
+                "<span style='background-color:#155bcb;color:white;padding:2px 8px;border-radius:4px;font-size:0.8rem;'>telegram</span>",
+                unsafe_allow_html=True,
+            )
+            if draft.chat_id:
+                st.caption("Chat ID")
+                st.code(str(draft.chat_id), language="")
+            else:
+                st.caption("Chat ID unavailable")
+
+        if draft.note:
+            st.caption(f":material/sticky_note_2: {draft.note}")
+
+        _render_telegram_draft_actions(draft)
+
+
+def _render_telegram_draft_actions(draft: FundingDraft) -> None:
+    """Render Notify/Accept/Reject controls for a Telegram draft."""
+    action_cols = st.columns([2, 1, 1])
+    notify_key = f"{TELEGRAM_NOTIFY_PREFIX}_{draft.draft_id}"
+    if notify_key not in st.session_state:
+        st.session_state[notify_key] = False
+
+    with action_cols[0]:
+        notify_help = (
+            "Send a Telegram confirmation back to the originating chat."
+            if draft.chat_id
+            else "Chat ID missing on this draft; notification unavailable."
+        )
+        st.checkbox(
+            "Notify sender",
+            key=notify_key,
+            disabled=not draft.chat_id,
+            help=notify_help,
+        )
+
+    accept_dialog_key = f"{TELEGRAM_ACCEPT_DIALOG_PREFIX}_{draft.draft_id}"
+    accept_payload_key = f"{accept_dialog_key}__payload"
+    with action_cols[1]:
+        if st.button(
+            ":material/check: Accept",
+            key=f"telegram_accept_btn_{draft.draft_id}",
+            type="primary",
+            use_container_width=True,
+            help="Create a ledger entry and remove the draft.",
+        ):
+            st.session_state[accept_payload_key] = {
+                "draft": draft,
+                "notify": bool(st.session_state.get(notify_key, False)),
+            }
+            open_dialog(accept_dialog_key)
+
+    pending_accept = st.session_state.get(accept_payload_key)
+    if pending_accept:
+        payload_draft: FundingDraft = pending_accept["draft"]
+        decision = render_confirmation_dialog(
+            key=accept_dialog_key,
+            title="Approve Telegram Funding Draft",
+            body=(
+                f"Accept {payload_draft.event_type} of "
+                f"{format_currency_amount(payload_draft.amount_native, payload_draft.currency)} "
+                f"for {payload_draft.associate_alias} @ {payload_draft.bookmaker_name}? "
+                "This will post a ledger entry with the bookmaker scope."
+            ),
+            confirm_label="Accept",
+            confirm_type="primary",
+        )
+        if decision is True:
+            _process_telegram_acceptance(
+                draft=payload_draft,
+                notify_sender=bool(pending_accept.get("notify")),
+            )
+            st.session_state.pop(accept_payload_key, None)
+        elif decision is False:
+            st.session_state.pop(accept_payload_key, None)
+
+    reject_dialog_key = f"{TELEGRAM_REJECT_DIALOG_PREFIX}_{draft.draft_id}"
+    reject_payload_key = f"{reject_dialog_key}__payload"
+    with action_cols[2]:
+        if st.button(
+            ":material/close: Reject",
+            key=f"telegram_reject_btn_{draft.draft_id}",
+            type="secondary",
+            use_container_width=True,
+            help="Discard draft without touching the ledger.",
+        ):
+            st.session_state[reject_payload_key] = {"draft": draft}
+            open_dialog(reject_dialog_key)
+
+    pending_reject = st.session_state.get(reject_payload_key)
+    if pending_reject:
+        payload_draft: FundingDraft = pending_reject["draft"]
+        decision = render_confirmation_dialog(
+            key=reject_dialog_key,
+            title="Reject Telegram Draft",
+            body=(
+                f"Reject {payload_draft.event_type} draft for "
+                f"{payload_draft.associate_alias} @ {payload_draft.bookmaker_name}? "
+                "The draft will be removed with no ledger entry."
+            ),
+            confirm_label="Reject",
+            confirm_type="secondary",
+        )
+        if decision is True:
+            _process_telegram_rejection(payload_draft)
+            st.session_state.pop(reject_payload_key, None)
+        elif decision is False:
+            st.session_state.pop(reject_payload_key, None)
+
+
+def _process_telegram_acceptance(*, draft: FundingDraft, notify_sender: bool) -> None:
+    """Accept a Telegram draft, optionally notifying the originating chat."""
+    created_by = _resolve_operator_identity()
+    workflow = TelegramApprovalWorkflow()
+    try:
+        outcome = workflow.approve(
+            draft=draft,
+            notify_sender=notify_sender,
+            operator_id=created_by,
+        )
+    except FundingError as exc:
+        st.error(f"Failed to accept draft: {exc}")
+        logger.error(
+            "telegram_draft_accept_failed",
+            draft_id=draft.draft_id,
+            error=str(exc),
+            exc_info=True,
+        )
+        return
+    except Exception as exc:  # pragma: no cover - defensive path
+        st.error("Unexpected error while accepting the draft.")
+        logger.error(
+            "telegram_draft_accept_unexpected",
+            draft_id=draft.draft_id,
+            error=str(exc),
+            exc_info=True,
+        )
+        return
+    finally:
+        workflow.close()
+
+    logger.info(
+        "telegram_draft_accepted_via_ui",
+        draft_id=draft.draft_id,
+        ledger_id=outcome.ledger_id,
+        created_by=created_by,
+        notify_sender=notify_sender,
+    )
+
+    _push_telegram_panel_alert(
+        "success",
+        f"{draft.event_type} for {draft.associate_alias} approved (ledger #{outcome.ledger_id}).",
+    )
+
+    if notify_sender:
+        result = outcome.notification_result
+        if result and result.success:
+            _push_telegram_panel_alert(
+                "success",
+                f"Sender notified in Telegram chat {draft.chat_id}.",
+            )
+        else:
+            reason = ""
+            if result and result.error_message:
+                reason = f": {result.error_message}"
+            target = draft.chat_id or "unknown chat"
+            _push_telegram_panel_alert(
+                "warning",
+                f"Accepted but failed to notify chat {target}{reason}",
+            )
+
+    safe_rerun("telegram_accept")
+
+
+def _process_telegram_rejection(draft: FundingDraft) -> None:
+    """Reject a Telegram draft."""
+    service = FundingService()
+    try:
+        service.reject_funding_draft(draft.draft_id)
+    except FundingError as exc:
+        st.error(f"Failed to reject draft: {exc}")
+        logger.error(
+            "telegram_draft_reject_failed",
+            draft_id=draft.draft_id,
+            error=str(exc),
+            exc_info=True,
+        )
+        return
+    except Exception as exc:  # pragma: no cover - defensive path
+        st.error("Unexpected error while rejecting the draft.")
+        logger.error(
+            "telegram_draft_reject_unexpected",
+            draft_id=draft.draft_id,
+            error=str(exc),
+            exc_info=True,
+        )
+        return
+    finally:
+        service.close()
+
+    logger.info("telegram_draft_rejected_via_ui", draft_id=draft.draft_id)
+    _push_telegram_panel_alert(
+        "info",
+        f"Draft for {draft.associate_alias} discarded.",
+    )
+    safe_rerun("telegram_reject")
 
 
 def _load_associate_payload(
@@ -108,6 +404,8 @@ def main() -> None:
         st.error(f"Failed to initialise services: {exc}")
         logger.error("services_initialization_failed", error=str(exc), exc_info=True)
         return
+
+    _render_pending_telegram_panel()
 
     filter_state, should_refresh = render_filters(repository)
 

@@ -12,10 +12,13 @@ import asyncio
 import inspect
 import os
 import platform
+import re
+import secrets
 import sys
 import time
 from collections import defaultdict
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -39,6 +42,7 @@ logger = get_logger(__name__)
 # Hardcoded default global admin user IDs (can be extended via env)
 # Stefano (primary admin): 1571540653
 DEFAULT_ADMIN_USER_IDS: set[int] = {1571540653}
+ADMIN_CONFIRMATION_TTL_SECONDS = 300  # 5 minutes
 
 
 class TelegramBot:
@@ -58,6 +62,9 @@ class TelegramBot:
         self.admin_user_ids: set[int] = set(DEFAULT_ADMIN_USER_IDS)
         if Config.TELEGRAM_ADMIN_USER_IDS:
             self.admin_user_ids.update(Config.TELEGRAM_ADMIN_USER_IDS)
+
+        # Admin confirmation state
+        self._pending_admin_confirmations: Dict[str, Dict[str, Any]] = {}
 
         self.application = Application.builder().token(self.bot_token).build()
         self._setup_handlers()
@@ -125,6 +132,20 @@ class TelegramBot:
         )
         self.application.add_handler(
             CommandHandler("health", self._rate_limited(self._health_command))
+        )
+        self.application.add_handler(
+            CommandHandler("confirm", self._rate_limited(self._confirm_command))
+        )
+
+        # Funding: slash commands and plain text commands
+        self.application.add_handler(
+            CommandHandler("deposit", self._rate_limited(self._deposit_command))
+        )
+        self.application.add_handler(
+            CommandHandler("withdraw", self._rate_limited(self._withdraw_command))
+        )
+        self.application.add_handler(
+            MessageHandler(filters.TEXT & (~filters.COMMAND), self._rate_limited(self._text_message))
         )
 
         # Photo message handler with rate limiting
@@ -296,6 +317,10 @@ Available commands:
 /help - Show this help message
 /register <associate_alias> <bookmaker_name> - Register this chat for a specific associate and bookmaker
 /chat_id - Show the current chat ID
+
+Funding commands:
+deposit <amount>, withdraw <amount>
+/deposit <amount>, /withdraw <amount>
 
 You can also send screenshots directly to create bet records.
 
@@ -912,12 +937,13 @@ Admin commands:
             conn.close()
 
             if result:
+                row = dict(result)
                 return {
-                    "associate_id": result["associate_id"],
-                    "bookmaker_id": result["bookmaker_id"],
-                    "associate_alias": result["associate_alias"],
-                    "bookmaker_name": result["bookmaker_name"],
-                    "associate_is_admin": bool(result.get("associate_is_admin", False)),
+                    "associate_id": row["associate_id"],
+                    "bookmaker_id": row["bookmaker_id"],
+                    "associate_alias": row["associate_alias"],
+                    "bookmaker_name": row["bookmaker_name"],
+                    "associate_is_admin": bool(row.get("associate_is_admin", False)),
                 }
             return None
 
@@ -943,6 +969,497 @@ Admin commands:
         except Exception as e:
             logger.error("deactivate_registration_error", chat_id=chat_id, error=str(e))
             return False
+
+    # ---------------------------------------------------------------------
+    # Funding: Slash and Text command handlers and helpers
+    # ---------------------------------------------------------------------
+    async def _deposit_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /deposit <amount> as a funding command."""
+        message = self._get_effective_message(update)
+        args = context.args or []
+        if len(args) != 1:
+            if message:
+                await self._invoke(message.reply_text, "Usage: /deposit <amount>")
+            return
+        try:
+            amount = Decimal(args[0])
+            if amount <= 0:
+                raise ValueError("Amount must be positive")
+            await self._execute_funding_flow(
+                command_type="DEPOSIT",
+                amount_decimal=amount,
+                chat_id=str(update.effective_chat.id),
+                user_id=update.effective_user.id if update.effective_user else None,
+                message=message,
+            )
+        except Exception:
+            if message:
+                await self._invoke(message.reply_text, "Invalid amount. Usage: /deposit <amount>")
+
+    async def _withdraw_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /withdraw <amount> as a funding command."""
+        message = self._get_effective_message(update)
+        args = context.args or []
+        if len(args) != 1:
+            if message:
+                await self._invoke(message.reply_text, "Usage: /withdraw <amount>")
+            return
+        try:
+            amount = Decimal(args[0])
+            if amount <= 0:
+                raise ValueError("Amount must be positive")
+            await self._execute_funding_flow(
+                command_type="WITHDRAWAL",
+                amount_decimal=amount,
+                chat_id=str(update.effective_chat.id),
+                user_id=update.effective_user.id if update.effective_user else None,
+                message=message,
+            )
+        except Exception:
+            if message:
+                await self._invoke(message.reply_text, "Invalid amount. Usage: /withdraw <amount>")
+
+    async def _confirm_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /confirm <code> for admin approval two-factor."""
+        message = self._get_effective_message(update)
+        args = context.args or []
+        if len(args) != 1:
+            if message:
+                await self._invoke(message.reply_text, "Usage: /confirm <code>")
+            return
+
+        chat_id = str(update.effective_chat.id) if update.effective_chat else None
+        if not chat_id:
+            if message:
+                await self._invoke(message.reply_text, "Unable to confirm outside of a chat context.")
+            return
+
+        await self._process_admin_confirmation(
+            token=args[0],
+            chat_id=chat_id,
+            user_id=update.effective_user.id if update.effective_user else None,
+            message=message,
+        )
+
+    async def _text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle plain text messages for funding commands.
+
+        Supported commands (case-insensitive):
+        - deposit <amount>
+        - withdraw <amount>
+        """
+        chat_id = str(update.effective_chat.id)
+        user_id = update.effective_user.id if update.effective_user else None
+        text = (update.message.text or "").strip() if update.message else ""
+        message = self._get_effective_message(update)
+
+        try:
+            token = self._parse_admin_confirmation(text)
+            if token:
+                await self._process_admin_confirmation(token, chat_id, user_id, message)
+                return
+
+            parsed = self._parse_funding_command(text)
+            if not parsed:
+                return
+
+            command_type, amount = parsed  # 'DEPOSIT' | 'WITHDRAWAL', float
+            await self._execute_funding_flow(
+                command_type=command_type,
+                amount_decimal=Decimal(str(amount)),
+                chat_id=chat_id,
+                user_id=user_id,
+                message=message,
+            )
+
+        except ValueError:
+            if message:
+                await self._invoke(
+                    message.reply_text,
+                    "Invalid amount. Usage: 'deposit <amount>' or 'withdraw <amount>'",
+                )
+        except Exception as e:
+            if message:
+                try:
+                    await self._invoke(
+                        message.reply_text,
+                        "An error occurred while processing your request.",
+                    )
+                except Exception:
+                    pass
+            logger.error(
+                "funding_text_error",
+                chat_id=chat_id,
+                user_id=user_id,
+                text=text,
+                error=str(e),
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _parse_funding_command(text: str) -> Optional[tuple[str, float]]:
+        """Parse a funding command from text.
+
+        Returns (command_type, amount) where command_type is 'DEPOSIT' or 'WITHDRAWAL'.
+        Returns None if not matched. Raises ValueError for invalid amount.
+        """
+
+        m = re.match(r"^\s*(deposit|withdraw)\s+(-?[0-9]+(?:\.[0-9]+)?)\s*$", text, re.IGNORECASE)
+        if not m:
+            return None
+        cmd = m.group(1).strip().lower()
+        amount_str = m.group(2)
+        amount = float(amount_str)
+        if amount <= 0:
+            raise ValueError("Amount must be positive")
+        return ("DEPOSIT" if cmd == "deposit" else "WITHDRAWAL", amount)
+
+    @staticmethod
+    def _parse_admin_confirmation(text: str) -> Optional[str]:
+        """Parse admin confirmation text into a 6-digit token."""
+        if not text:
+            return None
+        match = re.fullmatch(r"(?:confirm|approve)\s+(\d{6})", text.strip(), re.IGNORECASE)
+        if not match:
+            return None
+        return match.group(1)
+
+    def _get_associate_home_currency(self, associate_id: int) -> Optional[str]:
+        """Fetch associate home_currency from DB."""
+        try:
+            conn = get_db_connection()
+            row = conn.execute(
+                "SELECT home_currency FROM associates WHERE id = ?",
+                (associate_id,),
+            ).fetchone()
+            conn.close()
+            return row["home_currency"] if row and ("home_currency" in row.keys()) else None
+        except Exception as e:
+            logger.error(
+                "fetch_associate_home_currency_error",
+                associate_id=associate_id,
+                error=str(e),
+            )
+            return None
+
+    async def _execute_funding_flow(
+        self,
+        command_type: str,
+        amount_decimal,
+        chat_id: str,
+        user_id: Optional[int],
+        message,
+    ) -> None:
+        """Shared funding flow used by text and slash commands."""
+        # Registration required
+        registration = self._get_registration(chat_id)
+        if not registration:
+            if message:
+                await self._invoke(
+                    message.reply_text,
+                    "This chat is not registered. Please use /register <associate_alias> <bookmaker_name> first.",
+                )
+            logger.warning(
+                "funding_text_unregistered_chat",
+                chat_id=chat_id,
+                user_id=user_id,
+                command_type=command_type,
+                amount=str(amount_decimal),
+            )
+            return
+
+        associate_id = int(registration["associate_id"])
+        bookmaker_id = int(registration["bookmaker_id"])
+        bookmaker_name = registration.get("bookmaker_name") or ""
+        currency = self._get_associate_home_currency(associate_id) or "EUR"
+        note = f"telegram:{chat_id}"
+
+        # Approval path
+        is_admin_user = user_id in self.admin_user_ids if user_id is not None else False
+        is_admin_chat = bool(registration.get("associate_is_admin", False))
+        approval_path = "admin" if (is_admin_user or is_admin_chat) else "associate"
+
+        if approval_path == "admin":
+            await self._require_admin_confirmation(
+                registration=registration,
+                command_type=command_type,
+                amount_decimal=amount_decimal,
+                currency=currency,
+                chat_id=chat_id,
+                user_id=user_id,
+                message=message,
+                note=note,
+            )
+            return
+
+        # Draft approval path
+        from src.services.funding_service import FundingError, FundingService
+
+        svc = FundingService()
+        try:
+            draft_id = svc.create_funding_draft(
+                associate_id=associate_id,
+                bookmaker_id=bookmaker_id,
+                event_type=command_type,
+                amount_native=amount_decimal,
+                currency=currency,
+                note=note,
+                associate_alias=registration.get("associate_alias"),
+                bookmaker_name=registration.get("bookmaker_name"),
+                source="telegram",
+                chat_id=chat_id,
+            )
+        except FundingError as exc:
+            if message:
+                await self._invoke(
+                    message.reply_text,
+                    f"Unable to submit for approval: {exc}",
+                )
+            logger.error(
+                "funding_draft_creation_failed",
+                chat_id=chat_id,
+                user_id=user_id,
+                associate_id=associate_id,
+                bookmaker_id=bookmaker_id,
+                type=command_type,
+                amount=str(amount_decimal),
+                currency=currency,
+                approval_path=approval_path,
+                error=str(exc),
+            )
+            return
+        finally:
+            svc.close()
+
+        if message:
+            await self._invoke(
+                message.reply_text,
+                f"Submitted for approval: {command_type} {amount_decimal} {currency}.",
+            )
+
+        logger.info(
+            "funding_text_submitted",
+            chat_id=chat_id,
+            user_id=user_id,
+            associate_id=associate_id,
+            bookmaker_id=bookmaker_id,
+            type=command_type,
+            amount=str(amount_decimal),
+            currency=currency,
+            approval_path=approval_path,
+            draft_id=draft_id,
+        )
+
+    def _generate_admin_token(self) -> str:
+        """Generate a 6-digit confirmation token."""
+        return f"{secrets.randbelow(1_000_000):06d}"
+
+    def _cleanup_expired_confirmations(self) -> None:
+        """Remove expired admin confirmation tokens."""
+        now = time.time()
+        expired_tokens = [
+            token
+            for token, ctx in self._pending_admin_confirmations.items()
+            if ctx.get("expires_at", 0) <= now
+        ]
+        for token in expired_tokens:
+            self._pending_admin_confirmations.pop(token, None)
+
+    async def _require_admin_confirmation(
+        self,
+        *,
+        registration: Dict[str, Any],
+        command_type: str,
+        amount_decimal: Decimal,
+        currency: str,
+        chat_id: str,
+        user_id: Optional[int],
+        message,
+        note: str,
+    ) -> None:
+        """Store admin confirmation request and send OTP instructions."""
+        self._cleanup_expired_confirmations()
+        token = self._generate_admin_token()
+        context = {
+            "token": token,
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "associate_id": int(registration["associate_id"]),
+            "associate_alias": registration.get("associate_alias"),
+            "bookmaker_id": int(registration["bookmaker_id"]),
+            "bookmaker_name": registration.get("bookmaker_name") or "",
+            "command_type": command_type,
+            "amount": amount_decimal,
+            "currency": currency,
+            "note": note,
+            "created_at": utc_now_iso(),
+            "expires_at": time.time() + ADMIN_CONFIRMATION_TTL_SECONDS,
+        }
+        self._pending_admin_confirmations[token] = context
+
+        if message:
+            bookmaker_segment = f"{context['bookmaker_name']} " if context["bookmaker_name"] else ""
+            minutes = max(1, ADMIN_CONFIRMATION_TTL_SECONDS // 60)
+            await self._invoke(
+                message.reply_text,
+                (
+                    f"Security check: confirm code {token} to finalize {command_type} "
+                    f"{amount_decimal} {currency} {bookmaker_segment}recorded. "
+                    f"Reply with \"confirm {token}\" within {minutes} minute(s)."
+                ),
+            )
+
+        logger.info(
+            "funding_admin_confirmation_required",
+            chat_id=chat_id,
+            user_id=user_id,
+            associate_id=context["associate_id"],
+            bookmaker_id=context["bookmaker_id"],
+            type=command_type,
+            amount=str(amount_decimal),
+            currency=currency,
+            token=token,
+        )
+
+    async def _process_admin_confirmation(
+        self,
+        token: str,
+        chat_id: str,
+        user_id: Optional[int],
+        message,
+    ) -> None:
+        """Process OTP confirmation from admin users."""
+        cleaned_token = token.strip()
+        if not cleaned_token:
+            if message:
+                await self._invoke(message.reply_text, "Confirmation code missing. Usage: confirm <code>")
+            return
+
+        self._cleanup_expired_confirmations()
+        context = self._pending_admin_confirmations.get(cleaned_token)
+        if not context:
+            if message:
+                await self._invoke(message.reply_text, "Confirmation code is invalid or expired. Please resend the command.")
+            logger.warning(
+                "funding_admin_confirmation_invalid",
+                chat_id=chat_id,
+                user_id=user_id,
+                token=cleaned_token,
+                reason="missing",
+            )
+            return
+
+        if context["chat_id"] != chat_id:
+            if message:
+                await self._invoke(message.reply_text, "This confirmation code belongs to a different chat.")
+            logger.warning(
+                "funding_admin_confirmation_invalid",
+                chat_id=chat_id,
+                expected_chat=context["chat_id"],
+                token=cleaned_token,
+                reason="chat_mismatch",
+            )
+            return
+
+        original_user = context.get("user_id")
+        if original_user is not None and original_user != user_id:
+            if message:
+                await self._invoke(message.reply_text, "Only the admin who submitted the command can confirm this code.")
+            logger.warning(
+                "funding_admin_confirmation_invalid",
+                chat_id=chat_id,
+                user_id=user_id,
+                token=cleaned_token,
+                reason="user_mismatch",
+            )
+            return
+
+        ledger_id = await self._record_admin_transaction(context, message)
+        if ledger_id:
+            self._pending_admin_confirmations.pop(cleaned_token, None)
+            logger.info(
+                "funding_admin_confirmation_completed",
+                chat_id=chat_id,
+                user_id=user_id,
+                token=cleaned_token,
+                ledger_id=ledger_id,
+            )
+
+    async def _record_admin_transaction(self, context: Dict[str, Any], message) -> Optional[str]:
+        """Record admin transaction and send responses with error handling."""
+        from src.services.funding_transaction_service import (
+            FundingTransaction,
+            FundingTransactionError,
+            FundingTransactionService,
+        )
+
+        try:
+            with FundingTransactionService() as svc:
+                ledger_id = svc.record_transaction(
+                    FundingTransaction(
+                        associate_id=context["associate_id"],
+                        bookmaker_id=context["bookmaker_id"],
+                        transaction_type=context["command_type"],
+                        amount_native=context["amount"],
+                        native_currency=context["currency"],
+                        note=context["note"],
+                        created_by="telegram_bot",
+                    )
+                )
+        except FundingTransactionError as exc:
+            if message:
+                await self._invoke(
+                    message.reply_text,
+                    f"Approval failed: {exc}. Please try again once the issue is resolved.",
+                )
+            logger.warning(
+                "funding_admin_confirmation_failed",
+                associate_id=context["associate_id"],
+                bookmaker_id=context["bookmaker_id"],
+                type=context["command_type"],
+                amount=str(context["amount"]),
+                currency=context["currency"],
+                reason=str(exc),
+            )
+            return None
+        except Exception as exc:  # pragma: no cover - defensive path
+            if message:
+                await self._invoke(
+                    message.reply_text,
+                    "Unexpected error while recording the transaction. Please retry.",
+                )
+            logger.error(
+                "funding_admin_confirmation_error",
+                associate_id=context["associate_id"],
+                bookmaker_id=context["bookmaker_id"],
+                type=context["command_type"],
+                amount=str(context["amount"]),
+                currency=context["currency"],
+                error=str(exc),
+                exc_info=True,
+            )
+            return None
+
+        bookmaker_segment = f"{context['bookmaker_name']} " if context["bookmaker_name"] else ""
+        if message:
+            await self._invoke(
+                message.reply_text,
+                f"Approved: {context['command_type']} {context['amount']} {context['currency']} {bookmaker_segment}recorded",
+            )
+
+        logger.info(
+            "funding_text_recorded",
+            chat_id=context["chat_id"],
+            user_id=context["user_id"],
+            associate_id=context["associate_id"],
+            bookmaker_id=context["bookmaker_id"],
+            type=context["command_type"],
+            amount=str(context["amount"]),
+            currency=context["currency"],
+            approval_path="admin",
+            ledger_id=ledger_id,
+        )
+        return str(ledger_id)
 
     async def _photo_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle photo messages."""

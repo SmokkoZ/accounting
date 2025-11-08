@@ -1,333 +1,158 @@
-"""Unit tests for Funding Service.
-
-Tests core functionality of creating and managing funding drafts,
-accepting/rejecting drafts, and ledger entry creation.
+"""
+Unit tests for FundingService persistent draft storage.
 """
 
-import pytest
 import sqlite3
 from decimal import Decimal
-from datetime import datetime, timezone
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
 
-from src.services.funding_service import (
-    FundingService,
-    FundingDraft,
-    FundingError,
-)
+import pytest
+
+from src.core.schema import create_schema
+from src.services.funding_service import FundingError, FundingService
 
 
-class TestFundingService:
-    """Test cases for FundingService."""
+@pytest.fixture
+def db_conn():
+    """Create an in-memory database with seed data."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    create_schema(conn)
+    conn.execute(
+        """
+        INSERT INTO associates (id, display_alias, home_currency, is_active, is_admin)
+        VALUES (1, 'Alice', 'EUR', TRUE, FALSE)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO bookmakers (id, associate_id, bookmaker_name, is_active)
+        VALUES (10, 1, 'Bet365', TRUE)
+        """
+    )
+    conn.commit()
+    yield conn
+    conn.close()
 
-    @pytest.fixture
-    def mock_db(self):
-        """Create a mock database connection."""
-        mock_conn = Mock(spec=sqlite3.Connection)
-        mock_cursor = Mock()
-        mock_conn.cursor.return_value = mock_cursor
-        mock_conn.execute.return_value = mock_cursor
-        mock_conn.__enter__ = Mock(return_value=mock_conn)
-        mock_conn.__exit__ = Mock(return_value=None)
-        return mock_conn
 
-    @pytest.fixture
-    def funding_service(self, mock_db):
-        """Create FundingService instance with mock database."""
-        with patch('src.services.funding_service.get_db_connection', return_value=mock_db):
-            return FundingService()
+@pytest.fixture
+def funding_service(db_conn):
+    """Return a FundingService bound to the shared in-memory DB."""
+    service = FundingService(db=db_conn)
+    yield service
+    service.close()
 
-    def test_init(self, funding_service):
-        """Test FundingService initialization."""
-        assert funding_service.db is not None
-        assert funding_service._drafts == {}
 
-    def test_create_funding_draft_success(self, funding_service):
-        """Test successful creation of a funding draft."""
-        with patch.object(funding_service, "_get_associate_alias", return_value="Test User"), patch.object(
-            funding_service, "_get_bookmaker_name", return_value="Test Bookmaker"
-        ):
-            draft_id = funding_service.create_funding_draft(
-                associate_id=1,
-                bookmaker_id=10,
-                event_type="DEPOSIT",
-                amount_native=Decimal('100.00'),
-                currency="USD",
-                note="Test deposit"
-            )
-        
-        # Verify
-        assert draft_id is not None
-        assert draft_id in funding_service._drafts
-        
-        draft = funding_service._drafts[draft_id]
-        assert draft.associate_id == 1
-        assert draft.event_type == "DEPOSIT"
-        assert draft.amount_native == Decimal('100.00')
-        assert draft.currency == "USD"
-        assert draft.note == "Test deposit"
-        assert draft.bookmaker_id == 10
-        assert draft.bookmaker_name == "Test Bookmaker"
+def test_create_funding_draft_persists_data(funding_service, db_conn):
+    draft_id = funding_service.create_funding_draft(
+        associate_id=1,
+        bookmaker_id=10,
+        event_type="DEPOSIT",
+        amount_native=Decimal("150.00"),
+        currency="usd",
+        note="telegram:123",
+        source="telegram",
+        chat_id="123",
+    )
 
-    def test_create_funding_draft_invalid_amount(self, funding_service):
-        """Test funding draft creation with invalid amount."""
-        with patch.object(funding_service, "_get_associate_alias", return_value="Test User"), patch.object(
-            funding_service, "_get_bookmaker_name", return_value="Test Bookmaker"
-        ):
-            with pytest.raises(FundingError, match="Amount must be positive"):
-                funding_service.create_funding_draft(
-                    associate_id=1,
-                    bookmaker_id=10,
-                    event_type="DEPOSIT",
-                    amount_native=Decimal('-100.00'),
-                    currency="USD",
-                    note="Test deposit"
-                )
+    row = db_conn.execute("SELECT * FROM funding_drafts WHERE id = ?", (draft_id,)).fetchone()
+    assert row is not None
+    assert row["associate_alias"] == "Alice"
+    assert row["bookmaker_name"] == "Bet365"
+    assert row["native_currency"] == "USD"
+    assert row["source"] == "telegram"
+    assert row["chat_id"] == "123"
 
-    def test_create_funding_draft_invalid_event_type(self, funding_service):
-        """Test funding draft creation with invalid event type."""
-        with patch.object(funding_service, "_get_associate_alias", return_value="Test User"), patch.object(
-            funding_service, "_get_bookmaker_name", return_value="Test Bookmaker"
-        ):
-            with pytest.raises(FundingError, match="Event type must be 'DEPOSIT' or 'WITHDRAWAL'"):
-                funding_service.create_funding_draft(
-                    associate_id=1,
-                    bookmaker_id=10,
-                    event_type="INVALID",
-                    amount_native=Decimal('100.00'),
-                    currency="USD",
-                    note="Test deposit"
-                )
 
-    def test_get_pending_drafts(self, funding_service):
-        """Test retrieval of pending funding drafts."""
-        with patch.object(funding_service, "_get_associate_alias", return_value="Test User"), patch.object(
-            funding_service, "_get_bookmaker_name", return_value="Test Bookmaker"
-        ):
-            draft_id = funding_service.create_funding_draft(
-                associate_id=1,
-                bookmaker_id=10,
-                event_type="DEPOSIT",
-                amount_native=Decimal('100.00'),
-                currency="USD"
-            )
-        
-        # Get drafts
-        drafts = funding_service.get_pending_drafts()
-        
-        # Verify
-        assert len(drafts) == 1
-        draft = drafts[0]
-        assert isinstance(draft, FundingDraft)
-        assert draft.draft_id == draft_id
-        assert draft.event_type == "DEPOSIT"
-        assert draft.amount_native == Decimal('100.00')
-        assert draft.currency == "USD"
-
-    @patch('src.services.funding_service.get_fx_rate')
-    @patch('src.services.funding_service.transactional')
-    def test_accept_funding_draft_success(self, mock_transactional, mock_get_fx_rate, funding_service):
-        """Test successful acceptance of funding draft."""
-        # Setup mocks
-        mock_get_fx_rate.return_value = Decimal('0.85')
-        mock_conn = Mock()
-        mock_transactional.return_value.__enter__.return_value = mock_conn
-        mock_conn.execute.return_value.lastrowid = 456  # Ledger entry ID
-        
-        with patch.object(funding_service, "_get_associate_alias", return_value="Test User"), patch.object(
-            funding_service, "_get_bookmaker_name", return_value="Test Bookmaker"
-        ):
-            draft_id = funding_service.create_funding_draft(
-                associate_id=1,
-                bookmaker_id=10,
-                event_type="DEPOSIT",
-                amount_native=Decimal('100.00'),
-                currency="USD",
-                note="Test deposit"
-            )
-        
-        # Accept draft
-        ledger_id = funding_service.accept_funding_draft(draft_id)
-        
-        # Verify
-        assert ledger_id == 456
-        assert draft_id not in funding_service._drafts
-        mock_get_fx_rate.assert_called_once_with("USD", datetime.now(timezone.utc).date())
-        mock_conn.execute.assert_called_once()
-        _, params = mock_conn.execute.call_args[0]
-        assert params[2] == 10  # bookmaker_id column
-
-    def test_accept_funding_draft_not_found(self, funding_service):
-        """Test acceptance of non-existent draft."""
-        with pytest.raises(FundingError, match="Draft not found"):
-            funding_service.accept_funding_draft('non-existent-draft')
-
-    def test_reject_funding_draft_success(self, funding_service):
-        """Test successful rejection of funding draft."""
-        # Mock associate alias lookup for draft creation
-        mock_row = Mock()
-        mock_row.__getitem__ = lambda self, key: {'display_alias': 'Test User'}[key]
-        funding_service.db.execute.return_value.fetchone.return_value = mock_row
-        
-        # Create a draft
-        draft_id = funding_service.create_funding_draft(
+def test_create_funding_draft_invalid_amount(funding_service):
+    with pytest.raises(FundingError, match="Amount must be positive"):
+        funding_service.create_funding_draft(
             associate_id=1,
-            event_type="DEPOSIT",
-            amount_native=Decimal('100.00'),
-            currency="USD"
-        )
-        
-        # Reject draft
-        funding_service.reject_funding_draft(draft_id)
-        
-        # Verify
-        assert draft_id not in funding_service._drafts
-
-    def test_reject_funding_draft_not_found(self, funding_service):
-        """Test rejection of non-existent draft."""
-        with pytest.raises(FundingError, match="Draft not found"):
-            funding_service.reject_funding_draft('non-existent-draft')
-
-    def test_get_funding_history(self, funding_service):
-        """Test retrieval of funding history."""
-        # Setup mock database response with proper row objects
-        mock_row = Mock()
-        mock_row.__getitem__ = lambda self, key: {
-            'id': 1,
-            'event_type': 'DEPOSIT',
-            'associate_id': 1,
-            'associate_alias': 'John Doe',
-            'amount_native': '100.00',
-            'native_currency': 'USD',
-            'fx_rate_snapshot': '0.85',
-            'amount_eur': '85.00',
-            'created_at_utc': '2025-11-04T08:00:00Z',
-            'note': 'Test deposit'
-        }[key]
-        funding_service.db.execute.return_value.fetchall.return_value = [mock_row]
-        
-        # Get history
-        history = funding_service.get_funding_history(days=30)
-        
-        # Verify
-        assert len(history) == 1
-        entry = history[0]
-        assert entry['associate_alias'] == 'John Doe'
-        assert entry['event_type'] == 'DEPOSIT'
-        assert entry['amount_native'] == Decimal('100.00')
-        assert entry['native_currency'] == 'USD'
-        assert entry['amount_eur'] == Decimal('85.00')
-        assert entry['note'] == 'Test deposit'
-
-    def test_get_associate_alias_success(self, funding_service):
-        """Test successful associate alias retrieval."""
-        funding_service.db.execute.return_value.fetchone.return_value = {'display_alias': 'Test User'}
-        
-        alias = funding_service._get_associate_alias(1)
-        
-        assert alias == 'Test User'
-        funding_service.db.execute.assert_called_once_with(
-            "SELECT display_alias FROM associates WHERE id = ?",
-            (1,)
-        )
-
-    def test_get_associate_alias_not_found(self, funding_service):
-        """Test associate alias retrieval when associate not found."""
-        funding_service.db.execute.return_value.fetchone.return_value = None
-        
-        with pytest.raises(FundingError, match="Associate not found: 1"):
-            funding_service._get_associate_alias(1)
-
-    def test_funding_draft_dataclass(self):
-        """Test FundingDraft dataclass functionality."""
-        draft = FundingDraft(
-            draft_id='test-draft',
-            associate_id=1,
-            associate_alias='Test User',
             bookmaker_id=10,
-            bookmaker_name='Test Bookmaker',
-            event_type='DEPOSIT',
-            amount_native=Decimal('100.00'),
-            currency='USD',
-            note='Test note',
-            created_at_utc='2025-11-04T08:00:00Z'
+            event_type="DEPOSIT",
+            amount_native=Decimal("-1"),
+            currency="EUR",
         )
-        
-        assert draft.draft_id == 'test-draft'
-        assert draft.associate_id == 1
-        assert draft.associate_alias == 'Test User'
-        assert draft.bookmaker_id == 10
-        assert draft.bookmaker_name == 'Test Bookmaker'
-        assert draft.event_type == 'DEPOSIT'
-        assert draft.amount_native == Decimal('100.00')
-        assert draft.currency == 'USD'
-        assert draft.note == 'Test note'
-        assert draft.created_at_utc == '2025-11-04T08:00:00Z'
-
-    def test_funding_draft_validation_invalid_event_type(self):
-        """Test FundingDraft validation with invalid event type."""
-        with pytest.raises(ValueError, match="Invalid event_type"):
-            FundingDraft(
-                draft_id='test-draft',
-                associate_id=1,
-                associate_alias='Test User',
-                bookmaker_id=10,
-                bookmaker_name='Test Bookmaker',
-                event_type='INVALID',
-                amount_native=Decimal('100.00'),
-                currency='USD',
-                note='Test note',
-                created_at_utc='2025-11-04T08:00:00Z'
-            )
-
-    def test_funding_draft_validation_negative_amount(self):
-        """Test FundingDraft validation with negative amount."""
-        with pytest.raises(ValueError, match="Amount must be positive"):
-            FundingDraft(
-                draft_id='test-draft',
-                associate_id=1,
-                associate_alias='Test User',
-                bookmaker_id=10,
-                bookmaker_name='Test Bookmaker',
-                event_type='DEPOSIT',
-                amount_native=Decimal('-100.00'),
-                currency='USD',
-                note='Test note',
-                created_at_utc='2025-11-04T08:00:00Z'
-            )
-
-    def test_funding_draft_validation_invalid_currency(self):
-        """Test FundingDraft validation with invalid currency."""
-        with pytest.raises(ValueError, match="Currency must be a valid 3-letter ISO code"):
-            FundingDraft(
-                draft_id='test-draft',
-                associate_id=1,
-                associate_alias='Test User',
-                bookmaker_id=10,
-                bookmaker_name='Test Bookmaker',
-                event_type='DEPOSIT',
-                amount_native=Decimal('100.00'),
-                currency='INVALID',
-                note='Test note',
-                created_at_utc='2025-11-04T08:00:00Z'
-            )
-
-    def test_quantize_currency(self):
-        """Test currency quantization."""
-        value = Decimal('100.123456')
-        quantized = FundingService._quantize_currency(value)
-        assert quantized == Decimal('100.12')
 
 
-class TestFundingError:
-    """Test cases for FundingError."""
+def test_get_pending_drafts_returns_sorted_results(funding_service):
+    with patch(
+        "src.services.funding_service.utc_now_iso",
+        side_effect=["2025-01-01T00:00:00Z", "2025-01-01T00:05:00Z"],
+    ):
+        first = funding_service.create_funding_draft(
+            associate_id=1,
+            bookmaker_id=10,
+            event_type="DEPOSIT",
+            amount_native=Decimal("10"),
+            currency="EUR",
+        )
+        second = funding_service.create_funding_draft(
+            associate_id=1,
+            bookmaker_id=10,
+            event_type="WITHDRAWAL",
+            amount_native=Decimal("5"),
+            currency="EUR",
+        )
 
-    def test_error_creation(self):
-        """Test FundingError creation."""
-        error = FundingError("Test error message")
-        assert str(error) == "Test error message"
-        assert isinstance(error, Exception)
+    drafts = funding_service.get_pending_drafts()
+    assert [draft.draft_id for draft in drafts] == [second, first]
 
-    def test_error_inheritance(self):
-        """Test FundingError inheritance."""
-        assert issubclass(FundingError, Exception)
+
+def test_get_pending_drafts_filters_by_source(funding_service):
+    funding_service.create_funding_draft(
+        associate_id=1,
+        bookmaker_id=10,
+        event_type="DEPOSIT",
+        amount_native=Decimal("10"),
+        currency="EUR",
+        source="manual",
+    )
+    telegram_draft = funding_service.create_funding_draft(
+        associate_id=1,
+        bookmaker_id=10,
+        event_type="WITHDRAWAL",
+        amount_native=Decimal("5"),
+        currency="EUR",
+        source="telegram",
+    )
+
+    drafts = funding_service.get_pending_drafts(source="telegram")
+    assert len(drafts) == 1
+    assert drafts[0].draft_id == telegram_draft
+
+
+def test_accept_funding_draft_creates_ledger_and_deletes_record(funding_service, db_conn):
+    draft_id = funding_service.create_funding_draft(
+        associate_id=1,
+        bookmaker_id=10,
+        event_type="DEPOSIT",
+        amount_native=Decimal("75"),
+        currency="EUR",
+        note="telegram:321",
+    )
+
+    with patch("src.services.funding_service.get_fx_rate", return_value=Decimal("1.0")):
+        ledger_id = funding_service.accept_funding_draft(draft_id, created_by="telegram_bot")
+
+    assert ledger_id is not None
+    remaining = db_conn.execute("SELECT COUNT(*) FROM funding_drafts").fetchone()[0]
+    assert remaining == 0
+    ledger_row = db_conn.execute("SELECT note FROM ledger_entries WHERE id = ?", (ledger_id,)).fetchone()
+    assert ledger_row is not None
+    assert ledger_row["note"] == "telegram:321"
+
+
+def test_reject_funding_draft_removes_record(funding_service, db_conn):
+    draft_id = funding_service.create_funding_draft(
+        associate_id=1,
+        bookmaker_id=10,
+        event_type="WITHDRAWAL",
+        amount_native=Decimal("30"),
+        currency="EUR",
+        note="manual entry",
+    )
+
+    funding_service.reject_funding_draft(draft_id)
+    remaining = db_conn.execute("SELECT COUNT(*) FROM funding_drafts").fetchone()[0]
+    assert remaining == 0

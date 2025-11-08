@@ -31,6 +31,8 @@ def create_schema(conn: sqlite3.Connection) -> None:
     create_bookmaker_balance_checks_table(conn)
     create_fx_rates_daily_table(conn)
     create_chat_registrations_table(conn)
+    create_funding_drafts_table(conn)
+    create_notification_audit_table(conn)
 
     # Create triggers for data integrity
     create_ledger_append_only_trigger(conn)
@@ -760,6 +762,78 @@ def create_chat_registrations_table(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_chat_registrations_chat_id
         ON chat_registrations(chat_id)
         """
+    )
+
+
+def create_funding_drafts_table(conn: sqlite3.Connection) -> None:
+    """Create the funding_drafts table for persistent draft storage."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS funding_drafts (
+            id TEXT PRIMARY KEY,
+            chat_id TEXT,
+            associate_id INTEGER NOT NULL,
+            associate_alias TEXT NOT NULL,
+            bookmaker_id INTEGER NOT NULL,
+            bookmaker_name TEXT NOT NULL,
+            event_type TEXT NOT NULL CHECK (event_type IN ('DEPOSIT','WITHDRAWAL')),
+            amount_native TEXT NOT NULL,
+            native_currency TEXT NOT NULL,
+            note TEXT,
+            source TEXT NOT NULL DEFAULT 'manual',
+            created_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
+            FOREIGN KEY (associate_id) REFERENCES associates(id),
+            FOREIGN KEY (bookmaker_id) REFERENCES bookmakers(id)
+        )
+    """
+    )
+
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_funding_drafts_assoc_bookmaker
+        ON funding_drafts(associate_id, bookmaker_id)
+    """
+    )
+
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_funding_drafts_created_at
+        ON funding_drafts(created_at_utc DESC)
+    """
+    )
+
+
+def create_notification_audit_table(conn: sqlite3.Connection) -> None:
+    """Create audit trail for Telegram notification attempts."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notification_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            draft_id TEXT NOT NULL,
+            chat_id TEXT,
+            ledger_id INTEGER,
+            operator_id TEXT,
+            status TEXT NOT NULL CHECK (status IN ('sent','failed')),
+            detail TEXT,
+            needs_follow_up BOOLEAN NOT NULL DEFAULT 0,
+            created_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
+            FOREIGN KEY (ledger_id) REFERENCES ledger_entries(id)
+        )
+    """
+    )
+
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_notification_audit_followup
+        ON notification_audit(needs_follow_up, created_at_utc DESC)
+    """
+    )
+
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_notification_audit_draft
+        ON notification_audit(draft_id)
+    """
     )
 
 

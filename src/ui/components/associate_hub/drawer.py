@@ -18,8 +18,12 @@ from src.services.funding_transaction_service import (
     FundingTransactionError,
 )
 from src.ui.utils.state_management import safe_rerun
-from src.services.bookmaker_balance_service import BookmakerBalanceService
+from src.services.bookmaker_balance_service import BookmakerBalanceService, BookmakerBalance
+from src.services.telegram_notifier import TelegramNotifier, TelegramNotificationError
 from src.ui.utils.validators import validate_decimal_input, validate_currency_code
+from src.utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def render_detail_drawer(
@@ -425,15 +429,16 @@ def render_balances_tab(
     
     for bookmaker in display_bookmakers:
         with st.expander(f" {bookmaker.bookmaker_name}", expanded=False):
-            render_bookmaker_balance_summary(bookmaker)
+            render_bookmaker_balance_summary(balance_service, associate, bookmaker)
 
 
-def render_bookmaker_balance_summary(bookmaker) -> None:
+def render_bookmaker_balance_summary(
+    balance_service: BookmakerBalanceService,
+    associate: Dict[str, Any],
+    bookmaker: BookmakerBalance,
+) -> None:
     """
-    Render summary for a single bookmaker balance.
-    
-    Args:
-        bookmaker: BookmakerBalance object
+    Render summary for a single bookmaker balance and telegram actions.
     """
     col1, col2, col3, col4 = st.columns(4)
     
@@ -470,15 +475,131 @@ def render_bookmaker_balance_summary(bookmaker) -> None:
         if bookmaker.last_checked_at_utc:
             try:
                 from datetime import datetime
-                check_date = datetime.fromisoformat(bookmaker.last_checked_at_utc.replace('Z', '+00:00'))
-                st.write(f"**Last Check:**")
-                st.write(check_date.strftime('%Y-%m-%d %H:%M'))
+
+                check_date = datetime.fromisoformat(bookmaker.last_checked_at_utc.replace("Z", "+00:00"))
+                st.write("**Last Check:**")
+                st.write(check_date.strftime("%Y-%m-%d %H:%M"))
             except (ValueError, AttributeError):
-                st.write(f"**Last Check:**")
+                st.write("**Last Check:**")
                 st.write(bookmaker.last_checked_at_utc[:19])
         else:
             st.write("**Last Check:**")
             st.write("Never")
+
+    st.divider()
+    st.caption("Send the latest reported + pending balances to the registered Telegram chat.")
+    button_key = f"send_balance_{associate['id']}_{bookmaker.bookmaker_id}"
+    if st.button(
+        ":material/send: Send balance to Telegram",
+        key=button_key,
+        use_container_width=True,
+    ):
+        with st.spinner("Sending balance summary to Telegram..."):
+            _send_balance_to_telegram(
+                balance_service=balance_service,
+                associate_id=associate["id"],
+                bookmaker_id=bookmaker.bookmaker_id,
+            )
+
+
+def _send_balance_to_telegram(
+    *,
+    balance_service: BookmakerBalanceService,
+    associate_id: int,
+    bookmaker_id: int,
+) -> None:
+    """Send the latest balance snapshot to the registered Telegram chat."""
+    chat_row = balance_service.db.execute(
+        """
+        SELECT chat_id
+        FROM chat_registrations
+        WHERE associate_id = ?
+          AND bookmaker_id = ?
+          AND is_active = 1
+        ORDER BY updated_at_utc DESC
+        LIMIT 1
+        """,
+        (associate_id, bookmaker_id),
+    ).fetchone()
+
+    if chat_row is None:
+        st.toast("No Telegram chat registered for this bookmaker.", icon="⚠️")
+        logger.warning(
+            "telegram_balance_chat_missing",
+            associate_id=associate_id,
+            bookmaker_id=bookmaker_id,
+        )
+        return
+
+    chat_id = str(chat_row["chat_id"])
+
+    try:
+        payload = balance_service.build_balance_message(
+            associate_id=associate_id,
+            bookmaker_id=bookmaker_id,
+        )
+    except ValueError as exc:
+        st.toast("Unable to build balance summary.", icon="❌")
+        logger.error(
+            "telegram_balance_message_failed",
+            associate_id=associate_id,
+            bookmaker_id=bookmaker_id,
+            error=str(exc),
+        )
+        return
+
+    try:
+        notifier = TelegramNotifier()
+    except TelegramNotificationError as exc:
+        st.toast("Telegram bot token missing. Check configuration.", icon="❌")
+        logger.error(
+            "telegram_balance_notifier_unavailable",
+            associate_id=associate_id,
+            bookmaker_id=bookmaker_id,
+            error=str(exc),
+        )
+        return
+
+    try:
+        result = notifier.send_plaintext(chat_id=chat_id, text=payload.message)
+    except Exception as exc:  # pragma: no cover - defensive guardrail
+        logger.error(
+            "telegram_balance_send_exception",
+            associate_id=associate_id,
+            bookmaker_id=bookmaker_id,
+            chat_id=chat_id,
+            error=str(exc),
+            exc_info=True,
+        )
+        st.toast("Unexpected Telegram error. Check logs.", icon="❌")
+        return
+    log_kwargs = {
+        "chat_id": chat_id,
+        "associate_id": associate_id,
+        "associate_alias": payload.associate_alias,
+        "bookmaker_id": bookmaker_id,
+        "bookmaker_name": payload.bookmaker_name,
+        "balance_amount": str(payload.balance_amount) if payload.balance_amount is not None else None,
+        "balance_currency": payload.balance_currency,
+        "pending_amount": str(payload.pending_amount),
+        "pending_currency": payload.pending_currency,
+        "message_text": payload.message,
+    }
+
+    if result.success:
+        logger.info(
+            "telegram_balance_sent",
+            message_id=result.message_id,
+            **log_kwargs,
+        )
+        st.toast("Balance sent to Telegram.", icon="✅")
+    else:
+        logger.error(
+            "telegram_balance_send_failed",
+            error=result.error_message,
+            **log_kwargs,
+        )
+        st.toast("Telegram send failed. See logs for details.", icon="❌")
 
 
 def render_transactions_tab(

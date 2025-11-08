@@ -55,6 +55,21 @@ def test_all_flags_detects_streamlit_attributes(monkeypatch):
     assert flags["navigation"] is True
 
 
+def test_query_params_detection_handles_falsey_object(monkeypatch):
+    class EmptyQueryParams:
+        def __len__(self) -> int:
+            return 0
+
+    stub = types.SimpleNamespace(
+        query_params=EmptyQueryParams(),
+        __version__="1.35.0",
+    )
+    monkeypatch.setattr(feature_flags, "st", stub)
+    _clear_caches()
+
+    assert feature_flags.has("query_params") is True
+
+
 def test_version_helpers_use_streamlit_version(monkeypatch):
     stub = types.SimpleNamespace(__version__="1.40.0")
     monkeypatch.setattr(feature_flags, "st", stub)

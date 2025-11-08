@@ -63,6 +63,32 @@ class BookmakerBalance:
         return self.reported_balance_eur is not None
 
 
+@dataclass(frozen=True)
+class PendingBalanceSummary:
+    """Aggregated pending stake totals for an associate/bookmaker pair."""
+
+    associate_id: int
+    bookmaker_id: int
+    total_eur: Decimal
+    display_amount: Decimal
+    display_currency: str
+
+
+@dataclass(frozen=True)
+class BalanceMessage:
+    """Output payload for Telegram balance summaries."""
+
+    associate_id: int
+    bookmaker_id: int
+    associate_alias: str
+    bookmaker_name: str
+    message: str
+    balance_amount: Optional[Decimal]
+    balance_currency: Optional[str]
+    pending_amount: Decimal
+    pending_currency: str
+
+
 class BookmakerBalanceService:
     """
     Aggregate modeled vs. reported bookmaker balances with attribution logic.
@@ -130,6 +156,152 @@ class BookmakerBalanceService:
 
         self._enrich_float_attribution(balances)
         return balances
+
+    def get_bookmaker_balance(
+        self, associate_id: int, bookmaker_id: int
+    ) -> BookmakerBalance:
+        """Return a single bookmaker balance snapshot."""
+        row = self.db.execute(
+            """
+            SELECT
+                a.id AS associate_id,
+                a.display_alias AS associate_alias,
+                a.home_currency AS home_currency,
+                b.id AS bookmaker_id,
+                b.bookmaker_name,
+                b.is_active AS bookmaker_active,
+                COALESCE(SUM(CAST(le.amount_eur AS REAL)), 0) AS modeled_balance_eur
+            FROM associates a
+            JOIN bookmakers b ON b.associate_id = a.id
+            LEFT JOIN ledger_entries le
+                ON le.associate_id = a.id
+                AND le.bookmaker_id = b.id
+            WHERE a.id = ?
+              AND b.id = ?
+            GROUP BY
+                a.id,
+                a.display_alias,
+                a.home_currency,
+                b.id,
+                b.bookmaker_name,
+                b.is_active
+            """,
+            (associate_id, bookmaker_id),
+        ).fetchone()
+
+        if row is None:
+            raise ValueError(
+                f"Bookmaker balance not found for associate_id={associate_id}, bookmaker_id={bookmaker_id}."
+            )
+
+        latest_check = self.repository.get_latest_check(associate_id, bookmaker_id)
+        latest_checks = {}
+        if latest_check:
+            latest_checks[(associate_id, bookmaker_id)] = latest_check
+
+        return self._hydrate_balance_row(row, latest_checks)
+
+    def get_pending_balance_summary(
+        self, associate_id: int, bookmaker_id: int
+    ) -> PendingBalanceSummary:
+        """
+        Compute pending stakes for matching bets (status in verified/matched).
+        """
+        row = self.db.execute(
+            """
+            SELECT
+                COALESCE(
+                    SUM(
+                        CASE
+                            WHEN stake_eur IS NOT NULL AND stake_eur != ''
+                            THEN CAST(stake_eur AS REAL)
+                            ELSE 0
+                        END
+                    ),
+                    0
+                ) AS pending_eur
+            FROM bets
+            WHERE associate_id = ?
+              AND bookmaker_id = ?
+              AND status IN ('verified', 'matched')
+            """,
+            (associate_id, bookmaker_id),
+        ).fetchone()
+
+        pending_eur = Decimal(str(row["pending_eur"] or 0)).quantize(
+            TWO_PLACES, rounding=ROUND_HALF_UP
+        )
+
+        associate_row = self.db.execute(
+            "SELECT home_currency FROM associates WHERE id = ?",
+            (associate_id,),
+        ).fetchone()
+        if associate_row is None:
+            raise ValueError(f"Associate {associate_id} not found.")
+
+        home_currency = (associate_row["home_currency"] or "EUR").upper()
+        fx_rate = self._resolve_fx_rate(home_currency)
+        display_amount = self._convert_eur_to_native(pending_eur, fx_rate)
+        if display_amount is None:
+            display_amount = pending_eur
+        display_amount = display_amount.quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+
+        return PendingBalanceSummary(
+            associate_id=associate_id,
+            bookmaker_id=bookmaker_id,
+            total_eur=pending_eur,
+            display_amount=display_amount,
+            display_currency=home_currency,
+        )
+
+    def build_balance_message(
+        self,
+        *,
+        associate_id: int,
+        bookmaker_id: int,
+        as_of: Optional[datetime] = None,
+    ) -> BalanceMessage:
+        """
+        Prepare the Telegram copy for the provided associate/bookmaker context.
+        """
+        balance_snapshot = self.get_bookmaker_balance(associate_id, bookmaker_id)
+        pending_summary = self.get_pending_balance_summary(associate_id, bookmaker_id)
+
+        balance_amount: Optional[Decimal]
+        balance_currency: Optional[str]
+        if balance_snapshot.has_reported_balance() and balance_snapshot.reported_balance_native:
+            balance_amount = balance_snapshot.reported_balance_native
+            balance_currency = balance_snapshot.native_currency
+        else:
+            balance_amount = balance_snapshot.modeled_balance_native
+            balance_currency = balance_snapshot.native_currency
+
+        if balance_amount is not None and balance_currency:
+            balance_part = f"Balance: {self._format_decimal(balance_amount)} {balance_currency}"
+        else:
+            balance_part = "Balance: N/A"
+
+        pending_part = (
+            "pending balance: "
+            f"{self._format_decimal(pending_summary.display_amount)} "
+            f"{pending_summary.display_currency}."
+        )
+
+        as_of = as_of or datetime.now()
+        date_prefix = as_of.strftime("%d/%m/%y")
+        message = f"{date_prefix} {balance_part}, {pending_part}"
+
+        return BalanceMessage(
+            associate_id=associate_id,
+            bookmaker_id=bookmaker_id,
+            associate_alias=balance_snapshot.associate_alias,
+            bookmaker_name=balance_snapshot.bookmaker_name,
+            message=message,
+            balance_amount=balance_amount,
+            balance_currency=balance_currency,
+            pending_amount=pending_summary.display_amount,
+            pending_currency=pending_summary.display_currency,
+        )
 
     def update_reported_balance(
         self,
@@ -282,7 +454,7 @@ class BookmakerBalanceService:
         if currency == "EUR":
             return DEFAULT_FX_RATE
 
-        latest = get_latest_fx_rate(currency)
+        latest = get_latest_fx_rate(currency, conn=self.db)
         if latest is None:
             logger.warning(
                 "fx_rate_missing_for_currency",
@@ -302,6 +474,12 @@ class BookmakerBalanceService:
             return native
         except (InvalidOperation, ZeroDivisionError):  # pragma: no cover - defensive
             return None
+
+    @staticmethod
+    def _format_decimal(amount: Decimal) -> str:
+        """Format Decimal amounts with two fractional digits."""
+        quantized = amount.quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+        return format(quantized, ".2f")
 
     def _calculate_difference(
         self,

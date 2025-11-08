@@ -98,7 +98,12 @@ def _detect_feature(name: str) -> bool:
     descriptor = FEATURES.get(name)
     if not descriptor:
         return False
-    return bool(getattr(st, descriptor.attribute, None))
+    value = getattr(st, descriptor.attribute, None)
+    if value is None:
+        return False
+    # Some APIs (e.g., st.query_params) expose container-like objects that evaluate
+    # falsey when empty, so treat presence (not truthiness) as feature support.
+    return True
 
 
 @lru_cache(maxsize=1)

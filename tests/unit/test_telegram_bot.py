@@ -20,6 +20,7 @@ from telegram import Update, Message, User, Chat
 from telegram.ext import ContextTypes
 
 from src.integrations.telegram_bot import TelegramBot
+from src.services.funding_transaction_service import FundingTransactionError
 
 
 @pytest.fixture
@@ -150,6 +151,158 @@ class TestCommandHandlers:
         assert "/start" in call_args
         assert "/help" in call_args
         assert "/register" in call_args
+
+    # ------------------------------------------------------------------
+    # Funding text command parsing
+    # ------------------------------------------------------------------
+
+    def test_parse_funding_command_valid(self, telegram_bot):
+        assert telegram_bot._parse_funding_command("deposit 500") == ("DEPOSIT", 500.0)
+        assert telegram_bot._parse_funding_command("Withdraw 250.75") == ("WITHDRAWAL", 250.75)
+        assert telegram_bot._parse_funding_command("  deposit   1  ") == ("DEPOSIT", 1.0)
+
+    def test_parse_funding_command_invalid(self, telegram_bot):
+        # Not a funding command
+        assert telegram_bot._parse_funding_command("hello world") is None
+        # Invalid amounts
+        with pytest.raises(ValueError):
+            telegram_bot._parse_funding_command("deposit 0")
+        with pytest.raises(ValueError):
+            telegram_bot._parse_funding_command("withdraw -10")
+
+    @pytest.mark.asyncio
+    async def test_text_message_unregistered_chat(self, telegram_bot, mock_update, mock_context):
+        # Ensure message text
+        mock_update.message.text = "deposit 10"
+
+        # Patch registration lookup to None
+        with patch.object(TelegramBot, "_get_registration", return_value=None):
+            await telegram_bot._text_message(mock_update, mock_context)
+
+        # Should instruct to register
+        mock_update.message.reply_text.assert_called()
+        args = mock_update.message.reply_text.call_args[0][0]
+        assert "not registered" in args.lower()
+
+    @pytest.mark.asyncio
+    async def test_text_message_admin_path_requires_confirmation(self, telegram_bot, mock_update, mock_context):
+        mock_update.message.text = "deposit 12.5"
+        telegram_bot.admin_user_ids.add(mock_update.effective_user.id)
+
+        registration = {
+            "associate_id": 1,
+            "bookmaker_id": 2,
+            "associate_alias": "Alice",
+            "bookmaker_name": "Bet365",
+            "associate_is_admin": False,
+        }
+
+        with patch.object(TelegramBot, "_get_registration", return_value=registration), \
+             patch.object(TelegramBot, "_get_associate_home_currency", return_value="EUR"), \
+             patch.object(telegram_bot, "_generate_admin_token", return_value="123456"):
+            await telegram_bot._text_message(mock_update, mock_context)
+
+        mock_update.message.reply_text.assert_called()
+        text = mock_update.message.reply_text.call_args[0][0]
+        assert "Security check" in text
+        assert "123456" in text
+        assert "123456" in telegram_bot._pending_admin_confirmations
+
+    @pytest.mark.asyncio
+    async def test_admin_confirmation_flow_records_ledger(self, telegram_bot, mock_update, mock_context):
+        mock_update.message.text = "deposit 25"
+        telegram_bot.admin_user_ids.add(mock_update.effective_user.id)
+        chat_id = str(mock_update.effective_chat.id)
+
+        registration = {
+            "associate_id": 1,
+            "bookmaker_id": 2,
+            "associate_alias": "Alice",
+            "bookmaker_name": "Bet365",
+            "associate_is_admin": False,
+        }
+
+        with patch.object(TelegramBot, "_get_registration", return_value=registration), \
+             patch.object(TelegramBot, "_get_associate_home_currency", return_value="EUR"), \
+             patch.object(telegram_bot, "_generate_admin_token", return_value="654321"):
+            await telegram_bot._text_message(mock_update, mock_context)
+
+        assert "654321" in telegram_bot._pending_admin_confirmations
+
+        with patch("src.services.funding_transaction_service.FundingTransactionService") as mock_svc:
+            instance = mock_svc.return_value.__enter__.return_value
+            instance.record_transaction.return_value = "L999"
+            await telegram_bot._process_admin_confirmation(
+                token="654321",
+                chat_id=chat_id,
+                user_id=mock_update.effective_user.id,
+                message=mock_update.message,
+            )
+
+        assert instance.record_transaction.called
+        assert "654321" not in telegram_bot._pending_admin_confirmations
+        assert mock_update.message.reply_text.call_args_list[-1][0][0].startswith("Approved:")
+
+    @pytest.mark.asyncio
+    async def test_admin_confirmation_handles_fx_failure(self, telegram_bot, mock_update, mock_context):
+        mock_update.message.text = "deposit 50"
+        telegram_bot.admin_user_ids.add(mock_update.effective_user.id)
+        chat_id = str(mock_update.effective_chat.id)
+
+        registration = {
+            "associate_id": 1,
+            "bookmaker_id": 2,
+            "associate_alias": "Alice",
+            "bookmaker_name": "Bet365",
+            "associate_is_admin": False,
+        }
+
+        with patch.object(TelegramBot, "_get_registration", return_value=registration), \
+             patch.object(TelegramBot, "_get_associate_home_currency", return_value="EUR"), \
+             patch.object(telegram_bot, "_generate_admin_token", return_value="777777"):
+            await telegram_bot._text_message(mock_update, mock_context)
+
+        with patch("src.services.funding_transaction_service.FundingTransactionService") as mock_svc:
+            instance = mock_svc.return_value.__enter__.return_value
+            instance.record_transaction.side_effect = FundingTransactionError("FX lookup failed")
+            await telegram_bot._process_admin_confirmation(
+                token="777777",
+                chat_id=chat_id,
+                user_id=mock_update.effective_user.id,
+                message=mock_update.message,
+            )
+
+        # Context should remain so admin can retry
+        assert "777777" in telegram_bot._pending_admin_confirmations
+        assert "Approval failed" in mock_update.message.reply_text.call_args_list[-1][0][0]
+
+    @pytest.mark.asyncio
+    async def test_text_message_associate_path_creates_draft(self, telegram_bot, mock_update, mock_context):
+        mock_update.message.text = "withdraw 15"
+
+        registration = {
+            "associate_id": 5,
+            "bookmaker_id": 9,
+            "associate_alias": "Bob",
+            "bookmaker_name": "PinBet",
+            "associate_is_admin": False,
+        }
+
+        with patch.object(TelegramBot, "_get_registration", return_value=registration), \
+             patch.object(TelegramBot, "_get_associate_home_currency", return_value="GBP"), \
+             patch("src.services.funding_service.FundingService") as mock_service_cls:
+            mock_service = mock_service_cls.return_value
+            mock_service.create_funding_draft.return_value = "draft-xyz"
+
+            await telegram_bot._text_message(mock_update, mock_context)
+
+            mock_service.create_funding_draft.assert_called_once()
+            kwargs = mock_service.create_funding_draft.call_args.kwargs
+            assert kwargs["source"] == "telegram"
+            assert kwargs["chat_id"] == str(mock_update.effective_chat.id)
+            assert kwargs["event_type"] == "WITHDRAWAL"
+
+        assert mock_update.message.reply_text.call_args_list[-1][0][0].startswith("Submitted for approval")
 
     @pytest.mark.asyncio
     async def test_register_command_success(self, telegram_bot, mock_update, mock_context):

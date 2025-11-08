@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import sqlite3
 import structlog
@@ -33,7 +33,8 @@ class FundingError(Exception):
 @dataclass
 class FundingDraft:
     """Draft funding event awaiting approval."""
-    draft_id: str  # UUID for in-memory tracking
+
+    draft_id: str  # UUID for tracking
     associate_id: int
     associate_alias: str
     bookmaker_id: int
@@ -43,6 +44,8 @@ class FundingDraft:
     currency: str
     note: Optional[str]
     created_at_utc: str
+    source: str
+    chat_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         """Validate draft data after creation."""
@@ -56,6 +59,8 @@ class FundingDraft:
             raise ValueError("Bookmaker ID must be a positive integer")
         if not self.bookmaker_name:
             raise ValueError("Bookmaker name must be provided")
+        if not self.source:
+            raise ValueError("Source must be provided")
 
 
 class FundingService:
@@ -65,7 +70,6 @@ class FundingService:
         """Initialize funding service with database connection."""
         self._owns_connection = db is None
         self.db = db or get_db_connection()
-        self._drafts: Dict[str, FundingDraft] = {}  # In-memory draft storage
     
     def close(self) -> None:
         """Close the managed database connection if owned by the service."""
@@ -77,15 +81,17 @@ class FundingService:
             pass
 
     def create_funding_draft(
-        self, 
-        associate_id: int, 
+        self,
+        associate_id: int,
         bookmaker_id: int,
-        event_type: str, 
-        amount_native: Decimal, 
-        currency: str, 
+        event_type: str,
+        amount_native: Decimal,
+        currency: str,
         note: Optional[str] = None,
         associate_alias: Optional[str] = None,
         bookmaker_name: Optional[str] = None,
+        source: str = "manual",
+        chat_id: Optional[str] = None,
     ) -> str:
         """
         Create a funding draft and return draft ID.
@@ -130,7 +136,9 @@ class FundingService:
 
             # Create draft
             draft_id = str(uuid.uuid4())
-            
+            created_at = utc_now_iso()
+            normalized_currency = currency.upper()
+
             draft = FundingDraft(
                 draft_id=draft_id,
                 associate_id=associate_id,
@@ -139,12 +147,46 @@ class FundingService:
                 bookmaker_name=bookmaker_name,
                 event_type=event_type,
                 amount_native=amount_native,
-                currency=currency.upper(),
+                currency=normalized_currency,
                 note=note,
-                created_at_utc=utc_now_iso()
+                created_at_utc=created_at,
+                source=source or "manual",
+                chat_id=chat_id,
             )
-            
-            self._drafts[draft_id] = draft
+
+            self.db.execute(
+                """
+                INSERT INTO funding_drafts (
+                    id,
+                    chat_id,
+                    associate_id,
+                    associate_alias,
+                    bookmaker_id,
+                    bookmaker_name,
+                    event_type,
+                    amount_native,
+                    native_currency,
+                    note,
+                    source,
+                    created_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    draft.draft_id,
+                    draft.chat_id,
+                    draft.associate_id,
+                    draft.associate_alias,
+                    draft.bookmaker_id,
+                    draft.bookmaker_name,
+                    draft.event_type,
+                    str(draft.amount_native),
+                    draft.currency,
+                    draft.note,
+                    draft.source,
+                    draft.created_at_utc,
+                ),
+            )
+            self.db.commit()
             
             logger.info(
                 "funding_draft_created",
@@ -153,7 +195,9 @@ class FundingService:
                 event_type=event_type,
                 amount_native=str(amount_native),
                 currency=currency,
-                note=note
+                note=note,
+                source=draft.source,
+                chat_id=chat_id,
             )
             
             return draft_id
@@ -161,18 +205,96 @@ class FundingService:
         except (ValueError, InvalidOperation) as e:
             raise FundingError(f"Invalid input: {e}") from e
 
-    def get_pending_drafts(self) -> List[FundingDraft]:
+    def get_pending_drafts(self, source: Optional[str] = None) -> List[FundingDraft]:
         """
         Get all pending funding drafts.
+
+        Args:
+            source: Optional source filter (e.g., ``"telegram"``)
 
         Returns:
             List of pending funding drafts ordered by creation time
         """
-        return sorted(
-            self._drafts.values(),
-            key=lambda d: d.created_at_utc,
-            reverse=True
+        query = """
+            SELECT
+                id,
+                chat_id,
+                associate_id,
+                associate_alias,
+                bookmaker_id,
+                bookmaker_name,
+                event_type,
+                amount_native,
+                native_currency,
+                note,
+                source,
+                created_at_utc
+            FROM funding_drafts
+        """
+        params: tuple = ()
+        if source:
+            query += " WHERE source = ?"
+            params = (source,)
+
+        query += " ORDER BY datetime(created_at_utc) DESC"
+        cursor = self.db.execute(query, params)
+
+        drafts: List[FundingDraft] = []
+        for row in cursor.fetchall():
+            drafts.append(self._row_to_draft(row))
+        return drafts
+
+    def _row_to_draft(self, row: sqlite3.Row) -> FundingDraft:
+        """Convert a database row to a FundingDraft object."""
+        return FundingDraft(
+            draft_id=row["id"],
+            associate_id=row["associate_id"],
+            associate_alias=row["associate_alias"],
+            bookmaker_id=row["bookmaker_id"],
+            bookmaker_name=row["bookmaker_name"],
+            event_type=row["event_type"],
+            amount_native=Decimal(row["amount_native"]),
+            currency=row["native_currency"],
+            note=row["note"],
+            created_at_utc=row["created_at_utc"],
+            source=row["source"] or "manual",
+            chat_id=row["chat_id"],
         )
+
+    def _pop_draft_for_processing(
+        self, conn: sqlite3.Connection, draft_id: str
+    ) -> FundingDraft:
+        """
+        Atomically fetch and remove a draft so concurrent operators cannot double process it.
+
+        SQLite supports RETURNING clauses (3.35+). By deleting first, any failure inside the
+        surrounding transaction rolls back the removal, ensuring the draft is only gone once
+        the ledger write succeeds.
+        """
+        cursor = conn.execute(
+            """
+            DELETE FROM funding_drafts
+            WHERE id = ?
+            RETURNING
+                id,
+                chat_id,
+                associate_id,
+                associate_alias,
+                bookmaker_id,
+                bookmaker_name,
+                event_type,
+                amount_native,
+                native_currency,
+                note,
+                source,
+                created_at_utc
+            """,
+            (draft_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise FundingError("Draft already processed or missing")
+        return self._row_to_draft(row)
 
     def accept_funding_draft(self, draft_id: str, created_by: str = "local_user") -> str:
         """
@@ -188,12 +310,9 @@ class FundingService:
         Raises:
             FundingError: If draft not found or ledger creation fails
         """
-        draft = self._drafts.get(draft_id)
-        if not draft:
-            raise FundingError("Draft not found")
-        
         try:
             with transactional(self.db) as conn:
+                draft = self._pop_draft_for_processing(conn, draft_id)
                 # Get current FX rate
                 fx_rate = get_fx_rate(draft.currency, datetime.now(timezone.utc).date())
                 
@@ -227,12 +346,12 @@ class FundingService:
                     fx_rate=str(fx_rate)
                 )
                 
-                # Remove draft
-                del self._drafts[draft_id]
-                
                 return ledger_id
                 
         except TransactionError as e:
+            underlying = getattr(e, "__cause__", None)
+            if isinstance(underlying, FundingError):
+                raise underlying
             raise FundingError(f"Database transaction failed: {e}") from e
         except Exception as e:
             logger.error(
@@ -253,21 +372,38 @@ class FundingService:
         Raises:
             FundingError: If draft not found
         """
-        draft = self._drafts.get(draft_id)
-        if not draft:
-            raise FundingError("Draft not found")
-        
-        logger.info(
-            "funding_draft_rejected",
-            draft_id=draft_id,
-            event_type=draft.event_type,
-            associate_id=draft.associate_id,
-            amount_native=str(draft.amount_native),
-            currency=draft.currency
-        )
-        
-        # Remove draft
-        del self._drafts[draft_id]
+        draft: Optional[FundingDraft] = None
+        try:
+            with transactional(self.db) as conn:
+                draft = self._pop_draft_for_processing(conn, draft_id)
+        except TransactionError as exc:
+            underlying = getattr(exc, "__cause__", None)
+            if isinstance(underlying, FundingError):
+                raise underlying
+            logger.error(
+                "funding_rejection_failed",
+                draft_id=draft_id,
+                error=str(exc),
+                exc_info=True,
+            )
+            raise FundingError(f"Database transaction failed: {exc}") from exc
+        except Exception as exc:
+            logger.error(
+                "funding_rejection_failed",
+                draft_id=draft_id,
+                error=str(exc),
+                exc_info=True,
+            )
+            raise FundingError(f"Failed to reject funding draft: {exc}") from exc
+        else:
+            logger.info(
+                "funding_draft_rejected",
+                draft_id=draft_id,
+                event_type=draft.event_type,
+                associate_id=draft.associate_id,
+                amount_native=str(draft.amount_native),
+                currency=draft.currency,
+            )
 
     def get_funding_history(self, days: int = 30) -> List[Dict]:
         """
