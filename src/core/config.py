@@ -13,6 +13,26 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _int_env(key: str, default: int) -> int:
+    value = os.getenv(key)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _float_env(key: str, default: float) -> float:
+    value = os.getenv(key)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 class Config:
     """Configuration class with environment variables."""
 
@@ -28,6 +48,8 @@ class Config:
         for x in (os.getenv("TELEGRAM_ADMIN_USER_IDS") or "").replace(" ", "").split(",")
         if x.isdigit()
     )
+    TELEGRAM_MAX_RPS: int = _int_env("TELEGRAM_MAX_RPS", 15)
+    TELEGRAM_PER_CHAT_RPS: float = _float_env("TELEGRAM_PER_CHAT_RPS", 1.0)
 
     # OpenAI
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")

@@ -7,21 +7,29 @@ Partner-facing and internal-only sections with export functionality.
 
 from __future__ import annotations
 
+import asyncio
+import csv
 import io
+import json
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
 
 from src.core.database import get_db_connection
+from src.services.daily_statement_service import (
+    DailyStatementBatchResult,
+    DailyStatementSender,
+)
 from src.services.statement_service import (
     StatementService,
     StatementCalculations,
     PartnerFacingSection,
-    InternalSection
+    InternalSection,
 )
 from src.ui.helpers.fragments import (
     call_fragment,
@@ -84,6 +92,104 @@ def _write_simple_pdf(lines: List[str], output_path: Path) -> None:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(buffer.getvalue())
+
+
+def _daily_statement_log_records(log_entries: List[Any]) -> List[Dict[str, Any]]:
+    """Convert log entries into plain dictionaries for UI export."""
+    return [
+        {
+            "timestamp": entry.timestamp,
+            "chat_id": entry.chat_id,
+            "associate_id": entry.associate_id,
+            "associate_alias": entry.associate_alias,
+            "bookmaker_id": entry.bookmaker_id,
+            "bookmaker_name": entry.bookmaker_name,
+            "status": entry.status,
+            "retries": entry.retries,
+            "message_id": entry.message_id or "",
+            "error_message": entry.error_message or "",
+            "message_text": entry.message_text or "",
+        }
+        for entry in log_entries
+    ]
+
+
+def _records_to_csv(records: List[Dict[str, Any]]) -> str:
+    """Serialize log records to CSV for download."""
+    if not records:
+        return ""
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(records[0].keys()))
+    writer.writeheader()
+    writer.writerows(records)
+    return buffer.getvalue()
+
+
+def _execute_daily_statements(
+    progress_callback: Callable[[int, int], None]
+) -> DailyStatementBatchResult:
+    """Run the DailyStatementSender and return the batch summary."""
+    sender = DailyStatementSender()
+    try:
+        return asyncio.run(sender.send_all(progress_callback=progress_callback))
+    finally:
+        sender.close()
+
+
+def _render_daily_statement_result(result: DailyStatementBatchResult) -> None:
+    """Render the summary, log table, and download controls."""
+    st.markdown("---")
+    st.subheader(":material/receipt_long: Daily Telegram Statement Results")
+    cols = st.columns(4)
+    cols[0].metric("Total Chats Targeted", result.total_targets)
+    cols[1].metric("Sent", result.sent)
+    cols[2].metric("Failed", result.failed)
+    cols[3].metric("Skipped", result.skipped)
+    st.caption(f"Retries performed: {result.retried}")
+
+    records = _daily_statement_log_records(result.log)
+    if records:
+        st.dataframe(records, height=220)
+    else:
+        st.info("No log entries generated.")
+
+    csv_payload = _records_to_csv(records)
+    json_payload = json.dumps(records, indent=2)
+    download_cols = st.columns(2)
+    download_cols[0].download_button(
+        label="Download log (CSV)",
+        data=csv_payload,
+        file_name="daily_statements_log.csv",
+        mime="text/csv",
+        key="daily_statements_csv",
+    )
+    download_cols[1].download_button(
+        label="Download log (JSON)",
+        data=json_payload,
+        file_name="daily_statements_log.json",
+        mime="application/json",
+        key="daily_statements_json",
+    )
+
+
+@contextmanager
+def _modal_context(title: str):
+    """
+    Provide a compatibility wrapper around Streamlit's modal API.
+
+    Older Streamlit versions lack st.modal, so we fall back to a container.
+    """
+    if hasattr(st, "modal"):
+        with st.modal(title):
+            yield
+    else:
+        container = st.container()
+        with container:
+            st.markdown(f"### {title}")
+            st.info(
+                "Modal dialogs require Streamlit 1.33+. Showing an inline confirmation instead."
+            )
+            yield
 
 
 def generate_statement_pdf(
@@ -424,6 +530,9 @@ def main() -> None:
         layout="wide"
     )
     load_global_styles()
+    st.session_state.setdefault("daily_statements_modal_open", False)
+    st.session_state.setdefault("daily_statements_result", None)
+    st.session_state.setdefault("daily_statements_error", None)
 
     st.title(f"{PAGE_ICON} {PAGE_TITLE}")
     st.caption("Generate per-associate statements showing funding, entitlement, and 50/50 split")
@@ -439,6 +548,53 @@ def main() -> None:
             description="Clear statement inputs and advanced options.",
             prefixes=("statements_", "associate_", "cutoff_", "filters_", "advanced_", "dialog_"),
         )
+
+    st.markdown("---")
+    st.subheader(":material/notifications: Global Daily Statements")
+    st.caption(
+        "Send the current balance + pending summary to every active Telegram chat with configurable rate limits."
+    )
+    if st.button(":material/send: Send Daily Statements to All Chats", key="daily_statements_launch"):
+        st.session_state.daily_statements_modal_open = True
+        st.session_state.daily_statements_result = None
+        st.session_state.daily_statements_error = None
+
+    if st.session_state.daily_statements_modal_open:
+        with _modal_context(":material/notifications_active: Confirm Daily Statement Dispatch"):
+            st.write(
+                "This will send today's balance and pending ping to each registered bookmaker chat."
+            )
+            st.caption(
+                "Rate limits: 15 messages/sec globally, 1 message/sec per chat; retries/backoff handle Telegram 429."
+            )
+            if st.button("Confirm and send", key="daily_statements_confirm"):
+                progress_bar = st.progress(0)
+                progress_label = st.empty()
+
+                def progress_callback(processed: int, total: int) -> None:
+                    if total == 0:
+                        progress_bar.progress(100)
+                        progress_label.text("No active chats configured.")
+                        return
+                    percent = min(100, int(processed / total * 100))
+                    progress_bar.progress(percent)
+                    progress_label.text(f"{processed}/{total} chats processed")
+
+                try:
+                    with st.spinner("Dispatching daily statements..."):
+                        result = _execute_daily_statements(progress_callback)
+                    st.session_state.daily_statements_result = result
+                    st.session_state.daily_statements_error = None
+                    progress_label.text(f"Completed {result.total_targets} chats.")
+                    st.success("Daily statements dispatch complete.")
+                except Exception as exc:
+                    st.session_state.daily_statements_error = str(exc)
+                    st.error(f"Daily statements failed: {exc}")
+                finally:
+                    st.session_state.daily_statements_modal_open = False
+
+            if st.button("Cancel", key="daily_statements_cancel"):
+                st.session_state.daily_statements_modal_open = False
 
     def _render_statement_options() -> Dict[str, bool]:
         col1, col2, col3 = st.columns(3)
@@ -512,6 +668,12 @@ def main() -> None:
             calc=calc,
             options=statement_options,
         )
+
+    st.divider()
+    if st.session_state.daily_statements_error:
+        st.error(f"Daily statements error: {st.session_state.daily_statements_error}")
+    if st.session_state.daily_statements_result:
+        _render_daily_statement_result(st.session_state.daily_statements_result)
 
     # Instructions
     # Instructions

@@ -8,7 +8,7 @@ funding approvals back to the originating chat.
 from __future__ import annotations
 
 import asyncio
-import inspect
+import threading
 from dataclasses import dataclass
 from typing import Optional
 
@@ -44,6 +44,9 @@ class TelegramNotifier:
         if not token:
             raise TelegramNotificationError("TELEGRAM_BOT_TOKEN not configured")
         self._bot = bot or Bot(token=token)
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
+        self._thread.start()
 
     def send_plaintext(self, chat_id: str, text: str) -> TelegramNotificationResult:
         """
@@ -54,11 +57,24 @@ class TelegramNotifier:
             text: Message body
         """
         try:
-            response = self._bot.send_message(chat_id=chat_id, text=text)
-            if inspect.isawaitable(response):
-                response = self._await_result(response)
+            future = asyncio.run_coroutine_threadsafe(
+                self._bot.send_message(chat_id=chat_id, text=text), self._loop
+            )
+            response = future.result()
             message_id = getattr(response, "message_id", None)
         except TelegramError as exc:
+            error_message = str(exc)
+            logger.error(
+                "telegram_notify_plaintext_failed",
+                chat_id=chat_id,
+                error=error_message,
+                exc_info=True,
+            )
+            return TelegramNotificationResult(
+                success=False,
+                error_message=error_message,
+            )
+        except Exception as exc:  # pragma: no cover - defensive guardrail
             error_message = str(exc)
             logger.error(
                 "telegram_notify_plaintext_failed",
@@ -81,24 +97,15 @@ class TelegramNotifier:
             message_id=str(message_id) if message_id is not None else None,
         )
 
-    @staticmethod
-    def _await_result(coro):
-        """Run an async telegram call in a synchronous context."""
+    def close(self) -> None:
+        """Shut down the notifier event loop."""
         try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop and loop.is_running():
-            new_loop = asyncio.new_event_loop()
-            try:
-                asyncio.set_event_loop(new_loop)
-                return new_loop.run_until_complete(coro)
-            finally:
-                asyncio.set_event_loop(None)
-                new_loop.close()
-
-        return asyncio.run(coro)
+            if self._loop.is_running():
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._thread.is_alive():
+                self._thread.join(timeout=2)
+        finally:
+            self._loop.close()
 
 
 __all__ = [
