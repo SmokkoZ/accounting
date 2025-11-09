@@ -545,7 +545,7 @@ def _render_feedback(key: str) -> None:
     errors = feedback.get("errors") or []
 
     if success_count:
-        st.success(f"Saved {success_count} change(s).", icon="")
+        st.success(f"Saved {success_count} change(s).", icon="✅")
 
     if errors:
         with st.expander("View validation errors", expanded=True):
