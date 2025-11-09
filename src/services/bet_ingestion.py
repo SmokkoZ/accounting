@@ -202,6 +202,37 @@ class BetIngestionService:
         # Build dynamic update to support minimal test schemas
         columns = self._get_table_columns("bets")
 
+        manual_columns = [
+            col
+            for col in (
+                "manual_stake_override",
+                "manual_stake_currency",
+                "manual_potential_win_override",
+                "manual_potential_win_currency",
+            )
+            if col in columns
+        ]
+        manual_row = None
+        if manual_columns:
+            try:
+                manual_row = self.db.execute(
+                    f"SELECT {', '.join(manual_columns)} FROM bets WHERE id = ?",
+                    (bet_id,),
+                ).fetchone()
+            except Exception:
+                manual_row = None
+
+        def _manual_value(column: str) -> Optional[str]:
+            if not manual_row:
+                return None
+            try:
+                return manual_row[column]
+            except (KeyError, IndexError):
+                return None
+
+        manual_stake_locked = bool(_manual_value("manual_stake_override"))
+        manual_win_locked = bool(_manual_value("manual_potential_win_override"))
+
         set_clauses = []
         params = []
 
@@ -211,7 +242,9 @@ class BetIngestionService:
             params.append(extraction_result.get("canonical_event"))
 
         # Common fields
-        def add(col: str, value):
+        def add(col: str, value, *, skip: bool = False):
+            if skip:
+                return
             if col in columns:
                 set_clauses.append(f"{col} = ?")
                 params.append(value)
@@ -220,11 +253,15 @@ class BetIngestionService:
         add("period_scope", extraction_result.get("period_scope"))
         add("line_value", extraction_result.get("line_value"))
         add("side", extraction_result.get("side"))
-        add("stake_original", stake)
-        add("stake_amount", stake)
+        add("stake_original", stake, skip=manual_stake_locked)
+        add("stake_amount", stake, skip=manual_stake_locked)
         add("odds_original", odds)
-        add("payout", payout)
-        add("stake_currency", extraction_result.get("currency"))
+        add("payout", payout, skip=manual_win_locked)
+        add(
+            "stake_currency",
+            extraction_result.get("currency"),
+            skip=manual_stake_locked,
+        )
         add("confidence_score", confidence)
         add("event_id", extraction_result.get("canonical_event_id"))
         add("market_type", extraction_result.get("market_code"))
@@ -243,7 +280,11 @@ class BetIngestionService:
             forced_currency = (row[0] if row and row[0] else None)
         except Exception:
             forced_currency = None
-        add("currency", forced_currency or extraction_result.get("currency"))
+        add(
+            "currency",
+            forced_currency or extraction_result.get("currency"),
+            skip=manual_stake_locked,
+        )
         add("kickoff_time_utc", extraction_result.get("kickoff_time_utc"))
         add(
             "normalization_confidence",

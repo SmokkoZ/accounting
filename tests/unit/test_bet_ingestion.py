@@ -41,9 +41,15 @@ class TestBetIngestionService:
                 line_value TEXT,
                 side TEXT,
                 stake_original TEXT,
+                stake_amount TEXT,
+                stake_currency TEXT,
                 odds_original TEXT,
                 payout TEXT,
                 currency TEXT,
+                manual_stake_override TEXT,
+                manual_stake_currency TEXT,
+                manual_potential_win_override TEXT,
+                manual_potential_win_currency TEXT,
                 kickoff_time_utc TEXT,
                 normalization_confidence TEXT,
                 is_multi BOOLEAN,
@@ -177,6 +183,128 @@ class TestBetIngestionService:
         assert log["confidence_score"] == "0.95"
         assert log["error_message"] is None
 
+    def test_extraction_preserves_manual_stake_override(self, test_db, temp_screenshot):
+        """OCR updates should not overwrite manual stake overrides."""
+        test_db.execute(
+            """
+            INSERT INTO bets (
+                id, associate_id, bookmaker_id, screenshot_path,
+                stake_original, stake_amount, stake_currency, currency,
+                manual_stake_override, manual_stake_currency,
+                stake_eur, odds, created_at_utc, updated_at_utc
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                1,
+                1,
+                temp_screenshot,
+                "800.00",
+                "800.00",
+                "AUD",
+                "AUD",
+                "800.00",
+                "AUD",
+                "0.0",
+                "1.0",
+                "2025-10-30T10:00:00Z",
+                "2025-10-30T10:00:00Z",
+            ),
+        )
+        test_db.commit()
+
+        service = BetIngestionService(db_conn=test_db)
+        extraction_result = {
+            "canonical_event": "Test Match",
+            "market_code": "SPREAD",
+            "period_scope": "FULL_MATCH",
+            "line_value": None,
+            "side": "TEAM_A",
+            "stake": Decimal("125.00"),
+            "odds": Decimal("1.95"),
+            "payout": Decimal("243.75"),
+            "currency": "EUR",
+            "kickoff_time_utc": "2025-10-31T09:00:00Z",
+            "is_multi": False,
+            "is_supported": True,
+            "confidence": Decimal("0.80"),
+            "model_version_extraction": "gpt-4o",
+            "model_version_normalization": "gpt-4o",
+            "extraction_metadata": {},
+        }
+
+        service._update_bet_with_extraction(1, extraction_result)
+
+        bet = test_db.execute("SELECT * FROM bets WHERE id = 1").fetchone()
+        assert bet["stake_original"] == "800.00"
+        assert bet["stake_amount"] == "800.00"
+        assert bet["stake_currency"] == "AUD"
+        assert bet["currency"] == "AUD"
+        # No manual win override was set, so payout should follow OCR result
+        assert bet["payout"] == "243.75"
+
+    def test_extraction_preserves_manual_win_override(self, test_db, temp_screenshot):
+        """Manual win overrides should also survive OCR updates."""
+        test_db.execute(
+            """
+            INSERT INTO bets (
+                id, associate_id, bookmaker_id, screenshot_path,
+                stake_original, stake_amount, stake_currency, currency,
+                manual_stake_override, manual_stake_currency,
+                manual_potential_win_override, manual_potential_win_currency,
+                payout,
+                stake_eur, odds, created_at_utc, updated_at_utc
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                2,
+                1,
+                1,
+                temp_screenshot,
+                "500.00",
+                "500.00",
+                "AUD",
+                "AUD",
+                "500.00",
+                "AUD",
+                "950.00",
+                "AUD",
+                "950.00",
+                "0.0",
+                "1.0",
+                "2025-10-30T10:00:00Z",
+                "2025-10-30T10:00:00Z",
+            ),
+        )
+        test_db.commit()
+
+        service = BetIngestionService(db_conn=test_db)
+        extraction_result = {
+            "canonical_event": "Test Match",
+            "market_code": "SPREAD",
+            "period_scope": "FULL_MATCH",
+            "line_value": None,
+            "side": "TEAM_A",
+            "stake": Decimal("150.00"),
+            "odds": Decimal("2.10"),
+            "payout": Decimal("315.00"),
+            "currency": "EUR",
+            "kickoff_time_utc": "2025-10-31T09:00:00Z",
+            "is_multi": False,
+            "is_supported": True,
+            "confidence": Decimal("0.85"),
+            "model_version_extraction": "gpt-4o",
+            "model_version_normalization": "gpt-4o",
+            "extraction_metadata": {},
+        }
+
+        service._update_bet_with_extraction(2, extraction_result)
+
+        bet = test_db.execute("SELECT * FROM bets WHERE id = 2").fetchone()
+        assert bet["stake_original"] == "500.00"
+        assert bet["payout"] == "950.00"
     def test_process_bet_extraction_failure(self, test_db, temp_screenshot):
         """
         Given: Bet with screenshot that causes extraction error

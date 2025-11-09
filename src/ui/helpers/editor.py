@@ -40,11 +40,11 @@ BOOKMAKER_COLUMNS: Tuple[str, ...] = (
     "id",
     "associate_id",
     "bookmaker_name",
-    "parsing_profile",
     "bookmaker_chat_id",
     "is_active",
-    "created_at_utc",
-    "updated_at_utc",
+    "balance_eur",
+    "pending_balance_eur",
+    "net_deposits_eur",
 )
 
 
@@ -96,6 +96,11 @@ def build_bookmakers_dataframe(records: Sequence[Mapping[str, Any]]) -> pd.DataF
     ).astype(bool)
     frame["associate_id"] = frame["associate_id"].fillna(0).astype(int)
     frame["bookmaker_chat_id"] = frame["bookmaker_chat_id"].fillna("").astype(str)
+
+    for column in ("balance_eur", "pending_balance_eur", "net_deposits_eur"):
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+
     return frame.reset_index(drop=True)
 
 
@@ -152,26 +157,29 @@ def get_bookmaker_column_config(*, show_associate: bool = False) -> Dict[str, st
             required=True,
             width="medium",
         ),
-        "parsing_profile": st.column_config.TextColumn(
-            "Parsing Profile (JSON)",
-            width="large",
-            help="Optional JSON block with OCR / parsing hints.",
-        ),
         "bookmaker_chat_id": st.column_config.TextColumn(
             "Bookmaker Chat ID",
             width="medium",
             help="Latest Telegram chat registered for this bookmaker.",
         ),
         "is_active": st.column_config.CheckboxColumn("Active", width="small"),
-        "created_at_utc": st.column_config.DatetimeColumn(
-            "Created",
+        "balance_eur": st.column_config.NumberColumn(
+            "Balance (EUR)",
             disabled=True,
-            width="medium",
+            format="%.2f",
+            help="Latest reported bookmaker balance converted to EUR.",
         ),
-        "updated_at_utc": st.column_config.DatetimeColumn(
-            "Updated",
+        "pending_balance_eur": st.column_config.NumberColumn(
+            "Pending Balance (EUR)",
             disabled=True,
-            width="medium",
+            format="%.2f",
+            help="Verified + matched stakes awaiting settlement for this bookmaker.",
+        ),
+        "net_deposits_eur": st.column_config.NumberColumn(
+            "Deposits (EUR)",
+            disabled=True,
+            format="%.2f",
+            help="Net deposits (deposits minus withdrawals) tied to this bookmaker.",
         ),
     }
 

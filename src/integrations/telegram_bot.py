@@ -23,7 +23,14 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, __version__ as telegram_version
+from telegram import (
+    CopyTextButton,
+    ForceReply,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+    __version__ as telegram_version,
+)
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -35,6 +42,7 @@ from telegram.ext import (
 
 from src.core.config import Config
 from src.core.database import get_db_connection
+from src.services.bookmaker_balance_service import BookmakerBalanceService
 from src.utils.datetime_helpers import format_utc_iso, utc_now_iso
 from src.utils.logging_config import get_logger
 
@@ -46,6 +54,7 @@ logger = get_logger(__name__)
 DEFAULT_ADMIN_USER_IDS: set[int] = {1571540653}
 ADMIN_CONFIRMATION_TTL_SECONDS = 300  # 5 minutes
 PENDING_CONFIRMATION_TTL_SECONDS = 60 * 60  # 60 minutes
+OVERRIDE_REQUEST_TTL_SECONDS = 300  # 5 minutes
 MAX_MANUAL_AMOUNT = Decimal("1000000")
 CURRENCY_SYMBOL_MAP = {
     "\u20ac": "EUR",
@@ -54,6 +63,18 @@ CURRENCY_SYMBOL_MAP = {
 }
 CONFIRM_KEYWORDS = {"yes", "ingest", "#bet", "confirm"}
 DISCARD_KEYWORDS = {"no", "skip", "discard", "#skip"}
+BALANCE_CONFIRM_KEYWORDS = {"ok", "okay", "correct"}
+BALANCE_MESSAGE_PATTERN = re.compile(
+    r"^(?P<date>\d{2}/\d{2}/\d{2}) "
+    r"Balance: (?P<balance>[-\d.,]+) (?P<currency>[A-Z]{3}), "
+    r"pending balance: (?P<pending>[-\d.,]+) (?P<pending_currency>[A-Z]{3})\.$"
+)
+ADMIN_APPROVAL_KEYWORDS = ("approve", "confirm")
+ADMIN_PRIMARY_APPROVAL_KEYWORD = ADMIN_APPROVAL_KEYWORDS[0]
+ADMIN_APPROVAL_PATTERN = re.compile(
+    "(?:%s)(?:\\s+(\\d{6}))?" % "|".join(ADMIN_APPROVAL_KEYWORDS),
+    re.IGNORECASE,
+)
 
 
 class TelegramBot:
@@ -76,6 +97,7 @@ class TelegramBot:
 
         # Admin confirmation state
         self._pending_admin_confirmations: Dict[str, Dict[str, Any]] = {}
+        self._pending_override_requests: Dict[str, Dict[str, Any]] = {}
 
         self.application = Application.builder().token(self.bot_token).build()
         self._setup_handlers()
@@ -100,6 +122,25 @@ class TelegramBot:
         if message is not None and hasattr(message, "reply_text"):
             return message
         return primary or message
+
+    @staticmethod
+    def _create_copy_button(label: str, value: Optional[str]) -> Optional[InlineKeyboardButton]:
+        """Return a copy-to-clipboard inline button when supported."""
+        if not value:
+            return None
+        try:
+            return InlineKeyboardButton(text=label, copy_text=CopyTextButton(text=str(value)))
+        except TypeError:
+            # Older Telegram clients may not support copy buttons yet.
+            return None
+
+    @classmethod
+    def _build_copy_markup(cls, value: Optional[str], *, label: str) -> Optional[InlineKeyboardMarkup]:
+        """Return a single-button markup for copy interactions."""
+        button = cls._create_copy_button(label, value)
+        if not button:
+            return None
+        return InlineKeyboardMarkup([[button]])
 
     def _setup_handlers(self) -> None:
         """Set up command and message handlers."""
@@ -164,12 +205,32 @@ class TelegramBot:
         self.application.add_handler(
             MessageHandler(filters.PHOTO, self._rate_limited(self._photo_message))
         )
+        self.application.add_handler(
+            MessageHandler(
+                filters.Document.IMAGE,
+                self._rate_limited(self._document_message),
+            )
+        )
+
+        # Chat migration events (group -> supergroup)
+        self.application.add_handler(
+            MessageHandler(
+                filters.StatusUpdate.MIGRATE,
+                self._rate_limited(self._handle_chat_migration),
+            )
+        )
 
         # Callback handler for confirmation buttons
         self.application.add_handler(
             CallbackQueryHandler(
                 self._rate_limited(self._pending_photo_callback),
                 pattern=r"^(confirm|discard):",
+            )
+        )
+        self.application.add_handler(
+            CallbackQueryHandler(
+                self._rate_limited(self._handle_stake_prompt_callback),
+                pattern=r"^stake_prompt:",
             )
         )
 
@@ -343,23 +404,27 @@ class TelegramBot:
     async def _help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle the /help command."""
         try:
-            help_text = """
-Available commands:
-/start - Start the bot
-/help - Show this help message
-/register <associate_alias> <bookmaker_name> - Register this chat for a specific associate and bookmaker
-/chat_id - Show the current chat ID
-
-Funding commands:
-deposit <amount>, withdraw <amount>
-/deposit <amount>, /withdraw <amount>
-
-You can also send screenshots directly to create bet records.
-
-Admin commands:
-/list_associates, /list_bookmakers, /add_associate, /add_bookmaker,
-/list_chats, /unregister_chat, /broadcast, /version, /health
-            """.strip()
+            help_text = (
+                "Surebet assistant menu\n"
+                "\n"
+                "Balance & snapshots\n"
+                "- /register <associate> <bookmaker>: link this chat for balance + pending drops\n"
+                "- Reply with ok/okay/correct to a balance snapshot to log the latest report\n"
+                "- /help: show this menu\n"
+                "\n"
+                "Banking & funding\n"
+                "- deposit <amount> | /deposit <amount>\n"
+                "- withdraw <amount> | /withdraw <amount>\n"
+                "- approve (or /confirm): finalize a pending admin deposit/withdrawal within 5 minutes\n"
+                "\n"
+                "Chat tools\n"
+                "- /chat_id: display + copy the current chat ID\n"
+                "- /start: recap what the assistant can do\n"
+                "\n"
+                "Admin tools\n"
+                "- /list_associates, /list_bookmakers, /add_associate, /add_bookmaker\n"
+                "- /list_chats, /unregister_chat, /broadcast, /version, /health"
+            )
             await self._invoke(update.message.reply_text, help_text)
             logger.info("help_command_handled", user_id=update.effective_user.id)
         except Exception as e:
@@ -386,7 +451,10 @@ Admin commands:
                 logger.warning("chat_id_command_no_chat", user_id=user_id)
                 return
 
-            await self._invoke(message.reply_text, f"Current chat ID: {chat_id}")
+            text = f"Current chat ID: {chat_id}\nTap 'Copy chat ID' or long-press if the button is missing."
+            reply_markup = self._build_copy_markup(str(chat_id), label="Copy chat ID")
+            kwargs = {"reply_markup": reply_markup} if reply_markup else {}
+            await self._invoke(message.reply_text, text, **kwargs)
             logger.info("chat_id_command_handled", user_id=user_id, chat_id=chat_id)
         except Exception as e:
             logger.error("chat_id_command_error", error=str(e), user_id=user_id, chat_id=chat_id)
@@ -1054,13 +1122,10 @@ Admin commands:
                 await self._invoke(message.reply_text, "Invalid amount. Usage: /withdraw <amount>")
 
     async def _confirm_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /confirm <code> for admin approval two-factor."""
+        """Handle /confirm for admin approval finalization."""
         message = self._get_effective_message(update)
         args = context.args or []
-        if len(args) != 1:
-            if message:
-                await self._invoke(message.reply_text, "Usage: /confirm <code>")
-            return
+        token = args[0] if args else None
 
         chat_id = str(update.effective_chat.id) if update.effective_chat else None
         if not chat_id:
@@ -1069,11 +1134,116 @@ Admin commands:
             return
 
         await self._process_admin_confirmation(
-            token=args[0],
+            token=token,
             chat_id=chat_id,
             user_id=update.effective_user.id if update.effective_user else None,
             message=message,
         )
+
+    async def _maybe_handle_balance_confirmation(
+        self,
+        update: Update,
+        text: str,
+    ) -> bool:
+        """Capture 'ok/okay/correct' replies to balance snapshots and log confirmation."""
+        if not text or text.strip().lower() not in BALANCE_CONFIRM_KEYWORDS:
+            return False
+
+        message = self._get_effective_message(update)
+        if not message:
+            return False
+
+        reply_message = getattr(message, "reply_to_message", None)
+        reply_text = getattr(reply_message, "text", None)
+        reply_author = getattr(reply_message, "from_user", None)
+        if not reply_text or not reply_author or not getattr(reply_author, "is_bot", False):
+            return False
+
+        snapshot = self._parse_balance_snapshot_text(reply_text)
+        if not snapshot:
+            return False
+
+        chat = update.effective_chat
+        chat_id = str(chat.id) if chat else None
+        if not chat_id:
+            return False
+
+        registration = self._get_registration(chat_id)
+        if not registration:
+            return False
+
+        amount, currency = snapshot
+        try:
+            with BookmakerBalanceService() as balance_service:
+                balance_service.update_reported_balance(
+                    associate_id=registration["associate_id"],
+                    bookmaker_id=registration["bookmaker_id"],
+                    balance_native=amount,
+                    native_currency=currency,
+                    note=f"telegram-confirm:{chat_id}",
+                )
+        except Exception as exc:
+            if message:
+                await self._invoke(
+                    message.reply_text,
+                    "Could not record that confirmation. Please try again once the issue is resolved.",
+                )
+            logger.error(
+                "balance_confirmation_failed",
+                chat_id=chat_id,
+                associate_id=registration["associate_id"],
+                bookmaker_id=registration["bookmaker_id"],
+                error=str(exc),
+                exc_info=True,
+            )
+            return True
+
+        formatted_amount = amount.quantize(Decimal("0.01"))
+        if message:
+            await self._invoke(
+                message.reply_text,
+                (
+                    f"Thanks! Logged {formatted_amount} {currency} for "
+                    f"{registration['bookmaker_name']}."
+                ),
+            )
+
+        logger.info(
+            "balance_confirmation_recorded",
+            chat_id=chat_id,
+            associate_id=registration["associate_id"],
+            bookmaker_id=registration["bookmaker_id"],
+            amount=str(amount),
+            currency=currency,
+        )
+        return True
+
+    @staticmethod
+    def _parse_balance_snapshot_text(text: Optional[str]) -> Optional[Tuple[Decimal, str]]:
+        """Extract balance amount + currency from the standard balance snapshot message."""
+        if not text:
+            return None
+        match = BALANCE_MESSAGE_PATTERN.match(text.strip())
+        if not match:
+            return None
+        raw_amount = match.group("balance").replace(",", "")
+        try:
+            amount = Decimal(raw_amount)
+        except InvalidOperation:
+            return None
+        currency = match.group("currency")
+        return amount, currency
+
+    @staticmethod
+    def _is_security_prompt_message(message) -> bool:
+        """True when the replied-to bot message is a funding security check."""
+        if not message:
+            return False
+        text = getattr(message, "text", None)
+        if not text:
+            return False
+        lowered = text.lower()
+        return "security check" in lowered and "finalize" in lowered
 
     async def _maybe_handle_pending_text(
         self,
@@ -1091,15 +1261,33 @@ Admin commands:
                 await self._invoke(message.reply_text, str(exc))
             return True
 
-        if not parsed:
-            return False
-
         message = self._get_effective_message(update)
         reply_message = message.reply_to_message if message else None
         chat = update.effective_chat
         chat_id = str(chat.id) if chat else None
+        user_id = update.effective_user.id if update.effective_user else None
 
         if not chat_id:
+            return False
+
+        override_key = self._override_request_key(chat_id, user_id)
+        if override_key:
+            self._cleanup_override_requests()
+            override_request = self._pending_override_requests.get(override_key)
+            if override_request and message:
+                should_clear = await self._handle_override_request_text(
+                    request=override_request,
+                    message=message,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    text=text,
+                    context=context,
+                )
+                if should_clear:
+                    self._pending_override_requests.pop(override_key, None)
+                return True
+
+        if not parsed:
             return False
 
         if parsed["action"] in ("confirm", "discard") and not reply_message:
@@ -1115,6 +1303,14 @@ Admin commands:
 
         pending = self._get_pending_photo_by_reference(chat_id, reply_message.message_id)
         if not pending:
+            if parsed["action"] == "confirm" and self._is_security_prompt_message(reply_message):
+                await self._process_admin_confirmation(
+                    token=None,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    message=message,
+                )
+                return True
             if message:
                 await self._invoke(
                     message.reply_text,
@@ -1158,7 +1354,7 @@ Admin commands:
         if not cleaned:
             return None
 
-        tokens = cleaned.split()
+        tokens = [t for t in cleaned.split() if t]
         if not tokens:
             return None
 
@@ -1171,13 +1367,18 @@ Admin commands:
 
         if first_token in CONFIRM_KEYWORDS:
             action = "confirm"
-            stake_token = next((t for t in tokens[1:] if not t.lower().startswith("win=")), None)
+            stake_token = self._extract_stake_token(tokens[1:])
         elif first_token in DISCARD_KEYWORDS:
             action = "discard"
         else:
-            if win_token or self._looks_like_amount_token(tokens[0]):
+            first_word = tokens[0].lower()
+            first_is_amount = self._looks_like_amount_token(tokens[0])
+            first_is_stake_keyword = first_word.startswith("stake")
+            first_is_win_keyword = first_word.startswith("win=")
+
+            if win_token or first_is_amount or first_is_stake_keyword or first_is_win_keyword:
                 action = "amount_only"
-                stake_token = tokens[0] if not tokens[0].lower().startswith("win=") else None
+                stake_token = self._extract_stake_token(tokens)
             else:
                 return None
 
@@ -1196,6 +1397,87 @@ Admin commands:
             "win_amount": win_amount,
             "win_currency": win_currency,
         }
+
+    @staticmethod
+    def _override_request_key(chat_id: Optional[str], user_id: Optional[int]) -> Optional[str]:
+        if not chat_id or user_id is None:
+            return None
+        return f"{chat_id}:{user_id}"
+
+    def _cleanup_override_requests(self) -> None:
+        now = time.time()
+        expired = [
+            key
+            for key, ctx in self._pending_override_requests.items()
+            if ctx.get("expires_at", 0) <= now
+        ]
+        for key in expired:
+            self._pending_override_requests.pop(key, None)
+
+    def _register_override_request(
+        self,
+        *,
+        chat_id: Optional[str],
+        user_id: Optional[int],
+        pending_id: int,
+        mode: str,
+    ) -> Optional[str]:
+        key = self._override_request_key(chat_id, user_id)
+        if not key:
+            return None
+        self._cleanup_override_requests()
+        self._pending_override_requests[key] = {
+            "pending_id": pending_id,
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "mode": mode,
+            "created_at": utc_now_iso(),
+            "expires_at": time.time() + OVERRIDE_REQUEST_TTL_SECONDS,
+        }
+        return key
+
+    @staticmethod
+    def _strip_keyword_value(token: str, keyword: str) -> Optional[str]:
+        """Return the value portion when token starts with keyword (supports = or :)."""
+        if not token:
+            return None
+        lowered = token.lower()
+        keyword_lower = keyword.lower()
+        if lowered == keyword_lower:
+            return ""
+        for delimiter in ("=", ":"):
+            prefix = f"{keyword_lower}{delimiter}"
+            if lowered.startswith(prefix):
+                return token[len(prefix) :]
+        return None
+
+    def _extract_stake_token(self, tokens: List[str]) -> Optional[str]:
+        """Locate a stake token supporting 'stake 50' or plain numeric formats."""
+        if not tokens:
+            return None
+
+        for idx, token in enumerate(tokens):
+            if not token:
+                continue
+
+            stripped = self._strip_keyword_value(token, "stake")
+            if stripped is not None:
+                if stripped:
+                    return stripped
+                # bare 'stake' keyword – look ahead for the next usable amount token
+                for lookahead in tokens[idx + 1 :]:
+                    if not lookahead or lookahead.lower().startswith("win=") or lookahead.lower() == "stake":
+                        continue
+                    return lookahead
+                return None
+
+            if token.lower().startswith("win="):
+                continue
+
+            if self._looks_like_amount_token(token):
+                return token
+
+        return None
 
     def _parse_amount_token(self, token: str) -> Tuple[Decimal, Optional[str]]:
         """Convert a raw token like '€25.5' or '25usd' into Decimal + currency."""
@@ -1269,12 +1551,20 @@ Admin commands:
         message = self._get_effective_message(update)
 
         try:
+            if await self._maybe_handle_balance_confirmation(update, text):
+                return
+
             if await self._maybe_handle_pending_text(update, context, text):
                 return
 
             token = self._parse_admin_confirmation(text)
-            if token:
-                await self._process_admin_confirmation(token, chat_id, user_id, message)
+            if token is not None:
+                await self._process_admin_confirmation(
+                    token=token or None,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    message=message,
+                )
                 return
 
             parsed = self._parse_funding_command(text)
@@ -1334,13 +1624,22 @@ Admin commands:
 
     @staticmethod
     def _parse_admin_confirmation(text: str) -> Optional[str]:
-        """Parse admin confirmation text into a 6-digit token."""
-        if not text:
+        """
+        Parse admin confirmation text.
+
+        Returns:
+            - "" when the user simply typed/issued `approve` (or legacy `confirm`)
+            - 6-digit token string when explicitly provided (legacy behaviour)
+            - None when the text does not represent an admin confirmation
+        """
+        cleaned = (text or "").strip()
+        if not cleaned:
             return None
-        match = re.fullmatch(r"(?:confirm|approve)\s+(\d{6})", text.strip(), re.IGNORECASE)
+        match = ADMIN_APPROVAL_PATTERN.fullmatch(cleaned)
         if not match:
             return None
-        return match.group(1)
+        token = match.group(1)
+        return token if token else ""
 
     def _get_associate_home_currency(self, associate_id: int) -> Optional[str]:
         """Fetch associate home_currency from DB."""
@@ -1511,6 +1810,7 @@ Admin commands:
             "currency": currency,
             "note": note,
             "created_at": utc_now_iso(),
+            "created_at_ts": time.time(),
             "expires_at": time.time() + ADMIN_CONFIRMATION_TTL_SECONDS,
         }
         self._pending_admin_confirmations[token] = context
@@ -1521,9 +1821,9 @@ Admin commands:
             await self._invoke(
                 message.reply_text,
                 (
-                    f"Security check: confirm code {token} to finalize {command_type} "
-                    f"{amount_decimal} {currency} {bookmaker_segment}recorded. "
-                    f"Reply with \"confirm {token}\" within {minutes} minute(s)."
+                    f"Security check: reply with '{ADMIN_PRIMARY_APPROVAL_KEYWORD}' within {minutes} minute(s) "
+                    f"to finalize {command_type} {amount_decimal} {currency} "
+                    f"{bookmaker_segment}recorded. (Legacy 'confirm' still works.)"
                 ),
             )
 
@@ -1539,37 +1839,78 @@ Admin commands:
             token=token,
         )
 
+    def _find_pending_admin_confirmation(
+        self,
+        *,
+        chat_id: str,
+        user_id: Optional[int],
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """Return the latest pending admin confirmation for the chat/user."""
+        matches = [
+            (token, ctx)
+            for token, ctx in self._pending_admin_confirmations.items()
+            if ctx.get("chat_id") == chat_id
+        ]
+        if user_id is not None:
+            user_matches = [
+                (token, ctx)
+                for token, ctx in matches
+                if ctx.get("user_id") in (user_id, None)
+            ]
+            if user_matches:
+                matches = user_matches
+        if not matches:
+            return None, None
+        token, context = max(
+            matches,
+            key=lambda item: item[1].get("created_at_ts", 0.0),
+        )
+        return token, context
+
     async def _process_admin_confirmation(
         self,
-        token: str,
+        *,
+        token: Optional[str],
         chat_id: str,
         user_id: Optional[int],
         message,
     ) -> None:
-        """Process OTP confirmation from admin users."""
-        cleaned_token = token.strip()
-        if not cleaned_token:
-            if message:
-                await self._invoke(message.reply_text, "Confirmation code missing. Usage: confirm <code>")
-            return
+        """Process admin confirmation requests."""
+        cleaned_token = token.strip() if token else None
 
         self._cleanup_expired_confirmations()
-        context = self._pending_admin_confirmations.get(cleaned_token)
+        matched_token: Optional[str] = None
+        context: Optional[Dict[str, Any]] = None
+
+        if cleaned_token:
+            context = self._pending_admin_confirmations.get(cleaned_token)
+            matched_token = cleaned_token
+        else:
+            matched_token, context = self._find_pending_admin_confirmation(
+                chat_id=chat_id,
+                user_id=user_id,
+            )
+
         if not context:
             if message:
-                await self._invoke(message.reply_text, "Confirmation code is invalid or expired. Please resend the command.")
+                response = (
+                    "Confirmation code is invalid or expired. Please resend the command."
+                    if cleaned_token
+                    else "No pending Telegram approvals for this chat. Please resend the deposit/withdrawal command."
+                )
+                await self._invoke(message.reply_text, response)
             logger.warning(
                 "funding_admin_confirmation_invalid",
                 chat_id=chat_id,
                 user_id=user_id,
                 token=cleaned_token,
-                reason="missing",
+                reason="missing" if cleaned_token else "no_pending",
             )
             return
 
-        if context["chat_id"] != chat_id:
+        if cleaned_token and context["chat_id"] != chat_id:
             if message:
-                await self._invoke(message.reply_text, "This confirmation code belongs to a different chat.")
+                await self._invoke(message.reply_text, "This confirmation belongs to a different chat.")
             logger.warning(
                 "funding_admin_confirmation_invalid",
                 chat_id=chat_id,
@@ -1582,24 +1923,27 @@ Admin commands:
         original_user = context.get("user_id")
         if original_user is not None and original_user != user_id:
             if message:
-                await self._invoke(message.reply_text, "Only the admin who submitted the command can confirm this code.")
+                await self._invoke(
+                    message.reply_text,
+                    "Only the admin who submitted the command can confirm it.",
+                )
             logger.warning(
                 "funding_admin_confirmation_invalid",
                 chat_id=chat_id,
                 user_id=user_id,
-                token=cleaned_token,
+                token=matched_token,
                 reason="user_mismatch",
             )
             return
 
         ledger_id = await self._record_admin_transaction(context, message)
-        if ledger_id:
-            self._pending_admin_confirmations.pop(cleaned_token, None)
+        if ledger_id and matched_token:
+            self._pending_admin_confirmations.pop(matched_token, None)
             logger.info(
                 "funding_admin_confirmation_completed",
                 chat_id=chat_id,
                 user_id=user_id,
-                token=cleaned_token,
+                token=matched_token,
                 ledger_id=ledger_id,
             )
 
@@ -1685,98 +2029,166 @@ Admin commands:
         if not message or not update.effective_chat:
             return
 
+        photo = message.photo[-1] if message.photo else None
+        if not photo:
+            return
+
         try:
-            chat_id = str(update.effective_chat.id)
-            message_id = message.message_id
-            user_id = update.effective_user.id if update.effective_user else None
-
-            registration = self._get_registration(chat_id)
-            if not registration:
-                await self._invoke(
-                    message.reply_text,
-                    "This chat is not registered. Please use /register <associate_alias> <bookmaker_name> first.",
-                )
-                logger.warning(
-                    "photo_message_unregistered_chat",
-                    user_id=user_id,
-                    chat_id=chat_id,
-                    message_id=message_id,
-                )
-                return
-
-            photo = message.photo[-1]
-            photo_file = await photo.get_file()
-
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-            associate_alias = registration["associate_alias"]
-            bookmaker_name = registration["bookmaker_name"]
-            filename = f"{timestamp}_{associate_alias}_{bookmaker_name}.png"
-
-            screenshot_dir = Path(Config.SCREENSHOT_DIR)
-            screenshot_dir.mkdir(parents=True, exist_ok=True)
-
-            screenshot_path = screenshot_dir / filename
-            counter = 1
-            while screenshot_path.exists():
-                filename = f"{timestamp}_{associate_alias}_{bookmaker_name}_{counter}.png"
-                screenshot_path = screenshot_dir / filename
-                counter += 1
-
-            await photo_file.download_to_drive(screenshot_path)
-
-            try:
-                relative_path = screenshot_path.relative_to(Path.cwd())
-                stored_path = str(relative_path)
-            except ValueError:
-                stored_path = str(screenshot_path)
-
-            pending = self._create_pending_photo_entry(
-                chat_id=chat_id,
-                user_id=user_id,
-                registration=registration,
-                photo_message_id=str(message_id),
-                screenshot_path=stored_path,
+            file_obj = await photo.get_file()
+            await self._process_incoming_media(
+                update=update,
+                context=context,
+                message=message,
+                file_obj=file_obj,
+                extension_hint=".png",
+                media_label="photo",
             )
+        except Exception as e:
+            await self._handle_media_error(e, update, message, label="photo")
 
-            prompt_message = await self._invoke(
+    async def _document_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle image documents (send-as-file screenshots)."""
+        message = update.message
+        if not message or not update.effective_chat:
+            return
+
+        document = getattr(message, "document", None)
+        if not document:
+            return
+
+        mime_type = (document.mime_type or "").lower()
+        filename = document.file_name or ""
+        extension = Path(filename).suffix if filename else None
+        if not (
+            mime_type.startswith("image/")
+            or (extension and extension.lower() in {".png", ".jpg", ".jpeg", ".webp"})
+        ):
+            return
+
+        try:
+            file_obj = await document.get_file()
+            await self._process_incoming_media(
+                update=update,
+                context=context,
+                message=message,
+                file_obj=file_obj,
+                extension_hint=extension or ".png",
+                media_label="document",
+            )
+        except Exception as e:
+            await self._handle_media_error(e, update, message, label="document")
+
+    async def _process_incoming_media(
+        self,
+        *,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        message,
+        file_obj,
+        extension_hint: Optional[str],
+        media_label: str,
+    ) -> None:
+        """Shared logic for handling incoming screenshots regardless of transport."""
+        chat = update.effective_chat
+        if not chat:
+            return
+
+        chat_id = str(chat.id)
+        message_id = message.message_id
+        user_id = update.effective_user.id if update.effective_user else None
+
+        registration = self._get_registration(chat_id)
+        if not registration:
+            await self._invoke(
                 message.reply_text,
-                self._build_confirmation_prompt(pending),
-                reply_markup=self._build_confirmation_keyboard(pending["confirmation_token"]),
+                "This chat is not registered. Please use /register <associate_alias> <bookmaker_name> first.",
             )
-
-            if prompt_message and hasattr(prompt_message, "message_id"):
-                self._update_pending_prompt_message(pending["id"], prompt_message.message_id)
-
-            ref = pending["confirmation_token"][:6].upper()
-            print(f"[Telegram] Pending screenshot from user {user_id} | Ref #{ref}")
-            print(f"           Saved to: {screenshot_path.name}")
-
-            logger.info(
-                "photo_message_pending",
+            logger.warning(
+                "media_message_unregistered_chat",
+                media=media_label,
                 user_id=user_id,
                 chat_id=chat_id,
                 message_id=message_id,
-                pending_id=pending["id"],
-                screenshot_path=str(screenshot_path),
             )
+            return
 
-        except Exception as e:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        associate_alias = registration["associate_alias"]
+        bookmaker_name = registration["bookmaker_name"]
+        extension = (extension_hint or ".png").lower()
+        if not extension.startswith("."):
+            extension = f".{extension}"
+
+        screenshot_dir = Path(Config.SCREENSHOT_DIR)
+        screenshot_dir.mkdir(parents=True, exist_ok=True)
+
+        filename = f"{timestamp}_{associate_alias}_{bookmaker_name}{extension}"
+        screenshot_path = screenshot_dir / filename
+        counter = 1
+        while screenshot_path.exists():
+            filename = f"{timestamp}_{associate_alias}_{bookmaker_name}_{counter}{extension}"
+            screenshot_path = screenshot_dir / filename
+            counter += 1
+
+        await file_obj.download_to_drive(screenshot_path)
+
+        try:
+            relative_path = screenshot_path.relative_to(Path.cwd())
+            stored_path = str(relative_path)
+        except ValueError:
+            stored_path = str(screenshot_path)
+
+        pending = self._create_pending_photo_entry(
+            chat_id=chat_id,
+            user_id=user_id,
+            registration=registration,
+            photo_message_id=str(message_id),
+            screenshot_path=stored_path,
+        )
+
+        prompt_message = await self._invoke(
+            message.reply_text,
+            self._build_confirmation_prompt(pending),
+            reply_markup=self._build_confirmation_keyboard(pending["confirmation_token"]),
+        )
+
+        if prompt_message and hasattr(prompt_message, "message_id"):
+            self._update_pending_prompt_message(pending["id"], prompt_message.message_id)
+
+        ref = pending["confirmation_token"][:6].upper()
+        print(f"[Telegram] Pending {media_label} from user {user_id} | Ref #{ref}")
+        print(f"           Saved to: {screenshot_path.name}")
+
+        logger.info(
+            "media_message_pending",
+            media=media_label,
+            user_id=user_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            pending_id=pending["id"],
+            screenshot_path=str(screenshot_path),
+        )
+
+    async def _handle_media_error(self, error: Exception, update: Update, message, label: str) -> None:
+        """Common fallback when media ingestion fails."""
+        logger.error(
+            "media_message_error",
+            media=label,
+            error=str(error),
+            user_id=update.effective_user.id if update.effective_user else None,
+        )
+        try:
+            await self._invoke(
+                message.reply_text,
+                "An error occurred while queuing your screenshot. Please try again.",
+            )
+        except Exception as reply_error:
             logger.error(
-                "photo_message_error",
-                error=str(e),
+                "media_message_reply_error",
+                media=label,
+                error=str(reply_error),
                 user_id=update.effective_user.id if update.effective_user else None,
             )
-            try:
-                await self._invoke(
-                    message.reply_text,
-                    "An error occurred while queuing your screenshot. Please try again.",
-                )
-            except Exception as reply_error:
-                logger.error(
-                    "photo_message_reply_error",
-                    error=str(reply_error),
-                    user_id=update.effective_user.id if update.effective_user else None,
-                )
 
     def _build_confirmation_prompt(self, pending: Dict[str, Any]) -> str:
         """Create a human-friendly confirmation prompt tied to the pending screenshot."""
@@ -1796,14 +2208,17 @@ Admin commands:
 
     def _build_confirmation_keyboard(self, token: str) -> InlineKeyboardMarkup:
         """Build inline keyboard for ingest/discard confirmation."""
-        return InlineKeyboardMarkup(
+        buttons = [
             [
-                [
-                    InlineKeyboardButton("Ingest ✅", callback_data=f"confirm:{token}"),
-                    InlineKeyboardButton("Discard 🗑️", callback_data=f"discard:{token}"),
-                ]
-            ]
-        )
+                InlineKeyboardButton("Ingest ✅", callback_data=f"confirm:{token}"),
+                InlineKeyboardButton("Discard 🗑️", callback_data=f"discard:{token}"),
+            ],
+            [InlineKeyboardButton("Stake Override ✏️", callback_data=f"stake_prompt:{token}")],
+        ]
+        copy_button = self._create_copy_button("Copy Ref", f"Ref #{token[:6].upper()}")
+        if copy_button:
+            buttons.append([copy_button])
+        return InlineKeyboardMarkup(buttons)
 
     def _create_pending_photo_entry(
         self,
@@ -1929,6 +2344,21 @@ Admin commands:
         conn.close()
         return dict(row) if row else None
 
+    def _get_pending_photo_by_id(self, pending_id: int) -> Optional[Dict[str, Any]]:
+        """Fetch pending record by primary key."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM pending_photos
+            WHERE id = ?
+            """,
+            (pending_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
     def _update_pending_photo(self, pending_id: int, **fields: Any) -> None:
         """Generic helper to update pending photo columns."""
         if not fields:
@@ -1943,6 +2373,99 @@ Admin commands:
         )
         conn.commit()
         conn.close()
+
+    async def _handle_chat_migration(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        """Handle chat_id changes when groups migrate to supergroups."""
+        message = self._get_effective_message(update)
+        if not message:
+            return
+
+        migrate_to = getattr(message, "migrate_to_chat_id", None)
+        migrate_from = getattr(message, "migrate_from_chat_id", None)
+
+        old_chat_id = None
+        new_chat_id = None
+
+        if migrate_to:
+            # Group upgraded to supergroup
+            new_chat_id = str(migrate_to)
+            chat = getattr(message, "chat", None)
+            if chat and getattr(chat, "id", None) is not None:
+                old_chat_id = str(chat.id)
+        elif migrate_from:
+            # Channel linked back to group or downgrade
+            old_chat_id = str(migrate_from)
+            chat = getattr(message, "chat", None)
+            if chat and getattr(chat, "id", None) is not None:
+                new_chat_id = str(chat.id)
+
+        if not old_chat_id or not new_chat_id:
+            return
+
+        if self._migrate_chat_registration(old_chat_id, new_chat_id):
+            logger.info(
+                "chat_registration_migrated",
+                old_chat_id=old_chat_id,
+                new_chat_id=new_chat_id,
+            )
+            notice = (
+                "This chat was upgraded and now has a new ID. "
+                "I've moved the registration so screenshots continue working."
+            )
+            try:
+                await self._invoke(message.reply_text, notice)
+            except Exception:
+                try:
+                    await context.bot.send_message(chat_id=new_chat_id, text=notice)
+                except Exception:
+                    logger.warning(
+                        "chat_registration_migration_notice_failed",
+                        chat_id=new_chat_id,
+                    )
+
+    def _migrate_chat_registration(self, old_chat_id: str, new_chat_id: str) -> bool:
+        """Update registration and pending photos to reference the new chat ID."""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            now = utc_now_iso()
+
+            cursor.execute(
+                """
+                UPDATE chat_registrations
+                SET chat_id = ?, updated_at_utc = ?
+                WHERE chat_id = ?
+                """,
+                (new_chat_id, now, old_chat_id),
+            )
+            updated = cursor.rowcount > 0
+
+            cursor.execute(
+                """
+                UPDATE pending_photos
+                SET chat_id = ?, updated_at_utc = ?
+                WHERE chat_id = ?
+                """,
+                (new_chat_id, now, old_chat_id),
+            )
+
+            conn.commit()
+            conn.close()
+            if updated:
+                return True
+
+        except Exception as exc:
+            logger.error(
+                "chat_registration_migration_failed",
+                old_chat_id=old_chat_id,
+                new_chat_id=new_chat_id,
+                error=str(exc),
+            )
+        return False
 
     async def _pending_photo_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle inline button callbacks for pending screenshots."""
@@ -1981,9 +2504,61 @@ Admin commands:
                 pending=pending,
                 reply_message=query.message,
                 chat_id=pending["chat_id"],
-            )
+        )
 
         await query.edit_message_reply_markup(reply_markup=None)
+
+    async def _handle_stake_prompt_callback(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        """Initiate a stake override prompt via inline button."""
+        query = update.callback_query
+        if not query or not query.data:
+            return
+
+        await query.answer()
+        token = query.data.split(":", 1)[1]
+        pending = self._get_pending_photo_by_token(token)
+        if not pending:
+            if query.message:
+                await self._invoke(
+                    query.message.reply_text,
+                    "That screenshot was already processed or expired.",
+                )
+            return
+
+        user_id = query.from_user.id if query.from_user else None
+        chat_id = pending.get("chat_id")
+        key = self._register_override_request(
+            chat_id=chat_id,
+            user_id=user_id,
+            pending_id=int(pending["id"]),
+            mode="update" if pending.get("bet_id") else "confirm",
+        )
+
+        prompt_text = (
+            f"Send the stake override for Ref #{token[:6].upper()}."
+            " Example: 'stake 50 win=140' or '50 win=140'."
+        )
+        reply_markup = ForceReply(selective=True)
+        prompt_message = None
+        if query.message:
+            prompt_message = await self._invoke(query.message.reply_text, prompt_text, reply_markup=reply_markup)
+        elif chat_id:
+            prompt_message = await context.bot.send_message(chat_id=chat_id, text=prompt_text, reply_markup=reply_markup)
+
+        if key and prompt_message and hasattr(prompt_message, "message_id"):
+            self._pending_override_requests[key]["prompt_message_id"] = prompt_message.message_id
+
+        logger.info(
+            "pending_override_prompt_started",
+            chat_id=chat_id,
+            user_id=user_id,
+            pending_id=pending["id"],
+            ref=token[:6].upper(),
+        )
 
     async def _handle_pending_confirmation(
         self,
@@ -2001,6 +2576,7 @@ Admin commands:
                 chat_id,
                 context,
                 f"Ref #{pending['confirmation_token'][:6].upper()} already processed.",
+                copy_value=f"Ref #{pending['confirmation_token'][:6].upper()}",
             )
             return
 
@@ -2051,6 +2627,15 @@ Admin commands:
             win_currency=manual_win_currency,
         )
 
+        if manual_stake or manual_win:
+            self._apply_manual_overrides_to_bet(
+                bet_id=bet_id,
+                manual_stake=manual_stake,
+                manual_stake_currency=manual_stake_currency,
+                manual_win=manual_win,
+                manual_win_currency=manual_win_currency,
+            )
+
         await self._trigger_ocr_pipeline(bet_id)
 
         ref = pending["confirmation_token"][:6].upper()
@@ -2067,6 +2652,7 @@ Admin commands:
             chat_id,
             context,
             " ".join(details),
+            copy_value=f"Ref #{ref}",
         )
 
         logger.info(
@@ -2090,6 +2676,7 @@ Admin commands:
                 chat_id,
                 None,  # type: ignore[arg-type]
                 f"Ref #{pending['confirmation_token'][:6].upper()} already ingested; cannot discard.",
+                copy_value=f"Ref #{pending['confirmation_token'][:6].upper()}",
             )
             return
 
@@ -2101,6 +2688,7 @@ Admin commands:
             chat_id,
             None,  # type: ignore[arg-type]
             f"Discarded Ref #{pending['confirmation_token'][:6].upper()} and deleted the screenshot.",
+            copy_value=f"Ref #{pending['confirmation_token'][:6].upper()}",
         )
 
         logger.info("pending_confirmation_discarded", pending_id=pending["id"])
@@ -2159,6 +2747,75 @@ Admin commands:
             "Manual overrides updated.",
         )
 
+    async def _handle_override_request_text(
+        self,
+        *,
+        request: Dict[str, Any],
+        message,
+        chat_id: str,
+        user_id: Optional[int],
+        text: str,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> bool:
+        """Process text input that was requested via the Stake Override button."""
+        if request.get("expires_at", 0) <= time.time():
+            await self._invoke(
+                message.reply_text,
+                "That override request expired. Tap the Stake Override button again.",
+            )
+            return True
+
+        try:
+            parsed = self._parse_pending_confirmation_text(text)
+        except ValueError as exc:
+            await self._invoke(message.reply_text, str(exc))
+            return False
+
+        if not parsed or (not parsed.get("stake_amount") and not parsed.get("win_amount")):
+            await self._invoke(
+                message.reply_text,
+                "Please provide a stake amount (optionally win=...) for the override.",
+            )
+            return False
+
+        pending = self._get_pending_photo_by_id(int(request["pending_id"]))
+        if not pending:
+            await self._invoke(
+                message.reply_text,
+                "I could not find that screenshot anymore. Please resend the photo.",
+            )
+            return True
+
+        overrides = {
+            "stake_amount": parsed.get("stake_amount"),
+            "stake_currency": parsed.get("stake_currency"),
+            "win_amount": parsed.get("win_amount"),
+            "win_currency": parsed.get("win_currency"),
+        }
+
+        if pending.get("bet_id"):
+            await self._handle_manual_override_update(
+                pending=pending,
+                overrides=overrides,
+                reply_message=message,
+            )
+        else:
+            await self._handle_pending_confirmation(
+                pending=pending,
+                overrides=overrides,
+                reply_message=message,
+                chat_id=chat_id,
+                context=context,
+            )
+
+        logger.info(
+            "pending_override_request_completed",
+            chat_id=chat_id,
+            user_id=user_id,
+            pending_id=pending["id"],
+        )
+        return True
+
     def _apply_manual_overrides_to_bet(
         self,
         *,
@@ -2171,24 +2828,55 @@ Admin commands:
         """Persist manual stake/win overrides on the bet record."""
         conn = get_db_connection()
         cursor = conn.cursor()
+        columns = {
+            row[1]
+            for row in cursor.execute("PRAGMA table_info(bets)").fetchall()
+        }
+
+        set_clauses: List[str] = []
+        params: List[Optional[str]] = []
+
+        def add_simple(column: str, value: Optional[str]) -> None:
+            if column in columns:
+                set_clauses.append(f"{column} = ?")
+                params.append(value)
+
+        # Always try to persist manual override fields when supported.
+        add_simple("manual_stake_override", manual_stake)
+        add_simple("manual_stake_currency", manual_stake_currency)
+        add_simple("manual_potential_win_override", manual_win)
+        add_simple("manual_potential_win_currency", manual_win_currency)
+
+        if manual_stake is not None:
+            add_simple("stake_original", manual_stake)
+            add_simple("stake_amount", manual_stake)
+            if "stake_currency" in columns:
+                set_clauses.append("stake_currency = COALESCE(?, stake_currency)")
+                params.append(manual_stake_currency)
+            if "currency" in columns:
+                set_clauses.append("currency = COALESCE(?, currency)")
+                params.append(manual_stake_currency)
+
+        if manual_win is not None:
+            add_simple("payout", manual_win)
+
+        if "updated_at_utc" in columns:
+            set_clauses.append("updated_at_utc = ?")
+            params.append(utc_now_iso())
+
+        if not set_clauses:
+            conn.close()
+            return
+
+        params.append(bet_id)
+
         cursor.execute(
-            """
+            f"""
             UPDATE bets
-            SET manual_stake_override = ?,
-                manual_stake_currency = ?,
-                manual_potential_win_override = ?,
-                manual_potential_win_currency = ?,
-                updated_at_utc = ?
+            SET {", ".join(set_clauses)}
             WHERE id = ?
             """,
-            (
-                manual_stake,
-                manual_stake_currency,
-                manual_win,
-                manual_win_currency,
-                utc_now_iso(),
-                bet_id,
-            ),
+            tuple(params),
         )
         conn.commit()
         conn.close()
@@ -2219,6 +2907,7 @@ Admin commands:
                 await context.bot.send_message(
                     chat_id=record["chat_id"],
                     text=f"Timed out waiting for confirmation of Ref #{ref}. Screenshot discarded.",
+                    reply_markup=self._build_copy_markup(f"Ref #{ref}", label="Copy Ref"),
                 )
             except Exception as exc:  # pragma: no cover - log only
                 logger.warning("pending_expiry_notify_failed", chat_id=record["chat_id"], error=str(exc))
@@ -2255,13 +2944,17 @@ Admin commands:
         chat_id: str,
         context: Optional[ContextTypes.DEFAULT_TYPE],
         text: str,
+        *,
+        copy_value: Optional[str] = None,
     ) -> None:
         """Send a status update either by replying or via direct chat message."""
+        reply_markup = self._build_copy_markup(copy_value, label="Copy Ref") if copy_value else None
+        kwargs = {"reply_markup": reply_markup} if reply_markup else {}
         if reply_message:
-            await self._invoke(reply_message.reply_text, text)
+            await self._invoke(reply_message.reply_text, text, **kwargs)
             return
         if context:
-            await context.bot.send_message(chat_id=chat_id, text=text)
+            await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
 
 
     def _create_bet_record(
@@ -2440,3 +3133,93 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    async def _process_incoming_media(
+        self,
+        *,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        message,
+        file_obj,
+        extension_hint: Optional[str],
+        media_label: str,
+    ) -> None:
+        """Shared logic for handling incoming screenshots regardless of transport."""
+        chat = update.effective_chat
+        if not chat:
+            return
+
+        chat_id = str(chat.id)
+        message_id = message.message_id
+        user_id = update.effective_user.id if update.effective_user else None
+
+        registration = self._get_registration(chat_id)
+        if not registration:
+            await self._invoke(
+                message.reply_text,
+                "This chat is not registered. Please use /register <associate_alias> <bookmaker_name> first.",
+            )
+            logger.warning(
+                "media_message_unregistered_chat",
+                media=media_label,
+                user_id=user_id,
+                chat_id=chat_id,
+                message_id=message_id,
+            )
+            return
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        associate_alias = registration["associate_alias"]
+        bookmaker_name = registration["bookmaker_name"]
+        extension = (extension_hint or ".png").lower()
+        if not extension.startswith("."):
+            extension = f".{extension}"
+
+        screenshot_dir = Path(Config.SCREENSHOT_DIR)
+        screenshot_dir.mkdir(parents=True, exist_ok=True)
+
+        filename = f"{timestamp}_{associate_alias}_{bookmaker_name}{extension}"
+        screenshot_path = screenshot_dir / filename
+        counter = 1
+        while screenshot_path.exists():
+            filename = f"{timestamp}_{associate_alias}_{bookmaker_name}_{counter}{extension}"
+            screenshot_path = screenshot_dir / filename
+            counter += 1
+
+        await file_obj.download_to_drive(screenshot_path)
+
+        try:
+            relative_path = screenshot_path.relative_to(Path.cwd())
+            stored_path = str(relative_path)
+        except ValueError:
+            stored_path = str(screenshot_path)
+
+        pending = self._create_pending_photo_entry(
+            chat_id=chat_id,
+            user_id=user_id,
+            registration=registration,
+            photo_message_id=str(message_id),
+            screenshot_path=stored_path,
+        )
+
+        prompt_message = await self._invoke(
+            message.reply_text,
+            self._build_confirmation_prompt(pending),
+            reply_markup=self._build_confirmation_keyboard(pending["confirmation_token"]),
+        )
+
+        if prompt_message and hasattr(prompt_message, "message_id"):
+            self._update_pending_prompt_message(pending["id"], prompt_message.message_id)
+
+        ref = pending["confirmation_token"][:6].upper()
+        print(f"[Telegram] Pending {media_label} from user {user_id} | Ref #{ref}")
+        print(f"           Saved to: {screenshot_path.name}")
+
+        logger.info(
+            "media_message_pending",
+            media=media_label,
+            user_id=user_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            pending_id=pending["id"],
+            screenshot_path=str(screenshot_path),
+        )

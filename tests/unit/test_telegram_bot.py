@@ -10,6 +10,7 @@ Tests cover:
 
 import asyncio
 import os
+import sqlite3
 import tempfile
 import time
 from decimal import Decimal
@@ -20,6 +21,7 @@ import pytest
 from telegram import Update, Message, User, Chat
 from telegram.ext import ContextTypes
 
+from src.core.schema import create_schema
 from src.integrations.telegram_bot import TelegramBot
 from src.services.funding_transaction_service import FundingTransactionError
 
@@ -94,7 +96,9 @@ def mock_update():
     mock_chat.id = 67890
     mock_message = MagicMock(spec=Message)
     mock_message.reply_text = AsyncMock()
-    mock_message.photo = [MagicMock()]  # Mock photo array
+    mock_photo = MagicMock()
+    mock_photo.get_file = AsyncMock(return_value=MagicMock())
+    mock_message.photo = [mock_photo]  # Mock photo array
     mock_message.message_id = 999
     mock_update.effective_user = mock_user
     mock_update.effective_chat = mock_chat
@@ -160,6 +164,19 @@ class TestPendingConfirmationParsing:
         with pytest.raises(ValueError):
             telegram_bot._parse_amount_token("abc123xyz")
 
+    def test_parse_amount_only_accepts_stake_keyword(self, telegram_bot):
+        result = telegram_bot._parse_pending_confirmation_text("stake 500")
+        assert result["action"] == "amount_only"
+        assert result["stake_amount"] == Decimal("500")
+        assert result["win_amount"] is None
+
+    def test_parse_amount_only_accepts_inline_stake_equals(self, telegram_bot):
+        result = telegram_bot._parse_pending_confirmation_text("stake=€25 win=140")
+        assert result["action"] == "amount_only"
+        assert result["stake_amount"] == Decimal("25")
+        assert result["stake_currency"] == "EUR"
+        assert result["win_amount"] == Decimal("140")
+
 
 class TestCommandHandlers:
     """Test command handlers."""
@@ -176,10 +193,9 @@ class TestCommandHandlers:
         await telegram_bot._help_command(mock_update, mock_context)
         mock_update.message.reply_text.assert_called_once()
         call_args = mock_update.message.reply_text.call_args[0][0]
-        assert "Available commands:" in call_args
-        assert "/start" in call_args
-        assert "/help" in call_args
-        assert "/register" in call_args
+        assert "Surebet assistant menu" in call_args
+        assert "Balance & snapshots" in call_args
+        assert "/chat_id" in call_args
 
     # ------------------------------------------------------------------
     # Funding text command parsing
@@ -234,8 +250,327 @@ class TestCommandHandlers:
         mock_update.message.reply_text.assert_called()
         text = mock_update.message.reply_text.call_args[0][0]
         assert "Security check" in text
-        assert "123456" in text
+        assert "reply with 'approve'" in text.lower()
         assert "123456" in telegram_bot._pending_admin_confirmations
+
+    @pytest.mark.asyncio
+    async def test_confirm_reply_on_security_prompt_routes_to_admin_flow(
+        self,
+        telegram_bot,
+        mock_update,
+        mock_context,
+    ):
+        """Replies to funding security prompts should hit the admin confirmation flow."""
+        mock_update.message.text = "confirm"
+
+        security_prompt = MagicMock(spec=Message)
+        security_prompt.message_id = 4242
+        security_prompt.text = "Security check: reply with 'approve' within 5 minute(s) to finalize..."
+        security_prompt.from_user = MagicMock()
+        security_prompt.from_user.is_bot = True
+        mock_update.message.reply_to_message = security_prompt
+
+        with patch.object(telegram_bot, "_get_pending_photo_by_reference", return_value=None), patch.object(
+            telegram_bot,
+            "_process_admin_confirmation",
+            AsyncMock(),
+        ) as mock_process:
+            handled = await telegram_bot._maybe_handle_pending_text(mock_update, mock_context, "confirm")
+
+        assert handled is True
+        mock_process.assert_awaited_once_with(
+            token=None,
+            chat_id=str(mock_update.effective_chat.id),
+            user_id=mock_update.effective_user.id,
+            message=mock_update.message,
+        )
+
+
+class TestStakeOverrideFlow:
+    """Stake override button and prompt interactions."""
+
+    @pytest.mark.asyncio
+    async def test_override_request_confirms_pending(self, telegram_bot, mock_update, mock_context):
+        chat_id = str(mock_update.effective_chat.id)
+        user_id = mock_update.effective_user.id
+        key = telegram_bot._override_request_key(chat_id, user_id)
+        telegram_bot._pending_override_requests[key] = {
+            "pending_id": 42,
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "mode": "confirm",
+            "expires_at": time.time() + 60,
+        }
+
+        mock_pending = {"id": 42}
+        mock_update.message.text = "stake 300"
+        mock_update.message.reply_text.reset_mock()
+
+        with patch.object(telegram_bot, "_get_pending_photo_by_id", return_value=mock_pending), patch.object(
+            telegram_bot,
+            "_handle_pending_confirmation",
+            AsyncMock(),
+        ) as mock_confirm:
+            handled = await telegram_bot._maybe_handle_pending_text(mock_update, mock_context, "stake 300")
+
+        assert handled is True
+        mock_confirm.assert_awaited_once()
+        assert key not in telegram_bot._pending_override_requests
+
+    @pytest.mark.asyncio
+    async def test_override_request_updates_existing_bet(self, telegram_bot, mock_update, mock_context):
+        chat_id = str(mock_update.effective_chat.id)
+        user_id = mock_update.effective_user.id
+        key = telegram_bot._override_request_key(chat_id, user_id)
+        telegram_bot._pending_override_requests[key] = {
+            "pending_id": 77,
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "mode": "update",
+            "expires_at": time.time() + 60,
+        }
+
+        mock_pending = {"id": 77, "bet_id": 123}
+        mock_update.message.text = "stake 150"
+        mock_update.message.reply_text.reset_mock()
+
+        with patch.object(telegram_bot, "_get_pending_photo_by_id", return_value=mock_pending), patch.object(
+            telegram_bot,
+            "_handle_manual_override_update",
+            AsyncMock(),
+        ) as mock_update_override:
+            handled = await telegram_bot._maybe_handle_pending_text(mock_update, mock_context, "stake 150")
+
+        assert handled is True
+        mock_update_override.assert_awaited_once()
+        assert key not in telegram_bot._pending_override_requests
+
+    @pytest.mark.asyncio
+    async def test_override_request_requires_amount(self, telegram_bot, mock_update, mock_context):
+        chat_id = str(mock_update.effective_chat.id)
+        user_id = mock_update.effective_user.id
+        key = telegram_bot._override_request_key(chat_id, user_id)
+        telegram_bot._pending_override_requests[key] = {
+            "pending_id": 99,
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "mode": "confirm",
+            "expires_at": time.time() + 60,
+        }
+
+        mock_pending = {"id": 99}
+        mock_update.message.text = "hello"
+        mock_update.message.reply_text.reset_mock()
+
+        with patch.object(telegram_bot, "_get_pending_photo_by_id", return_value=mock_pending):
+            handled = await telegram_bot._maybe_handle_pending_text(mock_update, mock_context, "hello")
+
+        assert handled is True
+        # Request should still be present for another try
+        assert key in telegram_bot._pending_override_requests
+        mock_update.message.reply_text.assert_awaited()
+
+
+class TestChatMigrationHandling:
+    """Ensure chat migrations keep registrations intact."""
+
+    @pytest.mark.asyncio
+    async def test_chat_migration_updates_registration_and_pending(
+        self,
+        telegram_bot,
+        mock_context,
+        tmp_path,
+        monkeypatch,
+    ):
+        db_path = tmp_path / "chat_migration.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE chat_registrations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id TEXT UNIQUE,
+                associate_id INTEGER,
+                bookmaker_id INTEGER,
+                is_active BOOLEAN,
+                created_at_utc TEXT,
+                updated_at_utc TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE pending_photos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id TEXT,
+                associate_id INTEGER,
+                bookmaker_id INTEGER,
+                status TEXT,
+                screenshot_path TEXT,
+                confirmation_token TEXT,
+                expires_at_utc TEXT,
+                created_at_utc TEXT,
+                updated_at_utc TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO chat_registrations (
+                chat_id, associate_id, bookmaker_id, is_active, created_at_utc, updated_at_utc
+            ) VALUES (?, ?, ?, 1, '2025-11-09T00:00:00Z', '2025-11-09T00:00:00Z')
+            """,
+            ("-500", 1, 1),
+        )
+        conn.execute(
+            """
+            INSERT INTO pending_photos (
+                chat_id, associate_id, bookmaker_id, status, screenshot_path,
+                confirmation_token, expires_at_utc, created_at_utc, updated_at_utc
+            ) VALUES (?, ?, ?, 'pending', 'path.png', 'ABC123', '2025', '2025', '2025')
+            """,
+            ("-500", 1, 1),
+        )
+        conn.commit()
+        conn.close()
+
+        def _connect():
+            connection = sqlite3.connect(db_path)
+            connection.row_factory = sqlite3.Row
+            return connection
+
+        monkeypatch.setattr(
+            "src.integrations.telegram_bot.get_db_connection",
+            lambda: _connect(),
+        )
+
+        message = MagicMock(spec=Message)
+        message.migrate_to_chat_id = -1001
+        chat = MagicMock()
+        chat.id = -500
+        message.chat = chat
+        message.reply_text = AsyncMock()
+
+        mock_context.bot.send_message = AsyncMock()
+
+        update = MagicMock(spec=Update)
+        update.message = message
+
+        await telegram_bot._handle_chat_migration(update, mock_context)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT chat_id FROM chat_registrations").fetchone()
+        pending_row = conn.execute("SELECT chat_id FROM pending_photos").fetchone()
+        conn.close()
+
+        assert row["chat_id"] == "-1001"
+        assert pending_row["chat_id"] == "-1001"
+        message.reply_text.assert_awaited()
+
+
+class TestDocumentIngestion:
+    """Document uploads routed through the image handler."""
+
+    @pytest.mark.asyncio
+    async def test_document_message_routes_to_media_handler(
+        self,
+        telegram_bot,
+        mock_update,
+        mock_context,
+    ):
+        document = MagicMock()
+        document.mime_type = "image/png"
+        document.file_name = "slip.png"
+        file_obj = AsyncMock()
+        document.get_file = AsyncMock(return_value=file_obj)
+
+        mock_update.message.document = document
+
+        with patch.object(
+            telegram_bot,
+            "_process_incoming_media",
+            AsyncMock(),
+        ) as mock_process:
+            await telegram_bot._document_message(mock_update, mock_context)
+
+        document.get_file.assert_awaited_once()
+        mock_process.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_document_message_ignores_non_images(
+        self,
+        telegram_bot,
+        mock_update,
+        mock_context,
+    ):
+        document = MagicMock()
+        document.mime_type = "application/pdf"
+        document.file_name = "slip.pdf"
+        mock_update.message.document = document
+        await telegram_bot._document_message(mock_update, mock_context)
+    def test_apply_override_updates_primary_fields(
+        self,
+        telegram_bot,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Manual overrides should update stake_original/currency for UI consumption."""
+        db_path = tmp_path / "override.db"
+        conn = sqlite3.connect(db_path)
+        create_schema(conn)
+        conn.execute(
+            "INSERT INTO associates (id, display_alias, home_currency) VALUES (1, 'Stefano', 'AUD')"
+        )
+        conn.execute(
+            "INSERT INTO bookmakers (id, associate_id, bookmaker_name) VALUES (1, 1, 'Sportsbet')"
+        )
+        conn.execute(
+            """
+            INSERT INTO bets (
+                id, associate_id, bookmaker_id, odds, odds_original, currency, ingestion_source,
+                created_at_utc, updated_at_utc
+            ) VALUES (
+                1, 1, 1, '1.90', '1.90', 'AUD', 'telegram', datetime('now'), datetime('now')
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        def _connect():
+            connection = sqlite3.connect(db_path)
+            connection.row_factory = sqlite3.Row
+            return connection
+
+        monkeypatch.setattr(
+            "src.integrations.telegram_bot.get_db_connection",
+            lambda: _connect(),
+        )
+
+        telegram_bot._apply_manual_overrides_to_bet(
+            bet_id=1,
+            manual_stake="800.00",
+            manual_stake_currency="AUD",
+            manual_win="140.00",
+            manual_win_currency="AUD",
+        )
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT stake_original, stake_amount, stake_currency, currency, payout, manual_stake_override
+            FROM bets WHERE id = 1
+            """
+        ).fetchone()
+        conn.close()
+
+        assert row["stake_original"] == "800.00"
+        assert row["stake_amount"] == "800.00"
+        assert row["stake_currency"] == "AUD"
+        assert row["currency"] == "AUD"
+        assert row["payout"] == "140.00"
+        assert row["manual_stake_override"] == "800.00"
 
     @pytest.mark.asyncio
     async def test_admin_confirmation_flow_records_ledger(self, telegram_bot, mock_update, mock_context):
@@ -804,3 +1139,156 @@ class TestSignalHandling:
         # run_polling() handles SIGINT/SIGTERM internally
         # This test verifies successful initialization
         assert telegram_bot.application is not None
+
+
+class TestBalanceConfirmation:
+    """Balance confirmation reply handling."""
+
+    @pytest.mark.asyncio
+    async def test_balance_confirmation_records_report(
+        self,
+        telegram_bot,
+        mock_update,
+    ):
+        """Ensure replying 'ok' to a balance snapshot records a balance check."""
+        mock_reply = MagicMock(spec=Message)
+        mock_reply.text = "08/11/25 Balance: 600.00 EUR, pending balance: 150.00 EUR."
+        mock_reply.from_user = MagicMock()
+        mock_reply.from_user.is_bot = True
+        mock_update.message.reply_to_message = mock_reply
+        mock_update.message.reply_text = AsyncMock()
+        mock_update.effective_chat.id = 67890
+
+        registration = {
+            "associate_id": 1,
+            "bookmaker_id": 2,
+            "bookmaker_name": "Bet365",
+        }
+
+        with patch.object(telegram_bot, "_get_registration", return_value=registration), patch(
+            "src.integrations.telegram_bot.BookmakerBalanceService"
+        ) as mock_service_cls:
+            mock_service = MagicMock()
+            mock_service_cls.return_value.__enter__.return_value = mock_service
+            handled = await telegram_bot._maybe_handle_balance_confirmation(mock_update, "ok")
+
+        assert handled is True
+        mock_service.update_reported_balance.assert_called_once_with(
+            associate_id=1,
+            bookmaker_id=2,
+            balance_native=Decimal("600.00"),
+            native_currency="EUR",
+            note="telegram-confirm:67890",
+        )
+        mock_update.message.reply_text.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_balance_confirmation_requires_bot_reply(self, telegram_bot, mock_update):
+        """Ignore confirmations that do not reply to bot-authored snapshots."""
+        mock_reply = MagicMock(spec=Message)
+        mock_reply.text = "08/11/25 Balance: 600.00 EUR, pending balance: 150.00 EUR."
+        mock_reply.from_user = MagicMock()
+        mock_reply.from_user.is_bot = False
+        mock_update.message.reply_to_message = mock_reply
+
+        handled = await telegram_bot._maybe_handle_balance_confirmation(mock_update, "ok")
+        assert handled is False
+
+
+class TestAdminConfirmationParsing:
+    """Unit tests for admin confirmation parsing helper."""
+
+    def test_parse_plain_admin_keywords(self, telegram_bot):
+        """Plain approval keywords return sentinel indicating implicit lookup."""
+        assert telegram_bot._parse_admin_confirmation("confirm") == ""
+        assert telegram_bot._parse_admin_confirmation("approve") == ""
+
+    def test_parse_with_token(self, telegram_bot):
+        """Ensure explicit 6-digit tokens are parsed."""
+        assert telegram_bot._parse_admin_confirmation("confirm 123456") == "123456"
+
+    def test_parse_invalid(self, telegram_bot):
+        """Reject malformed confirmation commands."""
+        assert telegram_bot._parse_admin_confirmation("confirm 123") is None
+        assert telegram_bot._parse_admin_confirmation("ignored text") is None
+
+
+class TestAdminConfirmationFlow:
+    """Admin confirmation orchestration helpers."""
+
+    @pytest.mark.asyncio
+    async def test_process_confirmation_without_token_uses_latest_context(self, telegram_bot):
+        """Implicit confirm should pick the latest pending context for the chat."""
+        now_ts = time.time()
+        telegram_bot._pending_admin_confirmations = {
+            "123456": {
+                "token": "123456",
+                "chat_id": "67890",
+                "user_id": 111,
+                "associate_id": 1,
+                "associate_alias": "Alice",
+                "bookmaker_id": 2,
+                "bookmaker_name": "Bet365",
+                "command_type": "DEPOSIT",
+                "amount": Decimal("50.00"),
+                "currency": "EUR",
+                "note": "telegram",
+                "created_at": "2025-11-09T12:00:00Z",
+                "created_at_ts": now_ts,
+                "expires_at": now_ts + 60,
+            }
+        }
+        mock_message = MagicMock()
+        mock_message.reply_text = AsyncMock()
+
+        with patch.object(
+            telegram_bot,
+            "_record_admin_transaction",
+            AsyncMock(return_value="ledger-1"),
+        ) as mock_record:
+            await telegram_bot._process_admin_confirmation(
+                token=None,
+                chat_id="67890",
+                user_id=111,
+                message=mock_message,
+            )
+
+        mock_record.assert_awaited_once()
+        assert telegram_bot._pending_admin_confirmations == {}
+        mock_message.reply_text.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_process_confirmation_without_pending_entries(self, telegram_bot):
+        """Inform admins when no pending approvals exist for the chat."""
+        telegram_bot._pending_admin_confirmations = {}
+        mock_message = MagicMock()
+        mock_message.reply_text = AsyncMock()
+
+        await telegram_bot._process_admin_confirmation(
+            token=None,
+            chat_id="67890",
+            user_id=111,
+            message=mock_message,
+        )
+
+        mock_message.reply_text.assert_awaited()
+        awaited_text = mock_message.reply_text.await_args[0][0]
+        assert "No pending Telegram approvals" in awaited_text
+
+    @pytest.mark.asyncio
+    async def test_process_confirmation_invalid_token(self, telegram_bot):
+        """Explicit but invalid codes should emit the legacy error."""
+        telegram_bot._pending_admin_confirmations = {}
+        mock_message = MagicMock()
+        mock_message.reply_text = AsyncMock()
+
+        await telegram_bot._process_admin_confirmation(
+            token="123456",
+            chat_id="67890",
+            user_id=111,
+            message=mock_message,
+        )
+
+        mock_message.reply_text.assert_awaited()
+        awaited_text = mock_message.reply_text.await_args[0][0]
+        assert "invalid or expired" in awaited_text

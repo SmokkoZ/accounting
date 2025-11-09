@@ -96,9 +96,10 @@ ASSOCIATE_SORT_OPTIONS: Sequence[Tuple[str, str]] = (
 BOOKMAKER_SORT_OPTIONS: Sequence[Tuple[str, str]] = (
     ("Name", "bookmaker_name"),
     ("Chat ID", "bookmaker_chat_id"),
+    ("Balance (EUR)", "balance_eur"),
+    ("Pending balance", "pending_balance_eur"),
+    ("Deposits (EUR)", "net_deposits_eur"),
     ("Active status", "is_active"),
-    ("Created date", "created_at_utc"),
-    ("Updated date", "updated_at_utc"),
 )
 
 
@@ -309,6 +310,27 @@ def _normalize_bookmaker_row(row: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _merge_bookmaker_metadata(
+    payload: Dict[str, Any],
+    metadata: Optional[Mapping[int, Mapping[str, Any]]],
+) -> None:
+    """Rehydrate hidden bookmaker fields (e.g., parsing_profile) from metadata."""
+
+    if not metadata:
+        return
+
+    payload_id = payload.get("id")
+    if not payload_id:
+        return
+
+    meta = metadata.get(int(payload_id))
+    if not meta:
+        return
+
+    if payload.get("parsing_profile") is None:
+        payload["parsing_profile"] = meta.get("parsing_profile")
+
+
 def _process_associate_editor_changes(
     source_df: pd.DataFrame,
     edited_df: pd.DataFrame,
@@ -405,6 +427,7 @@ def _process_bookmaker_editor_changes(
     state: Optional[Dict[str, Any]],
     *,
     default_associate_id: Optional[int] = None,
+    bookmaker_metadata: Optional[Mapping[int, Mapping[str, Any]]] = None,
 ) -> None:
     """Persist pending edits from the bookmakers data_editor."""
 
@@ -437,6 +460,7 @@ def _process_bookmaker_editor_changes(
             errors.append("Cannot update bookmaker without ID.")
             continue
         payload["id"] = int(payload_id)
+        _merge_bookmaker_metadata(payload, bookmaker_metadata)
 
         is_valid, validation_errors = validate_bookmaker_row(payload)
         if not is_valid:
@@ -478,6 +502,7 @@ def _process_bookmaker_editor_changes(
 
     for row in changes.added_rows:
         payload = _normalize_bookmaker_row(row)
+        _merge_bookmaker_metadata(payload, bookmaker_metadata)
         associate_id = payload.get("associate_id") or default_associate_id
         if not associate_id:
             errors.append("Associate selection is required for new bookmakers.")
@@ -668,6 +693,11 @@ def render_bookmakers_editor_section(selected_associate_ids: List[int]) -> None:
         return
 
     bookmakers = load_bookmakers_for_associates(selected_associate_ids)
+    bookmaker_metadata = {
+        int(row["id"]): row
+        for row in bookmakers
+        if row.get("id") is not None
+    }
     source_df = build_bookmakers_dataframe(bookmakers)
     show_associate_column = len(selected_associate_ids) > 1
     allow_additions = len(selected_associate_ids) == 1
@@ -721,6 +751,7 @@ def render_bookmakers_editor_section(selected_associate_ids: List[int]) -> None:
             edited_df,
             state,
             default_associate_id=default_associate_id,
+            bookmaker_metadata=bookmaker_metadata,
         )
 
 
@@ -1173,6 +1204,41 @@ def load_bookmakers_for_associate(
         chat_columns = "NULL AS bookmaker_chat_id"
         chat_join = ""
 
+    pending_join = """
+        LEFT JOIN (
+            SELECT
+                bookmaker_id,
+                SUM(
+                    CASE
+                        WHEN stake_eur IS NOT NULL AND stake_eur != ''
+                        THEN CAST(stake_eur AS REAL)
+                        ELSE 0
+                    END
+                ) AS pending_eur
+            FROM bets
+            WHERE status IN ('verified', 'matched')
+            GROUP BY bookmaker_id
+        ) pending ON pending.bookmaker_id = b.id
+    """
+
+    funding_join = """
+        LEFT JOIN (
+            SELECT
+                bookmaker_id,
+                SUM(
+                    CASE
+                        WHEN type = 'DEPOSIT' THEN CAST(amount_eur AS REAL)
+                        WHEN type = 'WITHDRAWAL' THEN -CAST(amount_eur AS REAL)
+                        ELSE 0
+                    END
+                ) AS net_deposits_eur
+            FROM ledger_entries
+            WHERE bookmaker_id IS NOT NULL
+              AND type IN ('DEPOSIT', 'WITHDRAWAL')
+            GROUP BY bookmaker_id
+        ) funding ON funding.bookmaker_id = b.id
+    """
+
     query = f"""
         SELECT
             b.id,
@@ -1183,10 +1249,14 @@ def load_bookmakers_for_associate(
             {chat_columns},
             b.created_at_utc,
             b.updated_at_utc,
-            {balance_columns}
+            {balance_columns},
+            COALESCE(pending.pending_eur, 0) AS pending_balance_eur,
+            COALESCE(funding.net_deposits_eur, 0) AS net_deposits_eur
         FROM bookmakers b
         {chat_join}
         {balance_join}
+        {pending_join}
+        {funding_join}
         WHERE b.associate_id = ?
         ORDER BY b.bookmaker_name ASC
     """
@@ -1243,14 +1313,14 @@ def get_chat_registration_status(
     row = cursor.fetchone()
 
     if not row:
-        return " Not Registered"
+        return "⚠️ Not Registered"
 
     chat_id, is_active = row["chat_id"], row["is_active"]
 
     if is_active:
-        return f" Registered (Chat ID: {chat_id})"
+        return f"✅ Registered (Chat ID: {chat_id})"
     else:
-        return " Inactive Registration"
+        return "🔴 Inactive Registration"
 
 
 
