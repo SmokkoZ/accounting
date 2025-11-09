@@ -447,6 +447,22 @@ Display canonical reconciliation fields:
 
 ---
 
+### FR-12: Telegram Bot Interaction & Command Menu
+
+**Priority**: P1 (Post-MVP Enhancement)
+
+**Description**: Polish the Telegram assistant so statements, banking confirmations, and utility commands behave like a cohesive conversational flow that mirrors the Streamlit experience and keeps operators from guessing what to do next.
+
+**Acceptance Criteria**:
+- After the `DD/MM/YY Balance: <balance_native> <CUR>, pending balance: <pending_native> <CUR>.` message is emitted, replies of `okay`, `correct`, or `ok` (case insensitive) are treated as balance confirmations; each such reply persists a balance check record for the `(associate_id, bookmaker_id)` pair using the same FX stack and logging details as the Streamlit button flow.
+- Bot replies that communicate copy-worthy data (chat IDs, reference strings, etc.) expose an inline tap-to-copy affordance while gracefully degrading to annotated plain text on clients that lack button support.
+- Deposit and withdrawal confirmations no longer emit or expect a numeric code; sending `confirm` within the existing five-minute window finalizes the pending transaction and logs the confirmation attempt with the same audit trail as before.
+- Sending `/help` returns a dedicated menu listing every supported Telegram command (balance checks, banking verbs, chat utilities, etc.) so associates can discover functionality without external documentation.
+
+**See**: [Story 9.7: Telegram Bot Interaction Enhancements](docs/stories/9.7.telegram-bot-enhancements.md) for implementation details.
+
+---
+
 ## Data Model
 
 See [Data Model Document](docs/prd/data-model.md) for complete schema specifications.

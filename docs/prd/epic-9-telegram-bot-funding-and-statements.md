@@ -59,6 +59,12 @@ Enable associates and admins to manage funding operations directly from Telegram
    - Streamlit button: "Send Daily Statements to All Chats" iterates every active registration and sends the same balance/pending message to its chat.
    - Uses rate‑limited async sending with retry/backoff on HTTP 429 (Telegram).
 
+5) Telegram bot interaction polish:
+   - Balance/pending message replies in Telegram treat “okay”, “correct”, or “ok” as confirmations and persist a new balance check for the `(associate_id, bookmaker_id)` with the same FX/path logging as the Streamlit button path.
+   - Copy-worthy strings (chat IDs, reference snippets, etc.) are returned with inline tap-to-copy affordances, degrading to annotated plain text for clients that lack button support.
+   - Deposit and withdrawal confirmation flows now accept plain `confirm` within the existing timeout and log the same audit trail without issuing random numeric codes.
+   - `/help` returns a dedicated command menu covering balance checks, banking verbs, chat tools, and other supported actions so associates can discover functionality from within Telegram.
+
 ### Data & Services
 
 - New: extend funding workflows to be bookmaker‑aware when source is Telegram chat.
@@ -83,8 +89,9 @@ Enable associates and admins to manage funding operations directly from Telegram
 - Story 9.4: Global Daily Statements (All Chats)
 - Story 9.5: Telegram Rate‑Limiting & Delivery Reliability
 - Story 9.6: Telegram Confirm Before Ingest
+- Story 9.7: Telegram Bot Interaction Enhancements
 
-See `docs/stories/9.1.telegram-funding-commands.md` through `9.6.telegram-confirm-before-ingest.md`.
+See `docs/stories/9.1.telegram-funding-commands.md` through `docs/stories/9.7.telegram-bot-enhancements.md`.
 
 ---
 
