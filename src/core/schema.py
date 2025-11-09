@@ -21,6 +21,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
     create_canonical_events_table(conn)
     create_canonical_markets_table(conn)
     create_bets_table(conn)
+    create_pending_photos_table(conn)
     create_extraction_log_table(conn)
     create_surebets_table(conn)
     create_surebet_bets_table(conn)
@@ -190,10 +191,14 @@ def create_bets_table(conn: sqlite3.Connection) -> None:
             stake_eur TEXT DEFAULT '0.00',
             stake_amount TEXT,
             stake_currency TEXT,
+            manual_stake_override TEXT,
+            manual_stake_currency TEXT,
             odds TEXT NOT NULL,
             currency TEXT NOT NULL DEFAULT 'EUR',
             fx_rate_to_eur TEXT DEFAULT '1.0',
             stake_original TEXT,
+            manual_potential_win_override TEXT,
+            manual_potential_win_currency TEXT,
             odds_original TEXT,
             payout TEXT,
             confidence_score REAL DEFAULT 0.0,
@@ -257,6 +262,66 @@ def create_bets_table(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE bets ADD COLUMN confidence_score REAL DEFAULT 0.0"
         )
+    if "manual_stake_override" not in existing_columns:
+        conn.execute("ALTER TABLE bets ADD COLUMN manual_stake_override TEXT")
+    if "manual_stake_currency" not in existing_columns:
+        conn.execute("ALTER TABLE bets ADD COLUMN manual_stake_currency TEXT")
+    if "manual_potential_win_override" not in existing_columns:
+        conn.execute("ALTER TABLE bets ADD COLUMN manual_potential_win_override TEXT")
+    if "manual_potential_win_currency" not in existing_columns:
+        conn.execute("ALTER TABLE bets ADD COLUMN manual_potential_win_currency TEXT")
+
+
+def create_pending_photos_table(conn: sqlite3.Connection) -> None:
+    """Create table storing pending Telegram photo confirmations."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pending_photos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id TEXT NOT NULL,
+            user_id INTEGER,
+            associate_id INTEGER NOT NULL,
+            bookmaker_id INTEGER NOT NULL,
+            associate_alias TEXT,
+            bookmaker_name TEXT,
+            home_currency TEXT,
+            screenshot_path TEXT NOT NULL,
+            photo_message_id TEXT NOT NULL,
+            prompt_message_id TEXT,
+            confirmation_token TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'pending',
+            stake_override TEXT,
+            stake_currency TEXT,
+            win_override TEXT,
+            win_currency TEXT,
+            bet_id INTEGER,
+            created_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
+            expires_at_utc TEXT NOT NULL,
+            updated_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
+            FOREIGN KEY (bet_id) REFERENCES bets(id) ON DELETE SET NULL,
+            CHECK (status IN ('pending','confirmed','discarded','expired'))
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_pending_photos_chat_status
+        ON pending_photos(chat_id, status, expires_at_utc)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_pending_photos_token
+        ON pending_photos(confirmation_token)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_pending_photos_photo_message
+        ON pending_photos(photo_message_id)
+        """
+    )
 
 
 def create_extraction_log_table(conn: sqlite3.Connection) -> None:

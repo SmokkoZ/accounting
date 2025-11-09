@@ -12,6 +12,7 @@ import asyncio
 import os
 import tempfile
 import time
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -130,6 +131,34 @@ class TestTelegramBotInitialization:
             mock.TELEGRAM_BOT_TOKEN = None
             with pytest.raises(ValueError, match="TELEGRAM_BOT_TOKEN not configured"):
                 TelegramBot()
+
+
+class TestPendingConfirmationParsing:
+    """Validate parsing logic for text-based confirmations."""
+
+    def test_parse_confirm_with_stake_and_win(self, telegram_bot):
+        result = telegram_bot._parse_pending_confirmation_text("ingest \u20ac25 win=$40")
+        assert result["action"] == "confirm"
+        assert result["stake_amount"] == Decimal("25")
+        assert result["stake_currency"] == "EUR"
+        assert result["win_amount"] == Decimal("40")
+        assert result["win_currency"] == "USD"
+
+    def test_parse_discard_command(self, telegram_bot):
+        result = telegram_bot._parse_pending_confirmation_text("#skip")
+        assert result["action"] == "discard"
+        assert result["stake_amount"] is None
+        assert result["win_amount"] is None
+
+    def test_parse_amount_only_message(self, telegram_bot):
+        result = telegram_bot._parse_pending_confirmation_text("30.5 win=45.1")
+        assert result["action"] == "amount_only"
+        assert result["stake_amount"] == Decimal("30.5")
+        assert result["win_amount"] == Decimal("45.1")
+
+    def test_parse_amount_invalid_raises(self, telegram_bot):
+        with pytest.raises(ValueError):
+            telegram_bot._parse_amount_token("abc123xyz")
 
 
 class TestCommandHandlers:
@@ -406,8 +435,12 @@ class TestPhotoMessageHandling:
         mock_db_connection_with_registration.cursor.return_value.execute.assert_called()
         mock_db_connection_with_registration.commit.assert_called_once()
 
-        # Verify reply message
-        mock_update.message.reply_text.assert_called_once_with("Processing screenshot...")
+        # Verify reply message contains confirmation prompt and buttons
+        mock_update.message.reply_text.assert_called_once()
+        prompt_text = mock_update.message.reply_text.call_args[0][0]
+        assert "Screenshot saved for Alice / Bet365" in prompt_text
+        assert "Auto-discard after 60 minutes" in prompt_text
+        assert "reply_markup" in mock_update.message.reply_text.call_args.kwargs
 
     @pytest.mark.asyncio
     async def test_photo_message_unregistered_chat(self, telegram_bot, mock_update, mock_context):
@@ -459,7 +492,10 @@ class TestPhotoMessageHandling:
         mock_photo_file.download_to_drive.assert_called_once()
 
         # Verify reply message
-        mock_update.message.reply_text.assert_called_once_with("Processing screenshot...")
+        mock_update.message.reply_text.assert_called_once()
+        prompt_text = mock_update.message.reply_text.call_args[0][0]
+        assert "Screenshot saved for Alice / Bet365" in prompt_text
+        assert "Auto-discard after 60 minutes" in prompt_text
 
     @pytest.mark.asyncio
     async def test_photo_message_error_handling(self, telegram_bot, mock_update, mock_context):
@@ -485,7 +521,7 @@ class TestPhotoMessageHandling:
         # Verify error reply
         mock_update.message.reply_text.assert_called_once()
         call_args = mock_update.message.reply_text.call_args[0][0]
-        assert "An error occurred while processing your screenshot" in call_args
+        assert "An error occurred while queuing your screenshot" in call_args
 
 
 class TestDatabaseOperations:
@@ -684,6 +720,33 @@ class TestRegistrationStorage:
                     message_id="999",
                     screenshot_path="/path/to/screenshot.png",
                 )
+
+    def test_create_bet_record_with_manual_overrides(self, telegram_bot, mock_db_connection):
+        """Ensure manual overrides are persisted when provided."""
+        mock_cursor = mock_db_connection.cursor.return_value
+        mock_cursor.lastrowid = 77
+
+        with patch(
+            "src.integrations.telegram_bot.get_db_connection",
+            return_value=mock_db_connection,
+        ):
+            bet_id = telegram_bot._create_bet_record(
+                associate_id=1,
+                bookmaker_id=2,
+                chat_id="67890",
+                message_id="999",
+                screenshot_path="/path.png",
+                manual_stake_override="25.00",
+                manual_stake_currency="EUR",
+                manual_win_override="40.00",
+                manual_win_currency="EUR",
+            )
+
+        assert bet_id == 77
+        args = mock_cursor.execute.call_args[0][1]
+        assert "25.00" in args
+        assert "40.00" in args
+        mock_db_connection.commit.assert_called_once()
 
 
 class TestOCRPipelineTrigger:
