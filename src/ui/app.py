@@ -95,6 +95,13 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
         description="Review and triage incoming bets.",
     ),
     PageSpec(
+        title="Ingested betslips",
+        section="Operations",
+        icon=":material/task_alt:",
+        script="pages/3_verified_bets_queue.py",
+        description="Process settlement actions, confirmations, and corrections.",
+    ),
+    PageSpec(
         title="Surebets Summary",
         section="Operations",
         icon=":material/target:",
@@ -107,13 +114,6 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
         icon=":material/receipt_long:",
         script="pages/2b_surebets_ready_for_settlement.py",
         description="Finalize surebets once coverage proof is complete.",
-    ),
-    PageSpec(
-        title="Settlement",
-        section="Operations",
-        icon=":material/task_alt:",
-        script="pages/3_verified_bets_queue.py",
-        description="Process settlement actions, confirmations, and corrections.",
     ),
     PageSpec(
         title="Corrections",

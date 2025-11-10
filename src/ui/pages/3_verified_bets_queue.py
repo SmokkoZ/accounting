@@ -19,7 +19,7 @@ from src.ui.utils.navigation_links import render_navigation_link
 from src.ui.utils.state_management import render_reset_control, safe_rerun
 
 
-PAGE_TITLE = "Verified Bets Queue"
+PAGE_TITLE = "Ingested betslips"
 PAGE_ICON = ":material/task_alt:"
 
 st.set_page_config(page_title=PAGE_TITLE, layout="wide")

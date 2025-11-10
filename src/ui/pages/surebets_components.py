@@ -1367,15 +1367,7 @@ def render_surebets_summary_page() -> None:
     total_open = count_open_surebets()
     total_unsafe = count_unsafe_surebets()
     counter_cols[0].metric("Open Surebets", total_open)
-    counter_cols[1].metric(
-        "Unsafe (??)",
-        total_unsafe,
-        delta=None if total_unsafe == 0 else "?? Attention",
-    )
-    st.markdown("---")
-
-    render_coverage_proof_outbox()
-
+    counter_cols[1].metric("Unsafe (??)", total_unsafe)
     st.markdown("---")
     st.markdown("### Filters & Sorting")
 
