@@ -130,8 +130,6 @@ def paginate(
         page_size=pagination.page_size,
         total_rows=total_rows,
     )
-    session[goto_key] = pagination.page
-
     with col_info:
         if pagination.total_rows == 0:
             st.caption("No rows to display")
