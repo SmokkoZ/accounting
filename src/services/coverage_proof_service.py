@@ -13,9 +13,9 @@ import json
 import sqlite3
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from telegram import Bot
 from telegram.error import TelegramError
@@ -46,6 +46,7 @@ class CoverageProofService:
     # Rate limiting: 10 messages per minute per chat (Telegram API limit)
     RATE_LIMIT_MESSAGES_PER_MINUTE = 10
     RATE_LIMIT_WINDOW_SECONDS = 60
+    OUTBOX_DEFAULT_LIMIT = 200
 
     def __init__(self, db: Optional[sqlite3.Connection] = None):
         """
@@ -169,6 +170,189 @@ class CoverageProofService:
 
         row = self.db.execute(query, (surebet_id,)).fetchone()
         return dict(row) if row else None
+
+    @staticmethod
+    def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
+        """Parse ISO8601 timestamp strings that may end with Z."""
+        if not value:
+            return None
+        cleaned = value.replace(" ", "T")
+        if cleaned.endswith("Z"):
+            cleaned = cleaned[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(cleaned)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _format_utc(dt: Optional[datetime]) -> Optional[str]:
+        """Return ISO string with Z suffix for UTC datetimes."""
+        if not dt:
+            return None
+        return (
+            dt.astimezone(timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
+    def _get_chat_cooldowns(
+        self, chat_ids: Optional[List[str]] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Calculate remaining cooldown per chat based on recent log activity.
+
+        Args:
+            chat_ids: Optional filter of chat IDs to include.
+
+        Returns:
+            Dict keyed by chat ID containing seconds_remaining and attempt_count.
+        """
+        if chat_ids is not None and not chat_ids:
+            return {}
+
+        window_start = datetime.now(timezone.utc) - timedelta(
+            seconds=self.RATE_LIMIT_WINDOW_SECONDS
+        )
+        window_start_iso = self._format_utc(window_start)
+
+        params: List[Any] = []
+        chat_filter = ""
+        if chat_ids:
+            placeholders = ",".join("?" for _ in chat_ids)
+            chat_filter = f"AND assoc.multibook_chat_id IN ({placeholders})"
+            params.extend(chat_ids)
+
+        params.append(window_start_iso)
+
+        query = f"""
+            SELECT
+                assoc.multibook_chat_id AS chat_id,
+                COUNT(*) AS attempt_count,
+                MIN(COALESCE(log.sent_at_utc, log.created_at_utc)) AS oldest_attempt
+            FROM multibook_message_log log
+            JOIN associates assoc ON assoc.id = log.associate_id
+            WHERE
+                log.message_type = 'COVERAGE_PROOF'
+                AND assoc.multibook_chat_id IS NOT NULL
+                {chat_filter}
+                AND COALESCE(log.sent_at_utc, log.created_at_utc) >= ?
+            GROUP BY assoc.multibook_chat_id
+        """
+
+        cooldowns: Dict[str, Dict[str, Any]] = {}
+        now = datetime.now(timezone.utc)
+        for row in self.db.execute(query, params).fetchall():
+            chat_id = row["chat_id"]
+            attempt_count = int(row["attempt_count"])
+            oldest_dt = self._parse_iso_timestamp(row["oldest_attempt"])
+            seconds_remaining = 0
+            if (
+                attempt_count >= self.RATE_LIMIT_MESSAGES_PER_MINUTE
+                and oldest_dt is not None
+            ):
+                elapsed = (now - oldest_dt).total_seconds()
+                seconds_remaining = max(
+                    0, int(self.RATE_LIMIT_WINDOW_SECONDS - elapsed)
+                )
+
+            cooldowns[chat_id] = {
+                "seconds_remaining": seconds_remaining,
+                "attempt_count": attempt_count,
+            }
+
+        return cooldowns
+
+    def get_rate_limit_cooldowns(
+        self, chat_ids: Optional[List[str]] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Public helper exposing cooldown metrics for dashboards/monitoring.
+
+        Args:
+            chat_ids: Optional list of Telegram chat IDs to scope results.
+
+        Returns:
+            Dict keyed by chat ID describing attempt counts and cooldown status.
+        """
+        return self._get_chat_cooldowns(chat_ids)
+
+    def get_outbox_entries(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Return recent coverage proof delivery attempts for operator outbox views.
+
+        Args:
+            limit: Optional limit override (defaults to OUTBOX_DEFAULT_LIMIT).
+
+        Returns:
+            List of dictionaries describing each delivery attempt.
+        """
+        effective_limit = limit or self.OUTBOX_DEFAULT_LIMIT
+        query = """
+            SELECT
+                log.id,
+                log.surebet_id,
+                log.associate_id,
+                assoc.display_alias AS associate_alias,
+                assoc.multibook_chat_id AS chat_id,
+                log.message_id,
+                log.delivery_status,
+                log.error_message,
+                log.sent_at_utc,
+                log.created_at_utc
+            FROM multibook_message_log log
+            JOIN associates assoc ON assoc.id = log.associate_id
+            WHERE log.message_type = 'COVERAGE_PROOF'
+            ORDER BY log.created_at_utc DESC
+            LIMIT ?
+        """
+        rows = self.db.execute(query, (effective_limit,)).fetchall()
+
+        chat_ids = [row["chat_id"] for row in rows if row["chat_id"]]
+        cooldowns = self._get_chat_cooldowns(chat_ids)
+
+        now = datetime.now(timezone.utc)
+        entries: List[Dict[str, Any]] = []
+        for row in rows:
+            chat_id = row["chat_id"]
+            last_attempt = row["sent_at_utc"] or row["created_at_utc"]
+            cooldown_state = cooldowns.get(chat_id, {"seconds_remaining": 0})
+            seconds_until_next = cooldown_state.get("seconds_remaining", 0)
+            rate_limit_health = (
+                "blocked"
+                if seconds_until_next > 0
+                else "queued"
+                if row["delivery_status"] == "pending"
+                else "ready"
+            )
+            cooldown_expires_at = (
+                self._format_utc(now + timedelta(seconds=seconds_until_next))
+                if seconds_until_next
+                else None
+            )
+            entries.append(
+                {
+                    "log_id": row["id"],
+                    "surebet_id": row["surebet_id"],
+                    "associate_id": row["associate_id"],
+                    "associate_alias": row["associate_alias"],
+                    "chat_id": chat_id,
+                    "message_id": row["message_id"],
+                    "status": row["delivery_status"],
+                    "error_message": row["error_message"],
+                    "last_attempt": last_attempt,
+                    "seconds_until_next_send": seconds_until_next,
+                    "cooldown_expires_at": cooldown_expires_at,
+                    "rate_limit_health": rate_limit_health,
+                }
+            )
+
+        logger.info(
+            "coverage_proof_outbox_scrape",
+            entry_count=len(entries),
+            limit=effective_limit,
+        )
+        return entries
 
     def _format_coverage_proof_message(
         self, surebet_details: Dict, market_line: str
@@ -602,3 +786,15 @@ class CoverageProofService:
             self.mark_coverage_proof_sent(surebet_id)
 
         return results
+
+    async def send(
+        self, surebet_id: int, *, resend: bool = False
+    ) -> List[CoverageProofResult]:
+        """
+        Wrapper to maintain a concise API name for UI callers.
+
+        Args:
+            surebet_id: Target surebet identifier.
+            resend: Whether to bypass previous send guards.
+        """
+        return await self.send_coverage_proof(surebet_id, resend=resend)

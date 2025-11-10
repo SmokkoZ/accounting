@@ -327,6 +327,100 @@ footer,
   color: #9e9e9e;
 }
 
+.confidence-badge-wrapper {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  position: relative;
+  margin-bottom: 0.4rem;
+}
+
+.confidence-badge-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(15, 23, 42, 0.75);
+  color: var(--text);
+  padding: 0.2rem 0.85rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.confidence-badge-button[data-variant="success"] {
+  border-color: rgba(34, 197, 94, 0.65);
+  box-shadow: 0 0 16px rgba(34, 197, 94, 0.25);
+}
+
+.confidence-badge-button[data-variant="warning"] {
+  border-color: rgba(245, 158, 11, 0.65);
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.25);
+}
+
+.confidence-badge-button[data-variant="error"] {
+  border-color: rgba(239, 68, 68, 0.65);
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.25);
+}
+
+.confidence-badge-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.confidence-badge-emoji {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.confidence-badge-label {
+  letter-spacing: 0.01em;
+}
+
+.confidence-tooltip {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 10px);
+  width: min(24rem, 90vw);
+  background: rgba(15, 23, 42, 0.98);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.65rem 0.8rem;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 15;
+}
+
+.confidence-tooltip-text {
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.confidence-badge-wrapper:hover .confidence-tooltip,
+.confidence-badge-wrapper:focus-within .confidence-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 @media (max-width: 768px) {
   .toolbar {
     flex-direction: column;

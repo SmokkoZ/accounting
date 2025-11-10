@@ -22,6 +22,7 @@ import streamlit as st
 import structlog
 
 from src.core.database import get_db_connection
+from src.repositories.associate_hub_repository import AssociateHubRepository
 from src.ui.helpers import fragments
 from src.ui.helpers.dialogs import (
     ActionItem,
@@ -92,7 +93,8 @@ ASSOCIATE_SORT_OPTIONS: Sequence[Tuple[str, str]] = (
     ("Admin status", "is_admin"),
     ("Active status", "is_active"),
     ("Bookmaker count", "bookmaker_count"),
-    ("Created date", "created_at_utc"),
+    ("Balance (EUR)", "balance_eur"),
+    ("Pending (EUR)", "pending_balance_eur"),
 )
 BOOKMAKER_SORT_OPTIONS: Sequence[Tuple[str, str]] = (
     ("Name", "bookmaker_name"),
@@ -820,45 +822,39 @@ def render_legacy_associate_management_tab() -> None:
 def load_associates(
     filter_alias: Optional[str] = None, conn: Optional[sqlite3.Connection] = None
 ) -> List[Dict]:
-    """Load all associates with bookmaker count.
+    """Load associates enriched with balance and pending stake fields."""
 
-    Args:
-        filter_alias: Optional case-insensitive filter on display_alias
-        conn: Optional database connection (for testing)
+    repository = AssociateHubRepository(conn) if conn else AssociateHubRepository()
+    search_term = filter_alias.strip() if filter_alias and filter_alias.strip() else None
 
-    Returns:
-        List of associate dictionaries with bookmaker_count field
-    """
-    if conn is None:
-        conn = get_db_connection()
-    cursor = conn.cursor()
+    try:
+        metrics = repository.list_associates_with_metrics(search=search_term)
+    finally:
+        repository.close()
 
-    query = """
-        SELECT
-            a.id,
-            a.display_alias,
-            a.home_currency,
-            a.is_admin,
-            a.is_active,
-            a.multibook_chat_id,
-            a.created_at_utc,
-            a.updated_at_utc,
-            COUNT(b.id) AS bookmaker_count
-        FROM associates a
-        LEFT JOIN bookmakers b ON a.id = b.associate_id
-    """
+    results: List[Dict[str, Any]] = []
+    for metric in metrics:
+        balance_value = getattr(
+            metric,
+            "balance_eur",
+            getattr(metric, "current_holding_eur", None),
+        )
+        pending_value = getattr(metric, "pending_balance_eur", None)
 
-    params = []
-    if filter_alias and filter_alias.strip():
-        query += " WHERE LOWER(a.display_alias) LIKE LOWER(?)"
-        params.append(f"%{filter_alias.strip()}%")
-
-    query += " GROUP BY a.id ORDER BY a.display_alias ASC"
-
-    cursor.execute(query, params)
-    rows = cursor.fetchall()
-
-    return [dict(row) for row in rows]
+        results.append(
+            {
+                "id": metric.associate_id,
+                "display_alias": metric.associate_alias,
+                "home_currency": metric.home_currency,
+                "is_admin": metric.is_admin,
+                "is_active": metric.is_active,
+                "multibook_chat_id": metric.telegram_chat_id,
+                "bookmaker_count": metric.bookmaker_count,
+                "balance_eur": float(balance_value) if balance_value is not None else None,
+                "pending_balance_eur": float(pending_value) if pending_value is not None else None,
+            }
+        )
+    return results
 
 
 def insert_associate(
@@ -2165,7 +2161,7 @@ def render_associates_table(associates: List[Dict]) -> None:
         render_delete_confirmation_modal(assoc)
 
         # Associate row
-        col1, col2, col3, col4, col5 = st.columns([3, 1.5, 1, 1.5, 2])
+        col1, col2, col3, col4, col5, col6 = st.columns([3, 1.2, 1.1, 1.6, 1.6, 2])
 
         with col1:
             admin_badge = ":material/verified:" if assoc["is_admin"] else ""
@@ -2178,14 +2174,20 @@ def render_associates_table(associates: List[Dict]) -> None:
             st.text(str(assoc["bookmaker_count"]))
 
         with col4:
-            created_date = format_utc_datetime_local(assoc["created_at_utc"])
-            if created_date:
-                created_display = created_date.split(" ")[0]
+            balance_value = assoc.get("balance_eur")
+            if balance_value is None:
+                st.text("-")
             else:
-                created_display = "N/A"
-            st.text(created_display)
+                st.text(format_currency_with_symbol(Decimal(str(balance_value)), "EUR"))
 
         with col5:
+            pending_value = assoc.get("pending_balance_eur")
+            if pending_value is None:
+                st.text("-")
+            else:
+                st.text(format_currency_with_symbol(Decimal(str(pending_value)), "EUR"))
+
+        with col6:
             assoc_id = assoc["id"]
             can_delete, delete_reason = can_delete_associate(assoc_id)
             actions = [

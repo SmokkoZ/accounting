@@ -66,30 +66,53 @@ def format_timestamp_relative(timestamp_utc: str) -> str:
         return timestamp_utc
 
 
-def format_confidence_badge(confidence: Optional[float]) -> Tuple[str, str, str]:
-    """Return (emoji, label, color) for confidence level.
+ConfidenceBadge = Tuple[str, str, str, str]
+
+CONFIDENCE_RATIONALES = {
+    "failed": "Normalization failed or has no confidence value. Please review manually.",
+    "high": "Normalization signals strongly agree ({percent}). Safe to proceed.",
+    "medium": "Confidence is moderate at {percent}. Double-check key fields before approving.",
+    "low": "Confidence is low at {percent}. Inspect the row before taking action.",
+}
+
+
+def format_confidence_badge(confidence: Optional[float]) -> ConfidenceBadge:
+    """Return (emoji, label, color, tooltip) for confidence level.
 
     Args:
         confidence: Confidence score between 0.0 and 1.0, or None if extraction failed
 
     Returns:
-        Tuple of (emoji, label, st.color_name)
+        Tuple of (emoji, label, st.color_name, tooltip_text)
     """
+    tooltip_key = "failed"
+    tooltip_percent = "N/A"
+
     if confidence is None:
-        return ("❌", "Failed", "error")
+        rationale = CONFIDENCE_RATIONALES[tooltip_key].format(percent=tooltip_percent)
+        return ("❌", "Failed", "error", rationale)
 
     # Convert to float if it's a string (from database)
     try:
         confidence_float = float(confidence)
     except (TypeError, ValueError):
-        return ("❌", "Failed", "error")
+        rationale = CONFIDENCE_RATIONALES[tooltip_key].format(percent=tooltip_percent)
+        return ("❌", "Failed", "error", rationale)
+
+    tooltip_percent = f"{confidence_float:.0%}"
 
     if confidence_float >= 0.8:
-        return ("✅", f"High ({confidence_float:.0%})", "success")
+        tooltip_key = "high"
+        rationale = CONFIDENCE_RATIONALES[tooltip_key].format(percent=tooltip_percent)
+        return ("✅", f"High ({confidence_float:.0%})", "success", rationale)
     elif confidence_float >= 0.5:
-        return ("⚠️", f"Medium ({confidence_float:.0%})", "warning")
+        tooltip_key = "medium"
+        rationale = CONFIDENCE_RATIONALES[tooltip_key].format(percent=tooltip_percent)
+        return ("⚠️", f"Medium ({confidence_float:.0%})", "warning", rationale)
     else:
-        return ("❌", f"Low ({confidence_float:.0%})", "error")
+        tooltip_key = "low"
+        rationale = CONFIDENCE_RATIONALES[tooltip_key].format(percent=tooltip_percent)
+        return ("❌", f"Low ({confidence_float:.0%})", "error", rationale)
 
 
 def format_currency_amount(amount: Optional[Decimal], currency: str) -> str:

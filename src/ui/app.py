@@ -102,11 +102,11 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
         description="Manage verified surebets and coverage.",
     ),
     PageSpec(
-        title="Verified Bets Queue",
+        title="Settlement",
         section="Operations",
         icon=":material/task_alt:",
         script="pages/3_verified_bets_queue.py",
-        description="Process settlement actions and corrections.",
+        description="Process settlement actions, confirmations, and corrections.",
     ),
     PageSpec(
         title="Corrections",
@@ -158,11 +158,25 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
         description="Generate monthly partner statements with funding, entitlement, and reconciliation.",
     ),
     PageSpec(
-        title="Telegram Pending Photos",
+        title="Pending Photos",
         section="Telegram",
         icon=":material/photo_library:",
         script="pages/telegram_pending_photos.py",
         description="Monitor confirm-before-ingest queue with TTL countdowns and actions.",
+    ),
+    PageSpec(
+        title="Coverage Proof Outbox",
+        section="Telegram",
+        icon=":material/outbox:",
+        script="pages/telegram_coverage_proof_outbox.py",
+        description="Review coverage proof deliveries and manage Telegram resends.",
+    ),
+    PageSpec(
+        title="Rate Limiting",
+        section="Telegram",
+        icon=":material/speed:",
+        script="pages/telegram_rate_limiting.py",
+        description="Inspect chat cooldowns to avoid Telegram API limits.",
     ),
 )
 

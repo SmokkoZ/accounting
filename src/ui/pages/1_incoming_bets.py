@@ -21,6 +21,8 @@ from src.services.bet_verification import BetVerificationService
 from src.services.matching_service import MatchingService, MatchingSuggestions
 from src.ui.components.manual_upload import render_manual_upload_panel
 from src.ui.components.bet_card import render_bet_card
+from src.ui.helpers import auto_refresh as auto_refresh_helper
+from src.ui.helpers import url_state
 from src.ui.helpers.fragments import (
     call_fragment,
     fragments_supported,
@@ -376,6 +378,50 @@ def _reject_selected_bets(
 
 _AUTO_REFRESH_INTERVAL_SECONDS = 30
 _AUTO_REFRESH_KEY = "incoming_bets_auto_refresh"
+_AUTO_REFRESH_QUERY_KEY = "auto"
+_AUTO_REFRESH_SYNC_KEY = "_incoming_bets_auto_refresh_synced"
+_AUTO_REFRESH_INFLIGHT_KEY = "_incoming_bets_auto_refresh_inflight"
+_AUTO_REFRESH_LAST_RUN_KEY = "_incoming_bets_auto_refresh_last_completed"
+_COMPACT_QUERY_KEY = "compact"
+_COMPACT_TOGGLE_KEY = "incoming_bets_compact_mode"
+_COMPACT_SYNC_KEY = "_incoming_bets_compact_last_synced"
+
+
+def _read_compact_mode_from_query() -> bool:
+    params = url_state.read_query_params()
+    raw_value = url_state.normalize_query_value(params.get(_COMPACT_QUERY_KEY))
+    if raw_value is None:
+        return False
+    return raw_value.lower() in {"1", "true", "yes", "on", "compact"}
+
+
+def _persist_compact_query_state(value: bool) -> None:
+    last_synced = st.session_state.get(_COMPACT_SYNC_KEY)
+    if last_synced == value:
+        return
+
+    updated = url_state.set_query_param_flag(_COMPACT_QUERY_KEY, value)
+    if updated:
+        st.session_state[_COMPACT_SYNC_KEY] = value
+
+
+def _get_compact_mode_state() -> bool:
+    if _COMPACT_TOGGLE_KEY not in st.session_state:
+        default_value = _read_compact_mode_from_query()
+        st.session_state[_COMPACT_TOGGLE_KEY] = default_value
+        st.session_state[_COMPACT_SYNC_KEY] = default_value
+    return bool(st.session_state[_COMPACT_TOGGLE_KEY])
+
+
+def _render_compact_mode_toggle() -> bool:
+    _get_compact_mode_state()
+    toggle_value = st.toggle(
+        ":material/density_small: Compact bet rows",
+        key=_COMPACT_TOGGLE_KEY,
+        help="Shrink bet card padding and thumbnails so more rows stay on screen.",
+    )
+    _persist_compact_query_state(toggle_value)
+    return toggle_value
 
 
 def _render_incoming_bets_queue(
@@ -383,51 +429,57 @@ def _render_incoming_bets_queue(
     associate_filter: List[str],
     confidence_filter: str,
     auto_refresh_enabled: bool,
+    compact_mode: bool,
 ) -> None:
     """Render the incoming bets queue within an isolated fragment."""
     st.subheader(":material/list_alt: Bets Awaiting Review")
 
-    with track_timing("incoming_queue"):
+    with auto_refresh_helper.auto_refresh_cycle(
+        enabled=auto_refresh_enabled,
+        inflight_key=_AUTO_REFRESH_INFLIGHT_KEY,
+        last_run_key=_AUTO_REFRESH_LAST_RUN_KEY,
+    ):
         try:
-            db = get_cached_connection()
-            verification_service = BetVerificationService(db)
-            matching_service = MatchingService(db)
+            with track_timing("incoming_queue"):
+                db = get_cached_connection()
+                verification_service = BetVerificationService(db)
+                matching_service = MatchingService(db)
 
-            _handle_bet_actions(verification_service)
+                _handle_bet_actions(verification_service)
 
-            base_from = """
+                base_from = """
                 FROM bets b
                 JOIN associates a ON b.associate_id = a.id
                 JOIN bookmakers bk ON b.bookmaker_id = bk.id
                 LEFT JOIN canonical_events ce ON b.canonical_event_id = ce.id
             """
-            filters = ["b.status = 'incoming'"]
-            query_params: List[Any] = []
+                filters = ["b.status = 'incoming'"]
+                query_params: List[Any] = []
 
-            if "All" not in associate_filter and associate_filter:
-                placeholders = ",".join(["?" for _ in associate_filter])
-                filters.append(f"a.display_alias IN ({placeholders})")
-                query_params.extend(associate_filter)
+                if "All" not in associate_filter and associate_filter:
+                    placeholders = ",".join(["?" for _ in associate_filter])
+                    filters.append(f"a.display_alias IN ({placeholders})")
+                    query_params.extend(associate_filter)
 
-            if confidence_filter != "All":
-                if confidence_filter == "High (>=80%)":
-                    filters.append("CAST(b.normalization_confidence AS REAL) >= 0.8")
-                elif confidence_filter == "Medium (50-79%)":
-                    filters.append(
-                        "("
-                        "CAST(b.normalization_confidence AS REAL) >= 0.5"
-                        " AND CAST(b.normalization_confidence AS REAL) < 0.8"
-                        ")"
-                    )
-                elif confidence_filter == "Low (<50%)":
-                    filters.append("CAST(b.normalization_confidence AS REAL) < 0.5")
-                elif confidence_filter == "Failed":
-                    filters.append(
-                        "(b.normalization_confidence IS NULL OR b.normalization_confidence = '')"
-                    )
+                if confidence_filter != "All":
+                    if confidence_filter == "High (>=80%)":
+                        filters.append("CAST(b.normalization_confidence AS REAL) >= 0.8")
+                    elif confidence_filter == "Medium (50-79%)":
+                        filters.append(
+                            "("
+                            "CAST(b.normalization_confidence AS REAL) >= 0.5"
+                            " AND CAST(b.normalization_confidence AS REAL) < 0.8"
+                            ")"
+                        )
+                    elif confidence_filter == "Low (<50%)":
+                        filters.append("CAST(b.normalization_confidence AS REAL) < 0.5")
+                    elif confidence_filter == "Failed":
+                        filters.append(
+                            "(b.normalization_confidence IS NULL OR b.normalization_confidence = '')"
+                        )
 
-            where_clause = " AND ".join(filters)
-            select_sql = f"""
+                where_clause = " AND ".join(filters)
+                select_sql = f"""
                 SELECT
                     b.id as bet_id,
                     b.screenshot_path,
@@ -452,88 +504,91 @@ def _render_incoming_bets_queue(
                 WHERE {where_clause}
                 ORDER BY b.created_at_utc DESC
             """
-            count_sql = f"""
+                count_sql = f"""
                 SELECT COUNT(*)
                 {base_from}
                 WHERE {where_clause}
             """
 
-            total_rows = get_total_count(count_sql, tuple(query_params))
-            pagination = paginate("incoming_bets", total_rows, label="bets")
+                total_rows = get_total_count(count_sql, tuple(query_params))
+                pagination = paginate("incoming_bets", total_rows, label="bets")
 
-            paginated_sql, extra_params = apply_pagination(select_sql, pagination)
-            final_params = tuple(query_params) + extra_params
-            incoming_df = query_df(paginated_sql, final_params)
-            incoming_bets = incoming_df.to_dict(orient="records")
+                paginated_sql, extra_params = apply_pagination(select_sql, pagination)
+                final_params = tuple(query_params) + extra_params
+                incoming_df = query_df(paginated_sql, final_params)
+                incoming_bets = incoming_df.to_dict(orient="records")
 
-            if not incoming_bets:
-                st.info(":material/inbox: No bets awaiting review! Queue is empty.")
-                return
+                if not incoming_bets:
+                    st.info(":material/inbox: No bets awaiting review! Queue is empty.")
+                    return
 
-            st.caption(
-                f"Showing {pagination.start_row}-{pagination.end_row} of {pagination.total_rows} bets"
-            )
-
-            suggestions_by_bet: Dict[int, MatchingSuggestions] = {}
-            bets_by_id: Dict[int, Dict[str, Any]] = {}
-            selected_batch_ids: List[int] = []
-
-            for bet_dict in incoming_bets:
-                bet_id = bet_dict["bet_id"]
-                bets_by_id[bet_id] = bet_dict
-                suggestions = matching_service.suggest_for_bet(bet_dict)
-                suggestions_by_bet[bet_id] = suggestions
-
-                checkbox_key = f"select_bet_{bet_id}"
-                if checkbox_key not in st.session_state:
-                    st.session_state[checkbox_key] = False
-
-                select_col, card_col = st.columns([0.1, 0.9])
-                with select_col:
-                    selected = st.checkbox("Select", key=checkbox_key)
-                with card_col:
-                    render_bet_card(
-                        bet_dict,
-                        show_actions=True,
-                        editable=True,
-                        verification_service=verification_service,
-                        matching_suggestions=suggestions,
-                    )
-
-                if selected:
-                    selected_batch_ids.append(bet_id)
-
-            st.markdown("---")
-
-            if selected_batch_ids:
-                st.info(f"{len(selected_batch_ids)} bet(s) selected for batch actions.")
-
-            batch_col_approve, batch_col_reject = st.columns(2)
-            approve_clicked = batch_col_approve.button(
-                "Approve Selected",
-                disabled=not selected_batch_ids,
-                width="stretch",
-            )
-            reject_clicked = batch_col_reject.button(
-                "Reject Selected",
-                disabled=not selected_batch_ids,
-                width="stretch",
-            )
-
-            if approve_clicked:
-                _approve_selected_bets(
-                    selected_batch_ids,
-                    verification_service,
-                    bets_by_id,
-                    suggestions_by_bet,
-                )
-            if reject_clicked:
-                _reject_selected_bets(selected_batch_ids, verification_service)
-
-            if auto_refresh_enabled and fragments_supported():
                 st.caption(
-                    f":material/autorenew: Auto-refreshing every {_AUTO_REFRESH_INTERVAL_SECONDS}s"
+                    f"Showing {pagination.start_row}-{pagination.end_row} of {pagination.total_rows} bets"
                 )
+
+                suggestions_by_bet: Dict[int, MatchingSuggestions] = {}
+                bets_by_id: Dict[int, Dict[str, Any]] = {}
+                selected_batch_ids: List[int] = []
+                selection_col_ratio = [0.07, 0.93] if compact_mode else [0.1, 0.9]
+
+                for bet_dict in incoming_bets:
+                    bet_id = bet_dict["bet_id"]
+                    bets_by_id[bet_id] = bet_dict
+                    suggestions = matching_service.suggest_for_bet(bet_dict)
+                    suggestions_by_bet[bet_id] = suggestions
+
+                    checkbox_key = f"select_bet_{bet_id}"
+                    if checkbox_key not in st.session_state:
+                        st.session_state[checkbox_key] = False
+
+                    select_col, card_col = st.columns(selection_col_ratio)
+                    with select_col:
+                        selected = st.checkbox("Select", key=checkbox_key)
+                    with card_col:
+                        render_bet_card(
+                            bet_dict,
+                            show_actions=True,
+                            editable=True,
+                            verification_service=verification_service,
+                            matching_suggestions=suggestions,
+                            compact_mode=compact_mode,
+                        )
+
+                    if selected:
+                        selected_batch_ids.append(bet_id)
+
+                if compact_mode:
+                    st.markdown(
+                        "<hr style='margin:0.35rem 0;border-top:1px dashed rgba(148,163,184,0.35);' />",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown("---")
+
+                if selected_batch_ids:
+                    st.info(f"{len(selected_batch_ids)} bet(s) selected for batch actions.")
+
+                batch_col_approve, batch_col_reject = st.columns(2)
+                approve_clicked = batch_col_approve.button(
+                    "Approve Selected",
+                    disabled=not selected_batch_ids,
+                    width="stretch",
+                )
+                reject_clicked = batch_col_reject.button(
+                    "Reject Selected",
+                    disabled=not selected_batch_ids,
+                    width="stretch",
+                )
+
+                if approve_clicked:
+                    _approve_selected_bets(
+                        selected_batch_ids,
+                        verification_service,
+                        bets_by_id,
+                        suggestions_by_bet,
+                    )
+                if reject_clicked:
+                    _reject_selected_bets(selected_batch_ids, verification_service)
 
         except Exception as exc:
             logger.error("failed_to_load_incoming_bets", error=str(exc), exc_info=True)
@@ -559,9 +614,11 @@ if batch_feedback:
     for error_message in batch_feedback.get("errors", []):
         st.warning(error_message)
 
-toggle_cols = st.columns([6, 2])
+toggle_cols = st.columns([5, 2, 2])
 with toggle_cols[1]:
     render_debug_toggle(":material/monitor_heart: Performance debug")
+with toggle_cols[2]:
+    compact_mode_enabled = _render_compact_mode_toggle()
 
 # Manual upload panel at top (collapsible)
 with st.expander(":material/cloud_upload: Upload Manual Bet", expanded=False):
@@ -667,32 +724,49 @@ associate_filter = filter_state["associate_filter"]
 confidence_filter = filter_state["confidence_filter"]
 
 auto_refresh_supported = fragments_supported()
+default_auto_refresh_state = auto_refresh_helper.resolve_toggle_state(
+    session_key=_AUTO_REFRESH_KEY,
+    sync_key=_AUTO_REFRESH_SYNC_KEY,
+    query_key=_AUTO_REFRESH_QUERY_KEY,
+    supported=auto_refresh_supported,
+    default_on=True,
+)
 auto_refresh_enabled = st.toggle(
     ":material/autorenew: Auto-refresh queue (30s)",
     key=_AUTO_REFRESH_KEY,
-    value=st.session_state.get(_AUTO_REFRESH_KEY, False),
+    value=default_auto_refresh_state,
     help="Run the incoming bets fragment on an interval when available.",
     disabled=not auto_refresh_supported,
 )
-
-if not auto_refresh_supported:
-    st.caption(
-        ":material/info: Auto-refresh requires Streamlit fragment support; use manual refresh on older versions."
+auto_refresh_helper.persist_query_state(
+    value=auto_refresh_enabled,
+    query_key=_AUTO_REFRESH_QUERY_KEY,
+    sync_key=_AUTO_REFRESH_SYNC_KEY,
+)
+st.caption(
+    auto_refresh_helper.format_status(
+        enabled=auto_refresh_enabled,
+        supported=auto_refresh_supported,
+        interval_seconds=_AUTO_REFRESH_INTERVAL_SECONDS,
+        inflight_key=_AUTO_REFRESH_INFLIGHT_KEY,
+        last_run_key=_AUTO_REFRESH_LAST_RUN_KEY,
     )
+)
 
 st.markdown("---")
+
+auto_refresh_run_every = (
+    _AUTO_REFRESH_INTERVAL_SECONDS if auto_refresh_enabled and auto_refresh_supported else None
+)
 
 call_fragment(
     "incoming_bets.queue",
     _render_incoming_bets_queue,
-    run_every=(
-        _AUTO_REFRESH_INTERVAL_SECONDS
-        if auto_refresh_enabled and auto_refresh_supported
-        else None
-    ),
+    run_every=auto_refresh_run_every,
     associate_filter=associate_filter,
     confidence_filter=confidence_filter,
-    auto_refresh_enabled=auto_refresh_enabled and auto_refresh_supported,
+    auto_refresh_enabled=bool(auto_refresh_run_every),
+    compact_mode=compact_mode_enabled,
 )
 
 render_debug_panel()

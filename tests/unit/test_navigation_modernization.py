@@ -108,3 +108,18 @@ def test_render_navigation_link_falls_back_to_caption(monkeypatch):
     )
 
     assert captured["message"] == "Use the navigation menu to continue."
+
+
+def test_page_registry_contains_settlement_and_telegram_section():
+    settlement = next(
+        (spec for spec in app.PAGE_REGISTRY if spec.script == "pages/3_verified_bets_queue.py"),
+        None,
+    )
+    assert settlement is not None
+    assert settlement.title == "Settlement"
+
+    telegram_titles = {
+        spec.title for spec in app.PAGE_REGISTRY if spec.section == "Telegram"
+    }
+    required_titles = {"Pending Photos", "Coverage Proof Outbox", "Rate Limiting"}
+    assert required_titles.issubset(telegram_titles)

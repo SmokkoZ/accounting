@@ -7,10 +7,11 @@ rate limiting, and message logging.
 
 import asyncio
 import sqlite3
-from datetime import datetime
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
 from telegram import Message
@@ -534,5 +535,77 @@ async def test_send_coverage_proof_resend_allowed(seed_test_data):
 
         # Should have sent even though already marked as sent
         assert len(results) == 3
+
+    service.close()
+
+
+def _isoformat(dt: datetime) -> str:
+    """Helper to create SQLite-friendly UTC timestamps."""
+    return dt.replace(microsecond=0).isoformat().replace("+00:00", "") + "Z"
+
+
+def test_get_outbox_entries_reports_cooldown(seed_test_data):
+    """Ensure outbox entries surface cooldown metadata when limits are hit."""
+    service = CoverageProofService(db=seed_test_data)
+    cursor = seed_test_data.cursor()
+    now = datetime.now(timezone.utc)
+
+    for i in range(service.RATE_LIMIT_MESSAGES_PER_MINUTE):
+        ts = _isoformat(now - timedelta(seconds=i * 2))
+        cursor.execute(
+            """
+            INSERT INTO multibook_message_log (
+                associate_id,
+                surebet_id,
+                message_type,
+                delivery_status,
+                message_id,
+                error_message,
+                sent_at_utc,
+                created_at_utc
+            ) VALUES (?, ?, 'COVERAGE_PROOF', 'sent', ?, NULL, ?, ?)
+            """,
+            (1, 1, f"msg-{i}", ts, ts),
+        )
+
+    seed_test_data.commit()
+
+    entries = service.get_outbox_entries(limit=5)
+    assert entries, "Expected at least one outbox entry"
+    latest = entries[0]
+    assert latest["seconds_until_next_send"] > 0
+    assert latest["rate_limit_health"] == "blocked"
+
+    service.close()
+
+
+@pytest.mark.asyncio
+async def test_resend_honors_rate_limit_wait(seed_test_data):
+    """Verify resend workflow still respects cooldown delays."""
+    service = CoverageProofService(db=seed_test_data)
+    chat_id = "123456"
+    base = time.time()
+    service._rate_limit_tracker[chat_id] = [
+        (base - service.RATE_LIMIT_WINDOW_SECONDS + 2 + (i * 0.1), 1)
+        for i in range(service.RATE_LIMIT_MESSAGES_PER_MINUTE)
+    ]
+
+    mock_sleep = AsyncMock()
+    bot_mock = MagicMock()
+    bot_mock.send_media_group = AsyncMock(return_value=[MagicMock(message_id=777)])
+    file_handle = MagicMock()
+    file_handle.read.return_value = b"data"
+
+    with patch("asyncio.sleep", mock_sleep), \
+         patch("src.services.coverage_proof_service.Bot", return_value=bot_mock), \
+         patch("telegram.InputMediaPhoto", side_effect=lambda *args, **kwargs: MagicMock()), \
+         patch("pathlib.Path.exists", return_value=True), \
+         patch("builtins.open", return_value=file_handle):
+        results = await service.send_coverage_proof(surebet_id=1, resend=True)
+
+    assert mock_sleep.await_count >= 1
+    waited = mock_sleep.await_args_list[0][0][0]
+    assert waited > 0, "Expected resend flow to wait for cooldown"
+    assert len(results) == 3
 
     service.close()

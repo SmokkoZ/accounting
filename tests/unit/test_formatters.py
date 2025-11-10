@@ -24,27 +24,33 @@ class TestConfidenceBadge:
 
     def test_confidence_badge_high(self):
         """Test high confidence (≥0.8)."""
-        emoji, label, color = format_confidence_badge(0.9)
+        emoji, label, color, tooltip = format_confidence_badge(0.9)
         assert emoji == "✅"
         assert "High" in label
         assert "90%" in label
         assert color == "success"
+        assert "90%" in tooltip
+        assert "Safe to proceed" in tooltip
 
     def test_confidence_badge_medium(self):
         """Test medium confidence (0.5-0.79)."""
-        emoji, label, color = format_confidence_badge(0.65)
+        emoji, label, color, tooltip = format_confidence_badge(0.65)
         assert emoji == "⚠️"
         assert "Medium" in label
         assert "65%" in label
         assert color == "warning"
+        assert "65%" in tooltip
+        assert "Double-check" in tooltip
 
     def test_confidence_badge_low(self):
         """Test low confidence (<0.5)."""
-        emoji, label, color = format_confidence_badge(0.3)
+        emoji, label, color, tooltip = format_confidence_badge(0.3)
         assert emoji == "❌"
         assert "Low" in label
         assert "30%" in label
         assert color == "error"
+        assert "30%" in tooltip
+        assert "Inspect the row" in tooltip
 
 
 class TestTimezoneFormatting:
@@ -62,20 +68,23 @@ class TestTimezoneFormatting:
 
     def test_confidence_badge_failed(self):
         """Test failed extraction (None)."""
-        emoji, label, color = format_confidence_badge(None)
+        emoji, label, color, tooltip = format_confidence_badge(None)
         assert emoji == "❌"
         assert "Failed" in label
         assert color == "error"
+        assert "Normalization failed" in tooltip
 
     def test_confidence_badge_edge_cases(self):
         """Test edge cases (exactly 0.8, 0.5)."""
         # Exactly 0.8 should be high
-        emoji, label, color = format_confidence_badge(0.8)
+        emoji, label, color, tooltip = format_confidence_badge(0.8)
         assert "High" in label
+        assert "80%" in tooltip
 
         # Exactly 0.5 should be medium
-        emoji, label, color = format_confidence_badge(0.5)
+        emoji, label, color, tooltip = format_confidence_badge(0.5)
         assert "Medium" in label
+        assert "50%" in tooltip
 
 
 class TestCurrencyFormatting:

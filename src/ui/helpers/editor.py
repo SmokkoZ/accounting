@@ -32,8 +32,8 @@ ASSOCIATE_COLUMNS: Tuple[str, ...] = (
     "is_active",
     "multibook_chat_id",
     "bookmaker_count",
-    "created_at_utc",
-    "updated_at_utc",
+    "balance_eur",
+    "pending_balance_eur",
 )
 
 BOOKMAKER_COLUMNS: Tuple[str, ...] = (
@@ -82,6 +82,10 @@ def build_associates_dataframe(records: Sequence[Mapping[str, Any]]) -> pd.DataF
     frame["bookmaker_count"] = frame["bookmaker_count"].where(
         frame["bookmaker_count"].notna(), 0
     ).astype(int)
+    numeric_columns = ("balance_eur", "pending_balance_eur")
+    for column in numeric_columns:
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
     return frame.reset_index(drop=True)
 
 
@@ -149,17 +153,19 @@ def get_associate_column_config() -> Dict[str, st.column_config.Column]:
             disabled=True,
             width="small",
         ),
-        "created_at_utc": st.column_config.DatetimeColumn(
-            "Created",
+        "balance_eur": st.column_config.NumberColumn(
+            "Balance (EUR)",
             disabled=True,
-            format="YYYY-MM-DD HH:mm",
+            format="%.2f",
             width="medium",
+            help="Current holding aggregated from ledger entries.",
         ),
-        "updated_at_utc": st.column_config.DatetimeColumn(
-            "Updated",
+        "pending_balance_eur": st.column_config.NumberColumn(
+            "Pending (EUR)",
             disabled=True,
-            format="YYYY-MM-DD HH:mm",
+            format="%.2f",
             width="medium",
+            help="Open stakes awaiting settlement from verified/matched bets.",
         ),
     }
 

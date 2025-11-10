@@ -53,6 +53,7 @@ class TestAssociateHubRepository:
                 'telegram_chat_id': '123456',
                 'net_deposits_eur': '1000.00',
                 'current_holding_eur': '950.00',
+                'pending_balance_eur': '75.00',
                 'bookmaker_count': 3,
                 'active_bookmaker_count': 2,
                 'last_activity_utc': '2025-01-01T12:00:00Z'
@@ -79,6 +80,8 @@ class TestAssociateHubRepository:
         assert associate.net_deposits_eur == Decimal('1000.00')
         assert associate.should_hold_eur == Decimal('1000.00')
         assert associate.current_holding_eur == Decimal('950.00')
+        assert associate.balance_eur == Decimal('950.00')
+        assert associate.pending_balance_eur == Decimal('75.00')
         assert associate.delta_eur == Decimal('-50.00')
         assert associate.bookmaker_count == 3
         assert associate.active_bookmaker_count == 2
@@ -125,11 +128,15 @@ class TestAssociateHubRepository:
         # Test each sort option
         sort_options = [
             "alias_asc",
-            "alias_desc", 
+            "alias_desc",
             "delta_asc",
             "delta_desc",
             "activity_asc",
-            "activity_desc"
+            "activity_desc",
+            "balance_asc",
+            "balance_desc",
+            "pending_asc",
+            "pending_desc",
         ]
         
         for sort_option in sort_options:
@@ -323,6 +330,8 @@ class TestAssociateMetrics:
             net_deposits_eur=Decimal('1000.00'),
             should_hold_eur=Decimal('1000.00'),
             current_holding_eur=Decimal('1000.00'),
+            balance_eur=Decimal('1000.00'),
+            pending_balance_eur=Decimal('0.00'),
             delta_eur=Decimal('0.00'),
             last_activity_utc=None,
             status="balanced",
@@ -348,6 +357,8 @@ class TestAssociateMetrics:
             net_deposits_eur=Decimal('1000.00'),
             should_hold_eur=Decimal('1000.00'),
             current_holding_eur=Decimal('1050.00'),
+            balance_eur=Decimal('1050.00'),
+            pending_balance_eur=Decimal('25.00'),
             delta_eur=Decimal('50.00'),
             last_activity_utc=None,
             status="overholding",
@@ -373,6 +384,8 @@ class TestAssociateMetrics:
             net_deposits_eur=Decimal('1000.00'),
             should_hold_eur=Decimal('1000.00'),
             current_holding_eur=Decimal('950.00'),
+            balance_eur=Decimal('950.00'),
+            pending_balance_eur=Decimal('75.00'),
             delta_eur=Decimal('-50.00'),
             last_activity_utc=None,
             status="short",

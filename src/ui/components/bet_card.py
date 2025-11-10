@@ -20,6 +20,10 @@ from src.ui.helpers.streaming import show_pdf_preview
 from src.ui.media import render_thumbnail
 from src.ui.utils.state_management import safe_rerun
 
+DEFAULT_THUMB_WIDTH = 180
+COMPACT_THUMB_WIDTH = 135
+DEFAULT_COLUMN_WEIGHTS = [1, 3, 1]
+COMPACT_COLUMN_WEIGHTS = [0.85, 3.5, 1.1]
 
 def render_bet_card(
     bet: Dict[str, Any],
@@ -71,22 +75,32 @@ def render_bet_card(
                 st.error(f"Failed to create event: {error}")
                 open_dialog(dialog_key)
 
+    column_weights = (
+        COMPACT_COLUMN_WEIGHTS if compact_mode else DEFAULT_COLUMN_WEIGHTS
+    )
+    thumb_width = COMPACT_THUMB_WIDTH if compact_mode else DEFAULT_THUMB_WIDTH
+
     with st.container():
         # Create 3-column layout: screenshot | details | actions
-        col1, col2, col3 = st.columns([1, 3, 1])
+        col1, col2, col3 = st.columns(column_weights)
 
         with col1:
             # Screenshot preview
-            _render_screenshot_preview(bet)
+            _render_screenshot_preview(bet, thumb_width=thumb_width)
 
         with col2:
             # Bet details (editable or read-only)
             if editable and verification_service:
                 _render_bet_details_editable(
-                    bet, verification_service, matching_suggestions
+                    bet,
+                    verification_service,
+                    matching_suggestions,
+                    compact_mode=compact_mode,
                 )
             else:
-                _render_bet_details(bet, matching_suggestions)
+                _render_bet_details(
+                    bet, matching_suggestions, compact_mode=compact_mode
+                )
 
         with col3:
             # Confidence badge and actions
@@ -98,10 +112,20 @@ def render_bet_card(
                 matching_suggestions=matching_suggestions,
             )
 
+        _render_card_divider(compact_mode)
+
+
+def _render_card_divider(compact_mode: bool) -> None:
+    if compact_mode:
+        st.markdown(
+            "<hr style='margin:0.25rem 0;border-top:1px dashed rgba(148,163,184,0.35);' />",
+            unsafe_allow_html=True,
+        )
+    else:
         st.markdown("---")
 
 
-def _render_screenshot_preview(bet: Dict[str, Any]) -> None:
+def _render_screenshot_preview(bet: Dict[str, Any], *, thumb_width: int) -> None:
     """Render screenshot or PDF slip preview."""
     screenshot_path = bet.get("screenshot_path")
 
@@ -122,13 +146,16 @@ def _render_screenshot_preview(bet: Dict[str, Any]) -> None:
     render_thumbnail(
         file_path,
         caption="Bet slip preview",
-        width=180,
+        width=thumb_width,
         expander_label=":material/zoom_in: View full resolution",
     )
 
 
 def _render_bet_details(
-    bet: Dict[str, Any], matching_suggestions: Optional[MatchingSuggestions]
+    bet: Dict[str, Any],
+    matching_suggestions: Optional[MatchingSuggestions],
+    *,
+    compact_mode: bool = False,
 ) -> None:
     """Render bet details section."""
     st.markdown(f"**Bet #{bet['bet_id']}** - {bet['associate']} @ {bet['bookmaker']}")
@@ -173,7 +200,9 @@ def _render_bet_details(
         st.info(f"Note: {bet['operator_note']}")
 
     if matching_suggestions:
-        _render_matching_suggestions(matching_suggestions, compact_mode=True)
+        _render_matching_suggestions(
+            matching_suggestions, compact_mode=compact_mode
+        )
 
 
 def _render_bet_details_editable(
@@ -364,10 +393,8 @@ def _render_bet_actions(
     matching_suggestions: Optional[MatchingSuggestions] = None,
 ) -> None:
     """Render confidence badge, suggestions, and action buttons."""
-    emoji, label, _ = format_confidence_badge(bet.get("normalization_confidence"))
-    st.markdown(f"{emoji} **{label}**")
-
     bet_id = bet.get("bet_id", bet.get("id"))
+    _render_confidence_rationale_badge(bet_id, bet.get("normalization_confidence"))
 
     if auto_payload and matching_suggestions:
         top_event = next(iter(matching_suggestions.events), None)
@@ -405,6 +432,48 @@ def _render_bet_actions(
         ):
             st.session_state[f"reject_bet_{bet_id}"] = True
             safe_rerun()
+
+
+def _render_confidence_rationale_badge(
+    bet_id: Any, confidence: Optional[float]
+) -> None:
+    """Render a focusable badge with synchronized tooltip rationale."""
+    emoji, label, color, tooltip = format_confidence_badge(confidence)
+    tooltip_id = f"confidence-tooltip-{bet_id}"
+    sr_id = f"{tooltip_id}-sr"
+
+    try:
+        numeric_confidence = (
+            None if confidence is None else float(confidence)  # type: ignore[arg-type]
+        )
+    except (TypeError, ValueError):
+        numeric_confidence = None
+
+    confidence_attr = "" if numeric_confidence is None else f"{numeric_confidence:.4f}"
+
+    html = f"""
+    <div class="confidence-badge-wrapper" data-variant="{escape(color)}">
+        <button
+            class="confidence-badge-button"
+            type="button"
+            aria-describedby="{escape(sr_id)}"
+            title="{escape(tooltip, quote=True)}"
+            data-variant="{escape(color)}"
+            data-confidence="{escape(confidence_attr)}"
+        >
+            <span class="confidence-badge-emoji">{escape(emoji)}</span>
+            <span class="confidence-badge-label">{escape(label)}</span>
+        </button>
+        <div id="{escape(tooltip_id)}" class="confidence-tooltip" role="tooltip">
+            <p class="confidence-tooltip-text">{escape(tooltip)}</p>
+        </div>
+        <span id="{escape(sr_id)}" class="sr-only" aria-live="polite">
+            {escape(tooltip)}
+        </span>
+    </div>
+    """
+
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def _render_matching_suggestions(

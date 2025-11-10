@@ -34,6 +34,8 @@ class AssociateMetrics:
     net_deposits_eur: Decimal
     should_hold_eur: Decimal
     current_holding_eur: Decimal
+    balance_eur: Decimal
+    pending_balance_eur: Decimal
     delta_eur: Decimal
     last_activity_utc: Optional[str]
     status: str  # 'balanced', 'overholding', 'short'
@@ -127,6 +129,7 @@ class AssociateHubRepository:
             COUNT(DISTINCT CASE WHEN b.is_active = 1 THEN b.id END) AS active_bookmaker_count,
             COALESCE(deposits.net_deposits_eur, 0) AS net_deposits_eur,
             COALESCE(holdings.current_holding_eur, 0) AS current_holding_eur,
+            COALESCE(pending.pending_balance_eur, 0) AS pending_balance_eur,
             MAX(COALESCE(bh.check_date_utc, le.created_at_utc)) AS last_activity_utc
         FROM associates a
         LEFT JOIN bookmakers b ON b.associate_id = a.id
@@ -145,6 +148,20 @@ class AssociateHubRepository:
             FROM ledger_entries
             GROUP BY associate_id
         ) holdings ON holdings.associate_id = a.id
+        LEFT JOIN (
+            SELECT
+                associate_id,
+                SUM(
+                    CASE
+                        WHEN stake_eur IS NOT NULL AND stake_eur != ''
+                        THEN CAST(stake_eur AS REAL)
+                        ELSE 0
+                    END
+                ) AS pending_balance_eur
+            FROM bets
+            WHERE status IN ('verified', 'matched')
+            GROUP BY associate_id
+        ) pending ON pending.associate_id = a.id
         LEFT JOIN bookmaker_balance_checks bh ON bh.associate_id = a.id
         LEFT JOIN ledger_entries le ON le.associate_id = a.id
         WHERE 1=1
@@ -178,7 +195,11 @@ class AssociateHubRepository:
             query += f" AND a.home_currency IN ({currency_placeholders})"
             params.extend(currency_filter)
         
-        query += " GROUP BY a.id, a.display_alias, a.home_currency, a.is_admin, a.is_active, a.multibook_chat_id, deposits.net_deposits_eur, holdings.current_holding_eur"
+        query += (
+            " GROUP BY a.id, a.display_alias, a.home_currency, a.is_admin, a.is_active, "
+            "a.multibook_chat_id, deposits.net_deposits_eur, holdings.current_holding_eur, "
+            "pending.pending_balance_eur"
+        )
         
         # Add sorting
         sort_map = {
@@ -187,7 +208,11 @@ class AssociateHubRepository:
             "delta_desc": "(COALESCE(holdings.current_holding_eur, 0) - COALESCE(deposits.net_deposits_eur, 0)) DESC",
             "delta_asc": "(COALESCE(holdings.current_holding_eur, 0) - COALESCE(deposits.net_deposits_eur, 0)) ASC",
             "activity_desc": "MAX(COALESCE(bh.check_date_utc, le.created_at_utc)) DESC",
-            "activity_asc": "MAX(COALESCE(bh.check_date_utc, le.created_at_utc)) ASC"
+            "activity_asc": "MAX(COALESCE(bh.check_date_utc, le.created_at_utc)) ASC",
+            "balance_desc": "COALESCE(holdings.current_holding_eur, 0) DESC",
+            "balance_asc": "COALESCE(holdings.current_holding_eur, 0) ASC",
+            "pending_desc": "COALESCE(pending.pending_balance_eur, 0) DESC",
+            "pending_asc": "COALESCE(pending.pending_balance_eur, 0) ASC",
         }
         
         query += f" ORDER BY {sort_map.get(sort_by, sort_map['alias_asc'])}"
@@ -207,6 +232,9 @@ class AssociateHubRepository:
             # Calculate should_hold and delta
             net_deposits = Decimal(str(row["net_deposits_eur"])).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
             current_holding = Decimal(str(row["current_holding_eur"])).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+            pending_balance = Decimal(str(row.get("pending_balance_eur", 0))).quantize(
+                TWO_PLACES, rounding=ROUND_HALF_UP
+            )
             delta_eur = current_holding - net_deposits
             should_hold_eur = net_deposits  # Should hold what was deposited
             
@@ -234,6 +262,8 @@ class AssociateHubRepository:
                 net_deposits_eur=net_deposits,
                 should_hold_eur=should_hold_eur.quantize(TWO_PLACES, rounding=ROUND_HALF_UP),
                 current_holding_eur=current_holding,
+                balance_eur=current_holding,
+                pending_balance_eur=pending_balance,
                 delta_eur=delta_eur.quantize(TWO_PLACES, rounding=ROUND_HALF_UP),
                 last_activity_utc=row["last_activity_utc"],
                 status=status,

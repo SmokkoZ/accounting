@@ -47,6 +47,11 @@ from src.ui.helpers.streaming import (
     status_with_steps,
 )
 from src.ui.ui_components import advanced_section, form_gated_filters, load_global_styles
+from src.ui.pages.coverage_proof_outbox_panel import (
+    LEGACY_OUTBOX_RESEND_PREFIX,
+    OUTBOX_RESEND_STATE_PREFIX,
+    render_coverage_proof_outbox,
+)
 from src.ui.utils.navigation_links import render_navigation_link
 from src.ui.utils.pagination import paginate
 from src.ui.utils.performance import track_timing
@@ -54,6 +59,12 @@ from src.ui.utils.state_management import render_reset_control, safe_rerun
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+def _set_verified_bets_tab(tab_value: str) -> None:
+    """Keep radio widget and derived state in sync when switching tabs."""
+    st.session_state["verified_bets_active_tab"] = tab_value
+    st.session_state["verified_bets_tab_selector"] = tab_value
 
 
 # Configure page
@@ -87,7 +98,7 @@ if "settlement_success_message" in st.session_state:
     )
 
 if st.session_state.pop("pending_settle_tab_click", False):
-    st.session_state["verified_bets_active_tab"] = "⚖️ Settle"
+    _set_verified_bets_tab("⚖️ Settle")
 
 # ========================================
 # Settlement Interface Helper Functions
@@ -1208,9 +1219,10 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                         exc_info=True,
                     )
         stored_preview = st.session_state.get(preview_key)
-        if stored_preview is not None:
-            stored_outcomes = st.session_state.get(preview_outcomes_key, {})
-            render_settlement_preview(surebet_id, index, stored_preview, stored_outcomes)
+    if stored_preview is not None:
+        stored_outcomes = st.session_state.get(preview_outcomes_key, {})
+        render_settlement_preview(surebet_id, index, stored_preview, stored_outcomes)
+
 
 async def process_coverage_proof_send(
     surebet_id: int, resend: bool = False
@@ -1226,7 +1238,7 @@ async def process_coverage_proof_send(
         List of results from coverage proof service
     """
     service = CoverageProofService()
-    results = await service.send_coverage_proof(surebet_id, resend=resend)
+    results = await service.send(surebet_id, resend=resend)
     service.close()
     return results
 
@@ -1280,6 +1292,66 @@ for key in list(st.session_state.keys()):
         del st.session_state[key]
         safe_rerun()
 
+# Process outbox resend actions
+for key in list(st.session_state.keys()):
+    if key.startswith("coverage_outbox_resend_btn_"):
+        continue
+    if not (
+        key.startswith(OUTBOX_RESEND_STATE_PREFIX)
+        or key.startswith(LEGACY_OUTBOX_RESEND_PREFIX)
+    ):
+        continue
+
+    context = st.session_state.get(key)
+    if not isinstance(context, dict):
+        st.session_state.pop(key, None)
+        continue
+
+    surebet_id = context.get("surebet_id")
+    associate_alias = context.get("associate_alias")
+    if not surebet_id:
+        st.session_state.pop(key, None)
+        continue
+
+    with st.spinner(
+        f"Re-sending coverage proof for surebet {surebet_id} ({associate_alias})..."
+    ):
+        try:
+            results = asyncio.run(process_coverage_proof_send(surebet_id, resend=True))
+            target_result = None
+            if associate_alias:
+                target_result = next(
+                    (r for r in results if r.associate_alias == associate_alias),
+                    None,
+                )
+
+            if target_result and target_result.success:
+                show_success_toast(
+                    f"Coverage proof resent to {associate_alias} (Surebet {surebet_id})."
+                )
+            elif target_result:
+                st.error(
+                    f"Failed to resend to {associate_alias}: {target_result.error_message or 'Unknown error'}"
+                )
+            elif results:
+                show_success_toast(f"Coverage proof resent for Surebet {surebet_id}.")
+            else:
+                st.warning(
+                    f"No coverage proof deliveries were attempted for Surebet {surebet_id}."
+                )
+        except Exception as error:
+            st.error(f"Error resending coverage proof: {error}")
+            logger.error(
+                "coverage_proof_outbox_resend_error",
+                surebet_id=surebet_id,
+                associate=associate_alias,
+                error=str(error),
+                exc_info=True,
+            )
+
+    del st.session_state[key]
+    safe_rerun()
+
 
 # Main page layout controls
 st.markdown("Monitor, settle, and manage all open surebets.")
@@ -1304,6 +1376,8 @@ if selected_tab == "📊 Overview":
     total_unsafe = count_unsafe_surebets()
     counter_cols[0].metric("Open Surebets", total_open)
     counter_cols[1].metric("Unsafe (⚠️)", total_unsafe, delta=None if total_unsafe == 0 else "⚠️ Attention")
+    st.markdown("---")
+    render_coverage_proof_outbox()
     st.markdown("---")
     st.markdown("### Filters & Sorting")
 

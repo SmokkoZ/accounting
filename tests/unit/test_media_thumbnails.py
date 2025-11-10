@@ -45,6 +45,22 @@ def test_make_thumb_respects_requested_width(tmp_path):
     assert thumb.width == 80
 
 
+def test_make_thumb_handles_compact_layout_width(tmp_path):
+    image = tmp_path / "compact.png"
+    _write_image(image, color=(120, 120, 120))
+
+    clear_thumbnail_cache()
+    compact_thumb = make_thumb(image, width=135)
+    assert compact_thumb is not None
+    compact = Image.open(BytesIO(compact_thumb))
+    assert compact.width == 135
+
+    default_thumb = make_thumb(image, width=180)
+    assert default_thumb is not None
+    default = Image.open(BytesIO(default_thumb))
+    assert default.width == 180
+
+
 def _write_image(path: Path, color: tuple[int, int, int]) -> None:
     image = Image.new("RGB", (200, 120), color=color)
     image.save(path)
