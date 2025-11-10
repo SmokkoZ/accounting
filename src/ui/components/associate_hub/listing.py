@@ -17,6 +17,8 @@ from src.ui.components.associate_hub.filters import update_filter_state
 from src.ui.utils.formatters import format_currency_amount
 from src.ui.utils.state_management import safe_rerun
 
+CARD_STYLE_KEY = "associate_card_styles_loaded"
+
 
 def _format_optional_eur(value: Optional[Decimal]) -> str:
     """Format EUR amounts when data is present, otherwise return a placeholder."""
@@ -40,6 +42,34 @@ def _format_local_timestamp(timestamp: Optional[str], fmt: str = "%Y-%m-%d %H:%M
         return parsed.strftime(fmt)
     except (ValueError, AttributeError):
         return timestamp[:16]
+
+
+def _ensure_card_styles() -> None:
+    """Inject styling so associate cards have visible white borders."""
+    if st.session_state.get(CARD_STYLE_KEY):
+        return
+
+    st.markdown(
+        """
+        <style>
+        .associate-card {
+            border: 1px solid rgba(255, 255, 255, 0.45);
+            border-radius: 14px;
+            padding: 1.25rem 1.5rem;
+            margin-bottom: 1rem;
+            background-color: rgba(255, 255, 255, 0.02);
+        }
+        .associate-card + .associate-card {
+            margin-top: 0.5rem;
+        }
+        .associate-card h4 {
+            margin-bottom: 0.25rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.session_state[CARD_STYLE_KEY] = True
 def render_associate_listing(
     associates: List[AssociateMetrics], 
     bookmakers_dict: Dict[int, List[BookmakerSummary]]
@@ -51,17 +81,16 @@ def render_associate_listing(
         st.warning("No associates found matching current filters.")
         return
 
-    for index, associate in enumerate(associates):
-        if index:
-            st.divider()
+    _ensure_card_styles()
 
-        associate_key = f"associate_{associate.associate_id}"
+    for associate in associates:
         admin_label = "Admin" if associate.is_admin else "User"
         currency_label = associate.home_currency or "EUR"
         bookie_summary = f"{associate.active_bookmaker_count}/{associate.bookmaker_count}"
         status_label = associate.title()
         last_activity = _format_local_timestamp(associate.last_activity_utc)
 
+        st.markdown('<div class="associate-card">', unsafe_allow_html=True)
         with st.container():
             header_cols = st.columns([3, 1, 1])
             with header_cols[0]:
@@ -116,6 +145,7 @@ def render_associate_listing(
                     render_bookmaker_subtable(bookmakers)
             else:
                 st.info("No bookmakers configured for this associate.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_action_buttons(associate: AssociateMetrics) -> None:
