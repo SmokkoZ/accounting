@@ -23,6 +23,7 @@ from src.ui.components.associate_hub import (
     render_associate_listing,
     render_detail_drawer,
     render_filters,
+    render_hub_dashboard,
     render_pagination_info,
     render_empty_state,
 )
@@ -441,6 +442,7 @@ def main() -> None:
         total_count = int(payload.get("total_count", 0))
 
         if associates:
+            render_hub_dashboard(associates)
             render_associate_listing(associates, bookmakers)
             render_pagination_info(total_count, filter_state)
         else:

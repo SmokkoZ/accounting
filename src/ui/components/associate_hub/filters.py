@@ -72,14 +72,14 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
     """Render the filter bar and return the updated state plus refresh flag."""
     current_state = get_filter_state()
     should_refresh = False
+    active_filter_count = get_active_filters_count(current_state)
 
     with st.container():
         st.subheader("Filters & Search")
 
-        # Primary row (search + filter toggles)
-        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+        top_cols = st.columns([3, 1, 1])
 
-        with col1:
+        with top_cols[0]:
             search_value = st.text_input(
                 "Search Associates",
                 value=current_state["search"],
@@ -91,7 +91,37 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 update_filter_state(search=search_value, page=0)
                 should_refresh = True
 
-        with col2:
+        with top_cols[1]:
+            metric_delta = (
+                "Filters narrow the list" if active_filter_count else "Showing all associates"
+            )
+            st.metric("Active filters", active_filter_count, delta=metric_delta)
+            if active_filter_count:
+                st.caption("Reset filters to broaden the view.")
+
+        with top_cols[2]:
+            if st.button(
+                "Reset Filters",
+                key="hub_reset_filters",
+                help="Clear every filter and re-run the listing.",
+            ):
+                update_filter_state(
+                    search="",
+                    admin_filter=[],
+                    associate_status_filter=[],
+                    bookmaker_status_filter=[],
+                    currency_filter=[],
+                    sort_by="alias_asc",
+                    page=0,
+                )
+                should_refresh = True
+                safe_rerun()
+
+        st.divider()
+
+        filter_cols = st.columns(3)
+
+        with filter_cols[0]:
             admin_selection = st.multiselect(
                 "Admin Status",
                 options=list(ADMIN_LABELS.values()),
@@ -104,7 +134,7 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 update_filter_state(admin_filter=admin_filter, page=0)
                 should_refresh = True
 
-        with col3:
+        with filter_cols[1]:
             associate_selection = st.multiselect(
                 "Associate Status",
                 options=list(STATUS_LABELS.values()),
@@ -117,7 +147,7 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 update_filter_state(associate_status_filter=associate_filter, page=0)
                 should_refresh = True
 
-        with col4:
+        with filter_cols[2]:
             bookmaker_selection = st.multiselect(
                 "Bookmaker Status",
                 options=list(STATUS_LABELS.values()),
@@ -130,11 +160,9 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 update_filter_state(bookmaker_status_filter=bookmaker_filter, page=0)
                 should_refresh = True
 
-        # Secondary row (currency and sorting)
-        col5, col6, col7 = st.columns([1, 1, 2])
+        control_cols = st.columns([1, 1, 1, 1])
 
-        with col5:
-            # Query distinct currencies lazily and cache in session state.
+        with control_cols[0]:
             currency_cache_key = "hub_currency_options"
             if currency_cache_key not in st.session_state:
                 try:
@@ -158,63 +186,77 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 update_filter_state(currency_filter=currency_selection, page=0)
                 should_refresh = True
 
-        with col6:
-            sort_options = {
-                "Alias (A-Z)": "alias_asc",
-                "Alias (Z-A)": "alias_desc",
-                "Delta (High-Low)": "delta_desc",
-                "Delta (Low-High)": "delta_asc",
-                "Active Bookmakers": "bookmaker_active_desc",
-            }
-            current_sort_label = next(
-                (label for label, value in sort_options.items() if value == current_state["sort_by"]),
-                "Alias (A-Z)",
-            )
+        sort_options = {
+            "Alias (A-Z)": "alias_asc",
+            "Alias (Z-A)": "alias_desc",
+            "Delta (High-Low)": "delta_desc",
+            "Delta (Low-High)": "delta_asc",
+            "Active Bookmakers": "bookmaker_active_desc",
+        }
+        sort_labels = list(sort_options.keys())
+        current_sort_label = next(
+            (label for label, value in sort_options.items() if value == current_state["sort_by"]),
+            "Alias (A-Z)",
+        )
+        selected_sort_label = current_sort_label
+
+        with control_cols[1]:
             selected_label = st.selectbox(
                 "Sort By",
-                options=list(sort_options.keys()),
-                index=list(sort_options.keys()).index(current_sort_label),
+                options=sort_labels,
+                index=sort_labels.index(current_sort_label),
                 key="hub_sort_by_select",
                 help="Sort order for the associate listing.",
             )
+            selected_sort_label = selected_label
             if sort_options[selected_label] != current_state["sort_by"]:
                 update_filter_state(sort_by=sort_options[selected_label], page=0)
                 should_refresh = True
 
-        with col7:
-            col7a, col7b, col7c = st.columns([1, 1, 2])
+        with control_cols[2]:
+            page_size_options = [10, 25, 50, 100]
+            page_size = st.selectbox(
+                "Page Size",
+                options=page_size_options,
+                index=page_size_options.index(current_state["page_size"]),
+                key="hub_page_size_select",
+                help="Number of associates to show per page.",
+            )
+            if page_size != current_state["page_size"]:
+                update_filter_state(page_size=page_size, page=0)
+                should_refresh = True
 
-            with col7a:
-                if st.button("Reset Filters", key="hub_reset_filters"):
-                    update_filter_state(
-                        search="",
-                        admin_filter=[],
-                        associate_status_filter=[],
-                        bookmaker_status_filter=[],
-                        currency_filter=[],
-                        sort_by="alias_asc",
-                        page=0,
-                    )
-                    should_refresh = True
-                    safe_rerun()
-
-            with col7b:
-                page_size = st.selectbox(
-                    "Page Size",
-                    options=[10, 25, 50, 100],
-                    index=[10, 25, 50, 100].index(current_state["page_size"]),
-                    key="hub_page_size_select",
-                    help="Number of associates to show per page.",
-                )
-                if page_size != current_state["page_size"]:
-                    update_filter_state(page_size=page_size, page=0)
-                    should_refresh = True
-
-            with col7c:
-                st.markdown("&nbsp;")  # Spacer for vertical alignment
-                st.markdown(f"**Page:** {current_state['page'] + 1}")
+        with control_cols[3]:
+            st.caption(f"Page: {current_state['page'] + 1}")
 
         st.divider()
+
+        active_filter_labels = []
+
+        if current_state["search"].strip():
+            active_filter_labels.append(f"Search: '{current_state['search']}'")
+
+        if current_state["admin_filter"]:
+            admin_labels = _labels_from_state(current_state["admin_filter"], ADMIN_LABELS)
+            active_filter_labels.append(f"Admin: {', '.join(admin_labels)}")
+
+        if current_state["associate_status_filter"]:
+            status_labels = _labels_from_state(current_state["associate_status_filter"], STATUS_LABELS)
+            active_filter_labels.append(f"Status: {', '.join(status_labels)}")
+
+        if current_state["bookmaker_status_filter"]:
+            bookmaker_labels = _labels_from_state(current_state["bookmaker_status_filter"], STATUS_LABELS)
+            active_filter_labels.append(f"Bookmakers: {', '.join(bookmaker_labels)}")
+
+        if current_state["currency_filter"]:
+            active_filter_labels.append(f"Currencies: {', '.join(current_state['currency_filter'])}")
+
+        if current_state["sort_by"] != "alias_asc":
+            active_filter_labels.append(f"Sort: {selected_sort_label}")
+
+        if active_filter_labels:
+            st.caption("Active filters:")
+            st.caption(" | ".join(active_filter_labels))
 
     updated_state = get_filter_state()
     return updated_state, should_refresh

@@ -42,9 +42,15 @@ BOOKMAKER_COLUMNS: Tuple[str, ...] = (
     "bookmaker_name",
     "bookmaker_chat_id",
     "is_active",
+    "native_currency",
+    "balance_native",
     "balance_eur",
+    "pending_balance_native",
     "pending_balance_eur",
+    "net_deposits_native",
     "net_deposits_eur",
+    "profits_native",
+    "profits_eur",
 )
 
 
@@ -96,8 +102,19 @@ def build_bookmakers_dataframe(records: Sequence[Mapping[str, Any]]) -> pd.DataF
     ).astype(bool)
     frame["associate_id"] = frame["associate_id"].fillna(0).astype(int)
     frame["bookmaker_chat_id"] = frame["bookmaker_chat_id"].fillna("").astype(str)
+    frame["native_currency"] = frame["native_currency"].fillna("").astype(str)
 
-    for column in ("balance_eur", "pending_balance_eur", "net_deposits_eur"):
+    numeric_columns = (
+        "balance_native",
+        "balance_eur",
+        "pending_balance_native",
+        "pending_balance_eur",
+        "net_deposits_native",
+        "net_deposits_eur",
+        "profits_native",
+        "profits_eur",
+    )
+    for column in numeric_columns:
         if column in frame.columns:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
 
@@ -163,23 +180,59 @@ def get_bookmaker_column_config(*, show_associate: bool = False) -> Dict[str, st
             help="Latest Telegram chat registered for this bookmaker.",
         ),
         "is_active": st.column_config.CheckboxColumn("Active", width="small"),
+        "native_currency": st.column_config.TextColumn(
+            "Currency",
+            disabled=True,
+            width="small",
+            help="Native currency used for balances and deposits. Values below use this currency for CUR columns.",
+        ),
+        "balance_native": st.column_config.NumberColumn(
+            "Balance (CUR)",
+            disabled=True,
+            format="%.2f",
+            help="Latest reported bookmaker balance in the bookmaker's native currency.",
+        ),
         "balance_eur": st.column_config.NumberColumn(
             "Balance (EUR)",
             disabled=True,
             format="%.2f",
             help="Latest reported bookmaker balance converted to EUR.",
         ),
+        "pending_balance_native": st.column_config.NumberColumn(
+            "Pending (CUR)",
+            disabled=True,
+            format="%.2f",
+            help="Verified + matched stakes awaiting settlement in the bookmaker's native currency.",
+        ),
         "pending_balance_eur": st.column_config.NumberColumn(
-            "Pending Balance (EUR)",
+            "Pending (EUR)",
             disabled=True,
             format="%.2f",
             help="Verified + matched stakes awaiting settlement for this bookmaker.",
+        ),
+        "net_deposits_native": st.column_config.NumberColumn(
+            "Deposits (CUR)",
+            disabled=True,
+            format="%.2f",
+            help="Net deposits (deposits minus withdrawals) tied to this bookmaker in native currency.",
         ),
         "net_deposits_eur": st.column_config.NumberColumn(
             "Deposits (EUR)",
             disabled=True,
             format="%.2f",
             help="Net deposits (deposits minus withdrawals) tied to this bookmaker.",
+        ),
+        "profits_native": st.column_config.NumberColumn(
+            "Profits (CUR)",
+            disabled=True,
+            format="%.2f",
+            help="Surebet earnings minus net deposits in the bookmaker's native currency.",
+        ),
+        "profits_eur": st.column_config.NumberColumn(
+            "Profits (EUR)",
+            disabled=True,
+            format="%.2f",
+            help="Surebet earnings minus net deposits in EUR based on ledger data.",
         ),
     }
 

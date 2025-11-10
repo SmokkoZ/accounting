@@ -10,143 +10,112 @@ from __future__ import annotations
 import streamlit as st
 from datetime import datetime
 from decimal import Decimal
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from src.repositories.associate_hub_repository import AssociateMetrics, BookmakerSummary
 from src.ui.components.associate_hub.filters import update_filter_state
+from src.ui.utils.formatters import format_currency_amount
 from src.ui.utils.state_management import safe_rerun
 
+
+def _format_optional_eur(value: Optional[Decimal]) -> str:
+    """Format EUR amounts when data is present, otherwise return a placeholder."""
+    return format_currency_amount(value, "EUR") if value is not None else "N/A"
+
+
+def _format_signed_eur(value: Optional[Decimal]) -> str:
+    """Render EUR amounts with explicit +/- for deltas."""
+    if value is None:
+        return "N/A"
+    formatted = format_currency_amount(value, "EUR")
+    return f"+{formatted}" if value >= 0 else formatted
+
+
+def _format_local_timestamp(timestamp: Optional[str], fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """Produce a human-readable local timestamp or fallback text."""
+    if not timestamp:
+        return "Never"
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        return parsed.strftime(fmt)
+    except (ValueError, AttributeError):
+        return timestamp[:16]
 def render_associate_listing(
     associates: List[AssociateMetrics], 
     bookmakers_dict: Dict[int, List[BookmakerSummary]]
 ) -> None:
     """
-    Render the main associate listing with expandable rows.
-    
-    Args:
-        associates: List of associate metrics to display
-        bookmakers_dict: Dictionary mapping associate_id to their bookmakers
+    Render each associate as a card with summary metrics and bookmaker details.
     """
     if not associates:
         st.warning("No associates found matching current filters.")
         return
-    
-    # Container for the listing with sticky header
-    with st.container():
-        # Header row
-        col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns([2, 1, 1, 1, 1, 1, 1, 1, 1])
-        
-        with col1:
-            st.markdown("**Associate**")
-        with col2:
-            st.markdown("**Admin**")
-        with col3:
-            st.markdown("**Currency**")
-        with col4:
-            st.markdown("**Bookmakers**")
-        with col5:
-            st.markdown("**Net Deposits**")
-        with col6:
-            st.markdown("**Should Hold**")
-        with col7:
-            st.markdown("**Current Holding**")
-        with col8:
-            st.markdown("**Delta**")
-        with col9:
-            st.markdown("**Status**")
-        
-        st.divider()
-        
-        # Associate rows
-        for i, associate in enumerate(associates):
-            # Generate unique keys for this associate
-            associate_key = f"associate_{associate.associate_id}"
-            expand_key = f"{associate_key}_expanded"
-            
-            # Check if this row should be expanded
-            is_expanded = st.session_state.get(expand_key, False)
-            
-            # Create expandable row
-            with st.expander(
-                label=f"{associate.associate_alias}",
-                expanded=is_expanded,
-            ):
-                # Main row content
-                col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns([2, 1, 1, 1, 1, 1, 1, 1, 1])
-                
-                with col1:
-                    st.write(associate.associate_alias)
-                    if associate.telegram_chat_id:
-                        st.caption(f"Telegram: {associate.telegram_chat_id}")
-                
-                with col2:
-                    admin_badge = "Admin" if associate.is_admin else "User"
-                    st.write(admin_badge)
-                
-                with col3:
-                    st.write(associate.home_currency)
-                
-                with col4:
-                    active_text = f"{associate.active_bookmaker_count}/{associate.bookmaker_count}"
-                    st.write(active_text)
-                    if associate.active_bookmaker_count < associate.bookmaker_count:
-                        st.caption("Some inactive")
-                
-                with col5:
-                    st.write(f"{associate.net_deposits_eur:,.2f}")
-                
-                with col6:
-                    st.write(f"{associate.should_hold_eur:,.2f}")
-                
-                with col7:
-                    st.write(f"{associate.current_holding_eur:,.2f}")
-                
-                with col8:
-                    delta_color = "green" if associate.delta_eur >= 0 else "red"
-                    st.markdown(
-                        f":{delta_color}[{associate.delta_display()}]"
-                    )
-                
-                with col9:
-                    # Status pill with color
-                    status_emoji = {
-                        "balanced": "",
-                        "overholding": "", 
-                        "short": ""
-                    }.get(associate.status, "")
-                    
-                    st.markdown(
-                        f'<span style="background-color: {associate.status_color}; '
-                        f'padding: 2px 8px; border-radius: 12px; font-size: 12px;">'
-                        f'{status_emoji} {associate.title()}</span>',
-                        unsafe_allow_html=True
-                    )
-                
-                # Action buttons row
-                render_action_buttons(associate)
-                
-                # Bookmaker sub-table (only visible when expanded)
-                if associate.associate_id in bookmakers_dict:
-                    bookmakers = bookmakers_dict[associate.associate_id]
-                    if bookmakers:
-                        st.markdown("**Bookmaker Details**")
-                        render_bookmaker_subtable(bookmakers)
-                    else:
-                        st.info("No bookmakers configured for this associate.")
-                
-                # Last activity info
-                if associate.last_activity_utc:
-                    try:
-                        activity_date = datetime.fromisoformat(associate.last_activity_utc.replace("Z", "+00:00"))
-                        local_date = activity_date.strftime("%Y-%m-%d %H:%M")
-                        st.caption(f"Last activity: {local_date}")
-                    except (ValueError, AttributeError):
-                        st.caption(f"Last activity: {associate.last_activity_utc}")
-    
-    # Update expand state tracking
-    for associate in associates:
-        expand_key = f"associate_{associate.associate_id}_expanded"
-        # This will be updated by Streamlit's expander state
+
+    for index, associate in enumerate(associates):
+        if index:
+            st.divider()
+
+        associate_key = f"associate_{associate.associate_id}"
+        admin_label = "Admin" if associate.is_admin else "User"
+        currency_label = associate.home_currency or "EUR"
+        bookie_summary = f"{associate.active_bookmaker_count}/{associate.bookmaker_count}"
+        status_label = associate.title()
+        last_activity = _format_local_timestamp(associate.last_activity_utc)
+
+        with st.container():
+            header_cols = st.columns([3, 1, 1])
+            with header_cols[0]:
+                st.markdown(f"#### {associate.associate_alias}")
+                st.caption(f"{admin_label} - Currency: {currency_label}")
+                st.caption(f"{bookie_summary} bookmakers")
+                if associate.telegram_chat_id:
+                    st.caption(f"Telegram: {associate.telegram_chat_id}")
+            with header_cols[1]:
+                st.metric(
+                    "Bookmakers",
+                    bookie_summary,
+                    delta="Active / Total",
+                )
+            with header_cols[2]:
+                st.markdown(
+                    f"<span style='color:{associate.status_color}; font-weight:600;'>{status_label}</span>",
+                    unsafe_allow_html=True,
+                )
+                st.caption(f"Last activity: {last_activity}")
+
+            metric_cols = st.columns(4)
+            metric_cols[0].metric(
+                "Net Deposits (EUR)",
+                _format_optional_eur(associate.net_deposits_eur),
+                delta="Auto-refresh",
+            )
+            metric_cols[1].metric(
+                "Should Hold (EUR)",
+                _format_optional_eur(associate.should_hold_eur),
+                delta=f"{associate.bookmaker_count} total",
+            )
+            metric_cols[2].metric(
+                "Current Holding (EUR)",
+                _format_optional_eur(associate.current_holding_eur),
+                delta="Latest snapshot",
+            )
+            metric_cols[3].metric(
+                "Delta (EUR)",
+                _format_signed_eur(associate.delta_eur),
+                delta=status_label,
+            )
+
+            render_action_buttons(associate)
+
+            bookmakers = bookmakers_dict.get(associate.associate_id)
+            if bookmakers:
+                with st.expander(
+                    f"Bookmaker details · {associate.associate_alias}",
+                    expanded=False,
+                ):
+                    render_bookmaker_subtable(bookmakers)
+            else:
+                st.info("No bookmakers configured for this associate.")
 
 
 def render_action_buttons(associate: AssociateMetrics) -> None:
@@ -261,32 +230,20 @@ def render_bookmaker_subtable(bookmakers: List[BookmakerSummary]) -> None:
                 st.caption("No profile")
         
         with col4:
-            st.write(f"{bookmaker.modeled_balance_eur:,.2f}")
+            st.write(_format_optional_eur(bookmaker.modeled_balance_eur))
         
         with col5:
-            if bookmaker.reported_balance_eur is not None:
-                st.write(f"{bookmaker.reported_balance_eur:,.2f}")
-            else:
-                st.caption("Not reported")
+            st.write(_format_optional_eur(bookmaker.reported_balance_eur))
         
         with col6:
             if bookmaker.delta_eur is not None:
                 delta_color = "green" if bookmaker.delta_eur >= 0 else "red"
-                delta_text = f"+{abs(bookmaker.delta_eur):,.2f}" if bookmaker.delta_eur >= 0 else f"-{abs(bookmaker.delta_eur):,.2f}"
-                st.markdown(f":{delta_color}[{delta_text}]")
+                st.markdown(f":{delta_color}[{_format_signed_eur(bookmaker.delta_eur)}]")
             else:
-                st.caption("")
+                st.caption("N/A")
         
         with col7:
-            if bookmaker.last_balance_check_utc:
-                try:
-                    check_date = datetime.fromisoformat(bookmaker.last_balance_check_utc.replace('Z', '+00:00'))
-                    local_date = check_date.strftime('%m/%d %H:%M')
-                    st.caption(local_date)
-                except (ValueError, AttributeError):
-                    st.caption(bookmaker.last_balance_check_utc[:10])
-            else:
-                st.caption("Never")
+            st.caption(_format_local_timestamp(bookmaker.last_balance_check_utc, "%m/%d %H:%M"))
         
         with col8:
             col8a, col8b, col8c = st.columns(3)
@@ -373,58 +330,81 @@ def render_empty_state(filter_state: Dict) -> None:
     st.info("**Tip:** Try adjusting your filters or click 'Reset Filters' to see all associates.")
 
 
-def render_summary_metrics(associates: List[AssociateMetrics]) -> None:
+def render_hub_dashboard(associates: List[AssociateMetrics]) -> None:
     """
-    Render summary metrics for the current associate list.
-    
-    Args:
-        associates: List of associate metrics
+    Show a dashboard of aggregate associate and bookmaker metrics.
     """
     if not associates:
         return
-    
+
     total_associates = len(associates)
     total_admins = sum(1 for a in associates if a.is_admin)
     total_active = sum(1 for a in associates if a.is_active)
-    
+    total_bookmakers = sum(a.bookmaker_count for a in associates)
+    active_bookmakers = sum(a.active_bookmaker_count for a in associates)
+
     total_net_deposits = sum(a.net_deposits_eur for a in associates)
     total_current_holdings = sum(a.current_holding_eur for a in associates)
-    total_delta = total_current_holdings - total_net_deposits
-    
+    total_should_hold = sum(a.should_hold_eur for a in associates)
+    total_delta = sum(a.delta_eur for a in associates)
+
     balanced_count = sum(1 for a in associates if a.status == "balanced")
     overholding_count = sum(1 for a in associates if a.status == "overholding")
     short_count = sum(1 for a in associates if a.status == "short")
-    
-    # Metrics row
+
+    balanced_ratio = balanced_count / total_associates if total_associates else 0
+    bookmaker_ratio = active_bookmakers / total_bookmakers if total_bookmakers else 0
+
+    st.markdown("### Operations Dashboard")
     col1, col2, col3, col4 = st.columns(4)
-    
+
     with col1:
         st.metric(
             "Total Associates",
             total_associates,
-            delta=f"{total_admins} admins, {total_active} active"
+            delta=f"{total_active} active · {total_admins} admins",
         )
-    
+
     with col2:
         st.metric(
-            "Total Net Deposits",
-            f"{total_net_deposits:,.2f}",
-            delta="Across all associates"
+            "Net Deposits (EUR)",
+            _format_optional_eur(total_net_deposits),
+            delta="Auto refresh",
         )
-    
+
     with col3:
         st.metric(
-            "Current Holdings", 
-            f"{total_current_holdings:,.2f}",
-            delta=f"Delta: {total_delta:,.2f}"
+            "Current Holdings (EUR)",
+            _format_optional_eur(total_current_holdings),
+            delta="Latest snapshot",
         )
-    
+
     with col4:
         st.metric(
-            "Status Breakdown",
-            f"{balanced_count} balanced",
-            delta=f"{overholding_count} over, {short_count} short"
+            "Delta (EUR)",
+            _format_signed_eur(total_delta),
+            delta=f"Should hold: {_format_optional_eur(total_should_hold)}",
         )
-    
+
     st.divider()
+
+    status_col, bookmaker_col = st.columns(2)
+
+    with status_col:
+        st.metric(
+            "Status mix",
+            f"{balanced_count} balanced",
+            delta=f"{overholding_count} over · {short_count} short",
+        )
+        st.progress(min(max(balanced_ratio, 0.0), 1.0))
+        st.caption(f"{balanced_ratio:.0%} of associates balanced")
+
+    with bookmaker_col:
+        st.metric(
+            "Bookmakers Active",
+            f"{active_bookmakers}/{total_bookmakers}",
+            delta="Active / Total",
+        )
+        st.progress(min(max(bookmaker_ratio, 0.0), 1.0))
+        st.caption(f"{bookmaker_ratio:.0%} of bookmakers active")
 

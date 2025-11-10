@@ -13,6 +13,7 @@ import sqlite3
 import tempfile
 import unittest
 import importlib.util
+from decimal import Decimal
 
 from src.core.database import initialize_database
 
@@ -321,6 +322,15 @@ class TestBookmakerManagementFlow(unittest.TestCase):
         self.assertIn("bookmaker_name", first)
         self.assertIn("parsing_profile", first)
         self.assertIn("is_active", first)
+        self.assertIn("native_currency", first)
+        self.assertIn("balance_eur", first)
+        self.assertIn("balance_native", first)
+        self.assertIn("pending_balance_eur", first)
+        self.assertIn("pending_balance_native", first)
+        self.assertIn("net_deposits_eur", first)
+        self.assertIn("net_deposits_native", first)
+        self.assertIn("profits_eur", first)
+        self.assertIn("profits_native", first)
         self.assertIn("latest_balance_check_date", first)
 
     def test_add_bookmaker_end_to_end(self):
@@ -357,6 +367,157 @@ class TestBookmakerManagementFlow(unittest.TestCase):
         bookmakers = load_bookmakers_for_associate(self.test_associate_id, conn=self.conn)
         bookmaker = [b for b in bookmakers if b["bookmaker_name"] == "TestBookmaker"][0]
         self.assertIsNone(bookmaker["parsing_profile"])
+
+    def test_bookmaker_financial_columns_populate_values(self):
+        """Ensure financial enrichment surfaces accurate numeric columns."""
+        success, _ = insert_bookmaker(
+            self.test_associate_id, "LedgerBook", None, True, conn=self.conn
+        )
+        self.assertTrue(success)
+
+        cursor = self.conn.execute(
+            "SELECT id FROM bookmakers WHERE bookmaker_name = ?", ("LedgerBook",)
+        )
+        bookmaker_id = cursor.fetchone()[0]
+
+        # Balance check (native USD with fx hint)
+        self.conn.execute(
+            """
+            INSERT INTO bookmaker_balance_checks (
+                associate_id, bookmaker_id, balance_native, native_currency,
+                balance_eur, fx_rate_used, check_date_utc, note, created_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                self.test_associate_id,
+                bookmaker_id,
+                "1500.00",
+                "USD",
+                "750.00",
+                "0.50",
+                "2025-01-09T12:00:00Z",
+                "auto",
+                "2025-01-09T12:00:00Z",
+            ),
+        )
+
+        # Pending bets totalling 150 EUR
+        self.conn.executemany(
+            """
+            INSERT INTO bets (associate_id, bookmaker_id, status, stake_eur, odds, currency, fx_rate_to_eur)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    self.test_associate_id,
+                    bookmaker_id,
+                    "verified",
+                    "100.00",
+                    "1.50",
+                    "EUR",
+                    "1.0",
+                ),
+                (
+                    self.test_associate_id,
+                    bookmaker_id,
+                    "matched",
+                    "50.00",
+                    "1.30",
+                    "EUR",
+                    "1.0",
+                ),
+            ],
+        )
+
+        # Funding: deposit 200, withdrawal 50
+        self.conn.executemany(
+            """
+            INSERT INTO ledger_entries (
+                type, associate_id, bookmaker_id, amount_native, native_currency,
+                fx_rate_snapshot, amount_eur, settlement_state, principal_returned_eur,
+                per_surebet_share_eur, surebet_id, bet_id, opposing_associate_id,
+                settlement_batch_id, created_at_utc, created_by, note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    "DEPOSIT",
+                    self.test_associate_id,
+                    bookmaker_id,
+                    "200.00",
+                    "EUR",
+                    "1.000000",
+                    "200.00",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "2025-01-01T00:00:00Z",
+                    "test",
+                    None,
+                ),
+                (
+                    "WITHDRAWAL",
+                    self.test_associate_id,
+                    bookmaker_id,
+                    "50.00",
+                    "EUR",
+                    "1.000000",
+                    "50.00",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "2025-01-02T00:00:00Z",
+                    "test",
+                    None,
+                ),
+                (
+                    "BET_RESULT",
+                    self.test_associate_id,
+                    bookmaker_id,
+                    "0.00",
+                    "EUR",
+                    "1.000000",
+                    "0.00",
+                    "WON",
+                    "300.00",
+                    "120.00",
+                    None,
+                    None,
+                    None,
+                    "BATCH-1",
+                    "2025-01-03T00:00:00Z",
+                    "test",
+                    "settlement share",
+                ),
+            ],
+        )
+
+        bookmakers = load_bookmakers_for_associate(self.test_associate_id, conn=self.conn)
+        ledger_row = next(b for b in bookmakers if b["bookmaker_name"] == "LedgerBook")
+
+        self.assertEqual(ledger_row["native_currency"], "USD")
+        self.assertEqual(Decimal(str(ledger_row["balance_eur"])), Decimal("750.00"))
+        self.assertEqual(Decimal(str(ledger_row["balance_native"])), Decimal("1500.00"))
+        self.assertEqual(
+            Decimal(str(ledger_row["pending_balance_eur"])), Decimal("150.00")
+        )
+        self.assertEqual(
+            Decimal(str(ledger_row["pending_balance_native"])), Decimal("300.00")
+        )
+        self.assertEqual(Decimal(str(ledger_row["net_deposits_eur"])), Decimal("150.00"))
+        self.assertEqual(
+            Decimal(str(ledger_row["net_deposits_native"])), Decimal("300.00")
+        )
+        self.assertEqual(Decimal(str(ledger_row["profits_eur"])), Decimal("270.00"))
+        self.assertEqual(Decimal(str(ledger_row["profits_native"])), Decimal("540.00"))
 
     def test_add_bookmaker_unique_constraint(self):
         """Test unique constraint on (associate_id, bookmaker_name)."""

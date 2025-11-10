@@ -9,7 +9,7 @@ This page provides:
 - Manage bookmakers per associate
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -66,6 +66,7 @@ from src.ui.utils.formatters import (
     format_currency_with_symbol,
 )
 from src.services.fx_manager import get_fx_rate, get_latest_fx_rate, convert_to_eur
+from src.services.bookmaker_financials_service import BookmakerFinancialsService
 from src.ui.pages.balance_management import render_balance_history_tab
 
 logger = structlog.get_logger()
@@ -97,8 +98,9 @@ BOOKMAKER_SORT_OPTIONS: Sequence[Tuple[str, str]] = (
     ("Name", "bookmaker_name"),
     ("Chat ID", "bookmaker_chat_id"),
     ("Balance (EUR)", "balance_eur"),
-    ("Pending balance", "pending_balance_eur"),
+    ("Pending (EUR)", "pending_balance_eur"),
     ("Deposits (EUR)", "net_deposits_eur"),
+    ("Profit (EUR)", "profits_eur"),
     ("Active status", "is_active"),
 )
 
@@ -1140,129 +1142,13 @@ def can_deactivate_associates(
 def load_bookmakers_for_associate(
     associate_id: int, conn: Optional[sqlite3.Connection] = None
 ) -> List[Dict]:
-    """Load all bookmakers for an associate with latest balance check.
-
-    Args:
-        associate_id: ID of the associate
-        conn: Optional database connection (for testing)
-
-    Returns:
-        List of bookmaker dictionaries with balance info
-    """
+    """Load fully enriched bookmaker rows for the associate."""
     if conn is None:
         conn = get_db_connection()
-    cursor = conn.cursor()
 
-    # Check if optional tables exist (for backwards compatibility)
-    cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='bookmaker_balance_checks'"
-    )
-    balance_table_exists = cursor.fetchone() is not None
-
-    cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_registrations'"
-    )
-    chat_table_exists = cursor.fetchone() is not None
-
-    if balance_table_exists:
-        balance_columns = """
-                bc_latest.balance_eur,
-                bc_latest.check_date_utc AS latest_balance_check_date
-        """
-        balance_join = """
-            LEFT JOIN (
-                SELECT
-                    bookmaker_id,
-                    balance_eur,
-                    check_date_utc,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY bookmaker_id
-                        ORDER BY check_date_utc DESC
-                    ) AS rn
-                FROM bookmaker_balance_checks
-            ) bc_latest ON b.id = bc_latest.bookmaker_id AND bc_latest.rn = 1
-        """
-    else:
-        balance_columns = "NULL AS balance_eur,\n                NULL AS latest_balance_check_date"
-        balance_join = ""
-
-    if chat_table_exists:
-        chat_columns = "chat_latest.chat_id AS bookmaker_chat_id"
-        chat_join = """
-            LEFT JOIN (
-                SELECT
-                    bookmaker_id,
-                    chat_id,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY bookmaker_id
-                        ORDER BY updated_at_utc DESC, created_at_utc DESC, id DESC
-                    ) AS rn
-                FROM chat_registrations
-            ) chat_latest ON chat_latest.bookmaker_id = b.id AND chat_latest.rn = 1
-        """
-    else:
-        chat_columns = "NULL AS bookmaker_chat_id"
-        chat_join = ""
-
-    pending_join = """
-        LEFT JOIN (
-            SELECT
-                bookmaker_id,
-                SUM(
-                    CASE
-                        WHEN stake_eur IS NOT NULL AND stake_eur != ''
-                        THEN CAST(stake_eur AS REAL)
-                        ELSE 0
-                    END
-                ) AS pending_eur
-            FROM bets
-            WHERE status IN ('verified', 'matched')
-            GROUP BY bookmaker_id
-        ) pending ON pending.bookmaker_id = b.id
-    """
-
-    funding_join = """
-        LEFT JOIN (
-            SELECT
-                bookmaker_id,
-                SUM(
-                    CASE
-                        WHEN type = 'DEPOSIT' THEN CAST(amount_eur AS REAL)
-                        WHEN type = 'WITHDRAWAL' THEN -CAST(amount_eur AS REAL)
-                        ELSE 0
-                    END
-                ) AS net_deposits_eur
-            FROM ledger_entries
-            WHERE bookmaker_id IS NOT NULL
-              AND type IN ('DEPOSIT', 'WITHDRAWAL')
-            GROUP BY bookmaker_id
-        ) funding ON funding.bookmaker_id = b.id
-    """
-
-    query = f"""
-        SELECT
-            b.id,
-            b.associate_id,
-            b.bookmaker_name,
-            b.parsing_profile,
-            b.is_active,
-            {chat_columns},
-            b.created_at_utc,
-            b.updated_at_utc,
-            {balance_columns},
-            COALESCE(pending.pending_eur, 0) AS pending_balance_eur,
-            COALESCE(funding.net_deposits_eur, 0) AS net_deposits_eur
-        FROM bookmakers b
-        {chat_join}
-        {balance_join}
-        {pending_join}
-        {funding_join}
-        WHERE b.associate_id = ?
-        ORDER BY b.bookmaker_name ASC
-    """
-
-    cursor.execute(query, (associate_id,))
-    return [dict(row) for row in cursor.fetchall()]
+    service = BookmakerFinancialsService(conn)
+    snapshots = service.get_financials_for_associate(associate_id)
+    return [asdict(snapshot) for snapshot in snapshots]
 
 
 def load_bookmakers_for_associates(
