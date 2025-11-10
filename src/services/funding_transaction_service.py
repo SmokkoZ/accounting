@@ -238,7 +238,7 @@ class FundingTransactionService:
             cursor = self.db.execute(
                 """
                 SELECT 
-                    SUM(CASE WHEN type = 'DEPOSIT' THEN amount_eur ELSE -amount_eur END) AS net_deposits_eur
+                    SUM(CAST(amount_eur AS REAL)) AS net_deposits_eur
                 FROM ledger_entries 
                 WHERE associate_id = ?
                 AND type IN ('DEPOSIT', 'WITHDRAWAL')
@@ -252,10 +252,9 @@ class FundingTransactionService:
             cursor = self.db.execute(
                 """
                 SELECT 
-                    SUM(CASE WHEN amount_eur > 0 THEN amount_eur ELSE 0 END) AS current_holding_eur
-                FROM ledger_entries 
+                    SUM(CAST(amount_eur AS REAL)) AS current_holding_eur
+                FROM ledger_entries
                 WHERE associate_id = ?
-                AND type IN ('BET_STAKE', 'WINNINGS', 'CORRECTION')
                 """,
                 (associate_id,)
             )

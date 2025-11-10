@@ -362,14 +362,26 @@ def test_reconciliation_multi_currency_scenario(test_db):
         """
     )
 
-    # Bob settlement in GBP
+    # Bob stake capture in GBP
     test_db.execute(
         """
         INSERT INTO ledger_entries (
             type, associate_id, bookmaker_id, amount_native, native_currency,
             fx_rate_snapshot, amount_eur, settlement_state, principal_returned_eur,
             per_surebet_share_eur, surebet_id, bet_id, settlement_batch_id, created_by, note
-        ) VALUES ('BET_RESULT', 2, 2, '-480.00', 'GBP', '1.15', '-552.00', 'LOST',
+        ) VALUES ('BET_STAKE', 2, 2, '-480.00', 'GBP', '1.15', '-552.00', NULL,
+                  NULL, NULL, NULL, NULL, NULL, 'test', 'GBP stake')
+        """
+    )
+
+    # Bob settlement in GBP (loser -> zero impact entry)
+    test_db.execute(
+        """
+        INSERT INTO ledger_entries (
+            type, associate_id, bookmaker_id, amount_native, native_currency,
+            fx_rate_snapshot, amount_eur, settlement_state, principal_returned_eur,
+            per_surebet_share_eur, surebet_id, bet_id, settlement_batch_id, created_by, note
+        ) VALUES ('BET_RESULT', 2, 2, '0.00', 'GBP', '1.15', '0.00', 'LOST',
                   '0.00', '275.00', 1, 2, 'batch-1', 'test', 'GBP settlement')
         """
     )

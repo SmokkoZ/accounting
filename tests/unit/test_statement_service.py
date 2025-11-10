@@ -15,6 +15,7 @@ from src.services.statement_service import (
     PartnerFacingSection,
     StatementCalculations,
     StatementService,
+    BookmakerStatementRow,
 )
 
 
@@ -31,8 +32,11 @@ def service(monkeypatch: pytest.MonkeyPatch) -> StatementService:
     )
     monkeypatch.setattr(
         StatementService,
-        "_calculate_net_deposits",
-        lambda self, conn, associate_id, cutoff: Decimal("1000.00"),
+        "_calculate_funding_totals",
+        lambda self, conn, associate_id, cutoff: (
+            Decimal("1000.00"),
+            Decimal("0.00"),
+        ),
     )
     monkeypatch.setattr(
         StatementService,
@@ -44,6 +48,18 @@ def service(monkeypatch: pytest.MonkeyPatch) -> StatementService:
         "_calculate_current_holding",
         lambda self, conn, associate_id, cutoff: Decimal("1200.00"),
     )
+    monkeypatch.setattr(
+        StatementService,
+        "_calculate_bookmaker_breakdown",
+        lambda self, conn, associate_id, cutoff: [
+            BookmakerStatementRow(
+                bookmaker_name="Bookie A",
+                balance_eur=Decimal("500.00"),
+                deposits_eur=Decimal("400.00"),
+                withdrawals_eur=Decimal("100.00"),
+            )
+        ],
+    )
     return StatementService()
 
 
@@ -54,6 +70,9 @@ def test_generate_statement_returns_expected_delta(service: StatementService):
     assert calc.associate_name == "Demo Associate"
     assert calc.raw_profit_eur == Decimal("250.00")
     assert calc.delta_eur == Decimal("-50.00")
+    assert calc.total_deposits_eur == Decimal("1000.00")
+    assert calc.total_withdrawals_eur == Decimal("0.00")
+    assert len(calc.bookmakers) == 1
     assert calc.cutoff_date == cutoff
 
 
@@ -65,6 +84,16 @@ def test_partner_section_formats_summaries(service: StatementService):
         current_holding_eur=Decimal("640.00"),
         raw_profit_eur=Decimal("150.00"),
         delta_eur=Decimal("-10.00"),
+        total_deposits_eur=Decimal("800.00"),
+        total_withdrawals_eur=Decimal("300.00"),
+        bookmakers=[
+            BookmakerStatementRow(
+                bookmaker_name="Bookie Test",
+                balance_eur=Decimal("640.00"),
+                deposits_eur=Decimal("500.00"),
+                withdrawals_eur=Decimal("100.00"),
+            )
+        ],
         associate_name="Demo",
         cutoff_date="2025-10-31T23:59:59Z",
         generated_at="2025-11-07T00:00:00Z",
@@ -72,8 +101,8 @@ def test_partner_section_formats_summaries(service: StatementService):
 
     partner = service.format_partner_facing_section(calc)
     assert isinstance(partner, PartnerFacingSection)
-    assert "500.00" in partner.funding_summary
-    assert partner.split_calculation["associate_share"].endswith("75.00")
+    assert partner.total_deposits_eur == Decimal("800.00")
+    assert partner.bookmakers[0].bookmaker_name == "Bookie Test"
 
 
 def test_internal_section_detects_over_and_short_states(service: StatementService):
@@ -85,6 +114,9 @@ def test_internal_section_detects_over_and_short_states(service: StatementServic
             current_holding_eur=Decimal("100"),
             raw_profit_eur=Decimal("0"),
             delta_eur=Decimal("100"),
+            total_deposits_eur=Decimal("0"),
+            total_withdrawals_eur=Decimal("0"),
+            bookmakers=[],
             associate_name="",
             cutoff_date="",
             generated_at="",
@@ -101,6 +133,9 @@ def test_internal_section_detects_over_and_short_states(service: StatementServic
             current_holding_eur=Decimal("50"),
             raw_profit_eur=Decimal("-100"),
             delta_eur=Decimal("-50"),
+            total_deposits_eur=Decimal("0"),
+            total_withdrawals_eur=Decimal("0"),
+            bookmakers=[],
             associate_name="",
             cutoff_date="",
             generated_at="",

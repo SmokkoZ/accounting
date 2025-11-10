@@ -88,7 +88,7 @@ class TelegramBot:
 
         # Rate limiting: Track last command time per user
         self._user_last_command: Dict[int, float] = defaultdict(float)
-        self._rate_limit_seconds = 2  # Minimum seconds between commands
+        self._rate_limit_seconds = 0.5  # Minimum seconds between commands (lightweight actions exempt)
 
         # Global admin users (hardcoded defaults + env-configured)
         self.admin_user_ids: set[int] = set(DEFAULT_ADMIN_USER_IDS)
@@ -198,38 +198,30 @@ class TelegramBot:
             CommandHandler("withdraw", self._rate_limited(self._withdraw_command))
         )
         self.application.add_handler(
-            MessageHandler(filters.TEXT & (~filters.COMMAND), self._rate_limited(self._text_message))
+            MessageHandler(filters.TEXT & (~filters.COMMAND), self._text_message)
         )
 
-        # Photo message handler with rate limiting
+        # Photo/document handlers (no rate limiting for responsiveness)
+        self.application.add_handler(MessageHandler(filters.PHOTO, self._photo_message))
         self.application.add_handler(
-            MessageHandler(filters.PHOTO, self._rate_limited(self._photo_message))
-        )
-        self.application.add_handler(
-            MessageHandler(
-                filters.Document.IMAGE,
-                self._rate_limited(self._document_message),
-            )
+            MessageHandler(filters.Document.IMAGE, self._document_message)
         )
 
-        # Chat migration events (group -> supergroup)
+        # Chat migration events (allow immediately)
         self.application.add_handler(
-            MessageHandler(
-                filters.StatusUpdate.MIGRATE,
-                self._rate_limited(self._handle_chat_migration),
-            )
+            MessageHandler(filters.StatusUpdate.MIGRATE, self._handle_chat_migration)
         )
 
         # Callback handler for confirmation buttons
         self.application.add_handler(
             CallbackQueryHandler(
-                self._rate_limited(self._pending_photo_callback),
+                self._pending_photo_callback,
                 pattern=r"^(confirm|discard):",
             )
         )
         self.application.add_handler(
             CallbackQueryHandler(
-                self._rate_limited(self._handle_stake_prompt_callback),
+                self._handle_stake_prompt_callback,
                 pattern=r"^stake_prompt:",
             )
         )
@@ -2636,7 +2628,7 @@ class TelegramBot:
                 manual_win_currency=manual_win_currency,
             )
 
-        await self._trigger_ocr_pipeline(bet_id)
+        self._schedule_ocr_task(context, bet_id)
 
         ref = pending["confirmation_token"][:6].upper()
         details = [f"Queued Ref #{ref} (Bet ID {bet_id})."]
@@ -2746,6 +2738,32 @@ class TelegramBot:
             reply_message.reply_text,
             "Manual overrides updated.",
         )
+
+    def _schedule_ocr_task(self, context: ContextTypes.DEFAULT_TYPE, bet_id: int) -> None:
+        """Run OCR in the background so the chat acknowledgment returns immediately."""
+        try:
+            application = getattr(context, "application", None)
+            if application and hasattr(application, "create_task"):
+                coro = self._trigger_ocr_pipeline(bet_id)
+                result = application.create_task(coro)
+                if asyncio.isfuture(result) or isinstance(result, asyncio.Task):
+                    return
+                if inspect.iscoroutine(result):
+                    result.close()
+                    return
+                if inspect.iscoroutine(coro):
+                    coro.close()
+                return
+
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._trigger_ocr_pipeline(bet_id))
+        except RuntimeError:
+            try:
+                asyncio.run(self._trigger_ocr_pipeline(bet_id))
+            except Exception as exc:
+                logger.warning("ocr_task_schedule_failed", bet_id=bet_id, error=str(exc))
+        except Exception as exc:
+            logger.warning("ocr_task_schedule_failed", bet_id=bet_id, error=str(exc))
 
     async def _handle_override_request_text(
         self,

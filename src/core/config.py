@@ -38,6 +38,12 @@ class Config:
 
     # Database
     DB_PATH: str = os.getenv("DB_PATH", "data/surebet.db")
+    STAKE_AT_PLACEMENT: bool = os.getenv("STAKE_AT_PLACEMENT", "false").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
 
     # Telegram
     TELEGRAM_BOT_TOKEN: Optional[str] = os.getenv("TELEGRAM_BOT_TOKEN")

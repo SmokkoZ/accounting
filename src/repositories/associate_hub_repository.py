@@ -133,7 +133,7 @@ class AssociateHubRepository:
         LEFT JOIN (
             SELECT 
                 associate_id,
-                SUM(CASE WHEN type = 'DEPOSIT' THEN amount_eur ELSE -amount_eur END) AS net_deposits_eur
+                SUM(CAST(amount_eur AS REAL)) AS net_deposits_eur
             FROM ledger_entries 
             WHERE type IN ('DEPOSIT', 'WITHDRAWAL')
             GROUP BY associate_id
@@ -141,9 +141,8 @@ class AssociateHubRepository:
         LEFT JOIN (
             SELECT 
                 associate_id,
-                SUM(CASE WHEN amount_eur > 0 THEN amount_eur ELSE 0 END) AS current_holding_eur
-            FROM ledger_entries 
-            WHERE type IN ('BET_STAKE', 'WINNINGS', 'CORRECTION')
+                SUM(CAST(amount_eur AS REAL)) AS current_holding_eur
+            FROM ledger_entries
             GROUP BY associate_id
         ) holdings ON holdings.associate_id = a.id
         LEFT JOIN bookmaker_balance_checks bh ON bh.associate_id = a.id

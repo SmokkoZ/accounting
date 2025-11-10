@@ -14,6 +14,8 @@ from datetime import datetime, UTC
 from decimal import Decimal
 from typing import Optional, Literal, List, Dict, Any, Tuple
 
+from src.services.stake_ledger_service import StakeLedgerService
+
 logger = structlog.get_logger()
 
 
@@ -395,15 +397,31 @@ class SurebetMatcher:
         """
         timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
-        self.db.execute(
-            """
-            UPDATE bets
-            SET status = ?, updated_at_utc = ?
-            WHERE id = ?
-            """,
-            (status, timestamp, bet_id),
-        )
-        self.db.commit()
+        try:
+            self.db.execute(
+                """
+                UPDATE bets
+                SET status = ?, updated_at_utc = ?
+                WHERE id = ?
+                """,
+                (status, timestamp, bet_id),
+            )
+
+            if status == "matched":
+                bet_snapshot = self._load_bet(bet_id)
+                if bet_snapshot:
+                    stake_service = StakeLedgerService(self.db)
+                    stake_service.sync_bet_stake(
+                        bet=bet_snapshot,
+                        created_by="surebet_matcher",
+                        note=f"Stake capture during matching (bet #{bet_id})",
+                        release_when_missing=False,
+                    )
+
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
 
         logger.debug("bet_status_updated", bet_id=bet_id, status=status)
 

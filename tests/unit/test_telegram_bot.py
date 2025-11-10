@@ -111,6 +111,7 @@ def mock_context():
     """Create a mock Telegram Context object."""
     mock_context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
     mock_context.args = []
+    mock_context.application = MagicMock()
     return mock_context
 
 
@@ -466,6 +467,18 @@ class TestChatMigrationHandling:
         assert row["chat_id"] == "-1001"
         assert pending_row["chat_id"] == "-1001"
         message.reply_text.assert_awaited()
+
+
+class TestOcrScheduling:
+    """Ensure OCR pipeline runs asynchronously."""
+
+    def test_schedule_ocr_uses_application(self, telegram_bot, mock_context):
+        mock_context.application = MagicMock()
+        telegram_bot._trigger_ocr_pipeline = AsyncMock()
+
+        telegram_bot._schedule_ocr_task(mock_context, bet_id=55)
+
+        mock_context.application.create_task.assert_called_once()
 
 
 class TestDocumentIngestion:

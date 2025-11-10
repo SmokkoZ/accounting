@@ -468,7 +468,7 @@ def create_ledger_entries_table(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS ledger_entries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            type TEXT NOT NULL CHECK (type IN ('BET_RESULT', 'DEPOSIT', 'WITHDRAWAL', 'BOOKMAKER_CORRECTION')),
+            type TEXT NOT NULL CHECK (type IN ('BET_RESULT', 'BET_STAKE', 'DEPOSIT', 'WITHDRAWAL', 'BOOKMAKER_CORRECTION')),
             associate_id INTEGER NOT NULL REFERENCES associates(id),
             bookmaker_id INTEGER REFERENCES bookmakers(id),
             amount_native TEXT NOT NULL,
@@ -615,7 +615,7 @@ def migrate_legacy_ledger_entries(conn: sqlite3.Connection, existing_columns: Se
         """
         CREATE TABLE ledger_entries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            type TEXT NOT NULL CHECK (type IN ('BET_RESULT', 'DEPOSIT', 'WITHDRAWAL', 'BOOKMAKER_CORRECTION')),
+            type TEXT NOT NULL CHECK (type IN ('BET_RESULT', 'BET_STAKE', 'DEPOSIT', 'WITHDRAWAL', 'BOOKMAKER_CORRECTION')),
             associate_id INTEGER NOT NULL REFERENCES associates(id),
             bookmaker_id INTEGER REFERENCES bookmakers(id),
             amount_native TEXT NOT NULL,

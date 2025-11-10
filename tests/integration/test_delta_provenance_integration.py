@@ -90,12 +90,12 @@ class TestDeltaProvenanceIntegration:
              per_surebet_share_eur, surebet_id, bet_id, settlement_batch_id, 
              created_at_utc, created_by, note) VALUES 
                 (1001, 'BET_RESULT', 1, 1, '250.00', 'EUR', '1.000000', '250.00', 'WON', '100.00', '150.00', 1001, 10001, 'batch-1', datetime('now', '-1 day'), 'system', 'Surebet 1001 settlement'),
-                (1002, 'BET_RESULT', 2, 2, '-100.00', 'EUR', '1.000000', '-100.00', 'LOST', '0.00', '-50.00', 1001, 10002, 'batch-1', datetime('now', '-1 day'), 'system', 'Surebet 1001 settlement'),
+                (1002, 'BET_RESULT', 2, 2, '0.00', 'EUR', '1.000000', '0.00', 'LOST', '0.00', '-50.00', 1001, 10002, 'batch-1', datetime('now', '-1 day'), 'system', 'Surebet 1001 settlement'),
                 (1003, 'BET_RESULT', 3, 3, '220.00', 'EUR', '1.000000', '220.00', 'WON', '100.00', '120.00', 1002, 10003, 'batch-2', datetime('now', '-2 days'), 'system', 'Surebet 1002 settlement'),
-                (1004, 'BET_RESULT', 4, 4, '-190.00', 'EUR', '1.000000', '-190.00', 'LOST', '0.00', '-95.00', 1002, 10004, 'batch-2', datetime('now', '-2 days'), 'system', 'Surebet 1002 settlement'),
+                (1004, 'BET_RESULT', 4, 4, '0.00', 'EUR', '1.000000', '0.00', 'LOST', '0.00', '-95.00', 1002, 10004, 'batch-2', datetime('now', '-2 days'), 'system', 'Surebet 1002 settlement'),
                 (1005, 'BET_RESULT', 2, 2, '150.00', 'EUR', '1.000000', '150.00', 'WON', '100.00', '50.00', 1002, 10004, 'batch-2', datetime('now', '-2 days'), 'system', 'Surebet 1002 settlement'),
                 (1006, 'BET_RESULT', 3, 3, '220.00', 'EUR', '1.000000', '220.00', 'WON', '100.00', '120.00', 1003, 10003, 'batch-3', datetime('now', '-3 days'), 'system', 'Surebet 1003 settlement'),
-                (1007, 'BET_RESULT', 4, 4, '-190.00', 'EUR', '1.000000', '-190.00', 'LOST', '0.00', '-95.00', 1003, 10004, 'batch-3', datetime('now', '-3 days'), 'system', 'Surebet 1003 settlement');
+                (1007, 'BET_RESULT', 4, 4, '0.00', 'EUR', '1.000000', '0.00', 'LOST', '0.00', '-95.00', 1003, 10004, 'batch-3', datetime('now', '-3 days'), 'system', 'Surebet 1003 settlement');
             
             -- Create settlement links for delta provenance
             INSERT INTO surebet_settlement_links 
@@ -213,7 +213,7 @@ class TestDeltaProvenanceIntegration:
             conn.execute("INSERT INTO surebet_bets (surebet_id, bet_id, side) VALUES (?, ?, 'A')", (i, winner_bet_id))
             conn.execute("INSERT INTO surebet_bets (surebet_id, bet_id, side) VALUES (?, ?, 'B')", (i, loser_bet_id))
             conn.execute("INSERT INTO ledger_entries (id, type, associate_id, amount_native, native_currency, fx_rate_snapshot, amount_eur, settlement_state, principal_returned_eur, per_surebet_share_eur, surebet_id, bet_id, settlement_batch_id, created_at_utc, created_by, note) VALUES (?, 'BET_RESULT', 1, '150.00', 'EUR', '1.000000', '150.00', 'WON', '100.00', '50.00', ?, ?, 'batch-perf', datetime('now'), 'system', 'Performance test')", (winner_ledger_id, i, winner_bet_id))
-            conn.execute("INSERT INTO ledger_entries (id, type, associate_id, amount_native, native_currency, fx_rate_snapshot, amount_eur, settlement_state, principal_returned_eur, per_surebet_share_eur, surebet_id, bet_id, settlement_batch_id, created_at_utc, created_by, note) VALUES (?, 'BET_RESULT', 2, '-100.00', 'EUR', '1.000000', '-100.00', 'LOST', '0.00', '-100.00', ?, ?, 'batch-perf', datetime('now'), 'system', 'Performance test')", (loser_ledger_id, i, loser_bet_id))
+            conn.execute("INSERT INTO ledger_entries (id, type, associate_id, amount_native, native_currency, fx_rate_snapshot, amount_eur, settlement_state, principal_returned_eur, per_surebet_share_eur, surebet_id, bet_id, settlement_batch_id, created_at_utc, created_by, note) VALUES (?, 'BET_RESULT', 2, '0.00', 'EUR', '1.000000', '0.00', 'LOST', '0.00', '-100.00', ?, ?, 'batch-perf', datetime('now'), 'system', 'Performance test')", (loser_ledger_id, i, loser_bet_id))
             conn.execute("INSERT INTO surebet_settlement_links (surebet_id, winner_associate_id, loser_associate_id, amount_eur, winner_ledger_entry_id, loser_ledger_entry_id, created_at_utc) VALUES (?, 1, 2, '50.00', ?, ?, datetime('now'))", (i, winner_ledger_id, loser_ledger_id))
         
         conn.commit()
@@ -494,7 +494,7 @@ class TestMigrationIntegration:
                  settlement_state, principal_returned_eur, per_surebet_share_eur, surebet_id, bet_id, 
                  settlement_batch_id, created_at_utc, created_by, note) VALUES 
                     (1, 'BET_RESULT', 1, '150.00', 'EUR', '1.000000', '150.00', 'WON', '100.00', '50.00', 1, 1, 'batch-1', datetime('now'), 'system', 'Surebet 1'),
-                    (2, 'BET_RESULT', 2, '-100.00', 'EUR', '1.000000', '-100.00', 'LOST', '0.00', '-100.00', 1, 2, 'batch-1', datetime('now'), 'system', 'Surebet 1');
+                    (2, 'BET_RESULT', 2, '0.00', 'EUR', '1.000000', '0.00', 'LOST', '0.00', '-100.00', 1, 2, 'batch-1', datetime('now'), 'system', 'Surebet 1');
             """)
             
             temp_conn.commit()

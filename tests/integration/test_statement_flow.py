@@ -112,18 +112,33 @@ def mock_database_with_data(sample_associate_data, sample_ledger_entries):
     
     # Mock associate lookup
     def mock_execute(query, params=None):
-        if "SELECT display_alias FROM associates" in query:
+        normalized = " ".join(query.split())
+        if "SELECT display_alias FROM associates" in normalized:
             cursor.fetchone.return_value = sample_associate_data
-        elif "SUM(CASE WHEN type = 'DEPOSIT'" in query:
-            cursor.fetchone.return_value = {"net_deposits_eur": 800.0}  # 1000 - 200
-        elif "SUM(CAST(principal_returned_eur AS REAL)" in query:
-            cursor.fetchone.return_value = {"should_hold_eur": 275.0}  # 100+50 + 150+75
-        elif "SUM(CAST(amount_eur AS REAL))" in query:
-            cursor.fetchone.return_value = {"current_holding_eur": 550.0}  # 1000 - 100 - 200 - 150
-        elif "SELECT id, type, amount_eur" in query:
+            cursor.fetchall.return_value = []
+        elif "SUM(CASE WHEN type = 'DEPOSIT'" in normalized and "total_deposits" in normalized:
+            cursor.fetchone.return_value = {
+                "total_deposits": 1000.0,
+                "total_withdrawals": 200.0,
+            }
+        elif "principal_returned_eur AS REAL" in normalized:
+            cursor.fetchone.return_value = {"should_hold_eur": 275.0}
+        elif "SUM(CAST(amount_eur AS REAL)) AS current_holding_eur" in normalized:
+            cursor.fetchone.return_value = {"current_holding_eur": 550.0}
+        elif "FROM bookmakers" in normalized and "balance_eur" in normalized:
+            cursor.fetchone.return_value = None
+            cursor.fetchall.return_value = [
+                {
+                    "bookmaker_name": "Bookie One",
+                    "balance_eur": 550.0,
+                    "deposits_eur": 1000.0,
+                    "withdrawals_eur": 200.0,
+                }
+            ]
+        elif "SELECT id, type, amount_eur" in normalized:
+            cursor.fetchone.return_value = None
             cursor.fetchall.return_value = sample_ledger_entries
         else:
-            # Default empty result for any other query
             cursor.fetchone.return_value = None
             cursor.fetchall.return_value = []
     
@@ -162,10 +177,11 @@ class TestCompleteStatementGeneration:
         # Mock data for loss scenario
         cursor.fetchone.side_effect = [
             {"display_alias": "Loss Associate"},
-            {"net_deposits_eur": 2000.0},      # Large deposits
-            {"should_hold_eur": 1200.0},       # Lower returns
-            {"current_holding_eur": 1100.0}     # Even lower holdings
+            {"total_deposits": 2000.0, "total_withdrawals": 0.0},
+            {"should_hold_eur": 1200.0},
+            {"current_holding_eur": 1100.0},
         ]
+        cursor.fetchall.return_value = []
         
         with patch('src.services.statement_service.get_db_connection', return_value=conn):
             result = service.generate_statement(1, "2025-10-31T23:59:59Z")
@@ -185,10 +201,11 @@ class TestCompleteStatementGeneration:
         # Mock data for balanced scenario
         cursor.fetchone.side_effect = [
             {"display_alias": "Balanced Associate"},
-            {"net_deposits_eur": 1000.0},
+            {"total_deposits": 1000.0, "total_withdrawals": 0.0},
             {"should_hold_eur": 1000.0},
-            {"current_holding_eur": 1000.0}
+            {"current_holding_eur": 1000.0},
         ]
+        cursor.fetchall.return_value = []
         
         with patch('src.services.statement_service.get_db_connection', return_value=conn):
             result = service.generate_statement(1, "2025-10-31T23:59:59Z")
@@ -239,8 +256,8 @@ class TestFormattingIntegration:
     
     def test_partner_facing_section_realistic_profit(self, service):
         """Test partner-facing formatting with realistic profit scenario."""
-        from src.services.statement_service import StatementCalculations
-        
+        from src.services.statement_service import StatementCalculations, BookmakerStatementRow
+
         calc = StatementCalculations(
             associate_id=1,
             net_deposits_eur=Decimal("5000.00"),
@@ -248,6 +265,16 @@ class TestFormattingIntegration:
             current_holding_eur=Decimal("7200.00"),
             raw_profit_eur=Decimal("2500.00"),
             delta_eur=Decimal("-300.00"),
+            total_deposits_eur=Decimal("5000.00"),
+            total_withdrawals_eur=Decimal("0.00"),
+            bookmakers=[
+                BookmakerStatementRow(
+                    bookmaker_name="Profitable Bookie",
+                    balance_eur=Decimal("7200.00"),
+                    deposits_eur=Decimal("5000.00"),
+                    withdrawals_eur=Decimal("0.00"),
+                )
+            ],
             associate_name="Profitable Associate",
             cutoff_date="2025-10-31T23:59:59Z",
             generated_at="2025-11-05T11:00:00Z"
@@ -256,11 +283,9 @@ class TestFormattingIntegration:
         result = service.format_partner_facing_section(calc)
         
         # Verify realistic profit formatting
-        assert "You funded: €5,000.00 total" in result.funding_summary
-        assert "You're entitled to: €7,500.00" in result.entitlement_summary
-        assert "🟢 Profit: €2,500.00" in result.profit_loss_summary
-        assert result.split_calculation["admin_share"] == "€1,250.00"
-        assert result.split_calculation["associate_share"] == "€1,250.00"
+        assert result.total_deposits_eur == Decimal("5000.00")
+        assert result.holdings_eur == Decimal("7200.00")
+        assert result.bookmakers[0].bookmaker_name == "Profitable Bookie"
     
     def test_internal_section_realistic_scenarios(self, service):
         """Test internal section formatting with realistic scenarios."""
@@ -274,15 +299,18 @@ class TestFormattingIntegration:
             current_holding_eur=Decimal("2500.00"),
             raw_profit_eur=Decimal("1000.00"),
             delta_eur=Decimal("500.00"),
+            total_deposits_eur=Decimal("1000.00"),
+            total_withdrawals_eur=Decimal("0.00"),
+            bookmakers=[],
             associate_name="Test Associate",
             cutoff_date="2025-10-31T23:59:59Z",
             generated_at="2025-11-05T11:00:00Z"
         )
         
         result = service.format_internal_section(calc_holding_more)
-        assert "Currently holding: €2,500.00" in result.current_holdings
-        assert "Holding more by €500.00" in result.reconciliation_delta
-        assert result.delta_emoji == "🔴"
+        assert "Currently holding: EUR 2,500.00" in result.current_holdings
+        assert "Holding more by EUR 500.00" in result.reconciliation_delta
+        assert result.delta_indicator == "over"
         
         # Test short scenario
         calc_short = StatementCalculations(
@@ -292,14 +320,17 @@ class TestFormattingIntegration:
             current_holding_eur=Decimal("1500.00"),
             raw_profit_eur=Decimal("1000.00"),
             delta_eur=Decimal("-500.00"),
+            total_deposits_eur=Decimal("1000.00"),
+            total_withdrawals_eur=Decimal("0.00"),
+            bookmakers=[],
             associate_name="Test Associate",
             cutoff_date="2025-10-31T23:59:59Z",
             generated_at="2025-11-05T11:00:00Z"
         )
         
         result_short = service.format_internal_section(calc_short)
-        assert "Short by €500.00" in result_short.reconciliation_delta
-        assert result_short.delta_emoji == "🟠"
+        assert "Short by EUR 500.00" in result_short.reconciliation_delta
+        assert result_short.delta_indicator == "short"
 
 
 class TestCutoffDateScenarios:
@@ -314,10 +345,11 @@ class TestCutoffDateScenarios:
         # Mock data
         cursor.fetchone.side_effect = [
             {"display_alias": "Test Associate"},
-            {"net_deposits_eur": 1000.0},
+            {"total_deposits": 1000.0, "total_withdrawals": 0.0},
             {"should_hold_eur": 1200.0},
-            {"current_holding_eur": 1150.0}
+            {"current_holding_eur": 1150.0},
         ]
+        cursor.fetchall.return_value = []
         
         with patch('src.services.statement_service.get_db_connection', return_value=conn):
             result = service.generate_statement(1, "2025-10-31T23:59:59Z")
@@ -343,10 +375,11 @@ class TestCutoffDateScenarios:
         # Mock data
         cursor.fetchone.side_effect = [
             {"display_alias": "Test Associate"},
-            {"net_deposits_eur": 500.0},
+            {"total_deposits": 500.0, "total_withdrawals": 0.0},
             {"should_hold_eur": 600.0},
             {"current_holding_eur": 550.0}
         ]
+        cursor.fetchall.return_value = []
         
         with patch('src.services.statement_service.get_db_connection', return_value=conn):
             result = service.generate_statement(1, "2025-10-15T23:59:59Z")
@@ -384,10 +417,11 @@ class TestErrorHandlingIntegration:
         # Mock scenario where some calculations return NULL
         cursor.fetchone.side_effect = [
             {"display_alias": "Test Associate"},
-            {"net_deposits_eur": 1000.0},
+            {"total_deposits": 1000.0, "total_withdrawals": 0.0},
             {"should_hold_eur": None},    # No bet results yet
             {"current_holding_eur": 1000.0}
         ]
+        cursor.fetchall.return_value = []
         
         with patch('src.services.statement_service.get_db_connection', return_value=conn):
             result = service.generate_statement(1, "2025-10-31T23:59:59Z")
@@ -410,7 +444,7 @@ class TestLargeDatasetPerformance:
         # Mock calculation results
         cursor.fetchone.side_effect = [
             {"display_alias": "High Volume Associate"},
-            {"net_deposits_eur": 50000.0},
+            {"total_deposits": 50000.0, "total_withdrawals": 0.0},
             {"should_hold_eur": 55000.0},
             {"current_holding_eur": 54500.0}
         ]
@@ -425,7 +459,16 @@ class TestLargeDatasetPerformance:
                 "created_at_utc": "2025-10-31T23:59:59Z"
             })
         
-        cursor.fetchall.return_value = large_transaction_list
+        def execute_side_effect(query, params=None):
+            normalized = " ".join(query.split())
+            if "SELECT id, type, amount_eur" in normalized:
+                cursor.fetchall.return_value = large_transaction_list
+            elif "FROM bookmakers" in normalized:
+                cursor.fetchall.return_value = []
+            else:
+                cursor.fetchall.return_value = []
+
+        cursor.execute.side_effect = execute_side_effect
         
         with patch('src.services.statement_service.get_db_connection', return_value=conn):
             transactions = service.get_associate_transactions(1, "2025-10-31T23:59:59Z")
@@ -433,7 +476,11 @@ class TestLargeDatasetPerformance:
         assert len(transactions) == 1000
         
         # Test that calculations still work with large values
-        result = service.generate_statement(1, "2025-10-31T23:59:59Z")
+        with patch('src.services.statement_service.get_db_connection', return_value=conn):
+            result = service.generate_statement(1, "2025-10-31T23:59:59Z")
         assert result.net_deposits_eur == Decimal("50000.00")
         assert result.should_hold_eur == Decimal("55000.00")
         assert result.current_holding_eur == Decimal("54500.00")
+
+
+

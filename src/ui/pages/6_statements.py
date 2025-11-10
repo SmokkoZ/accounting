@@ -1,7 +1,7 @@
 """
 Monthly Statements Page
 
-Generate per-associate statements showing funding, entitlement, and 50/50 split.
+Generate per-associate statements showing funding, entitlement, bookmaker balances, and deltas.
 Partner-facing and internal-only sections with export functionality.
 """
 
@@ -14,6 +14,7 @@ import json
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -44,6 +45,11 @@ from src.ui.utils.state_management import render_reset_control, safe_rerun
 PAGE_TITLE = "Statements"
 PAGE_ICON = ":material/contract:"
 STATEMENT_PDF_DIR = Path("data/exports/statements")
+
+
+def _format_eur(value: Decimal | float | str) -> str:
+    """Standard currency formatter for UI display."""
+    return f"€{Decimal(str(value)):,.2f}"
 
 
 def _escape_pdf_text(value: str) -> str:
@@ -200,14 +206,23 @@ def generate_statement_pdf(
     """Generate a lightweight PDF summary for the statement."""
     cutoff_date = calc.cutoff_date.split("T")[0]
     pdf_path = STATEMENT_PDF_DIR / f"statement_{calc.associate_id}_{cutoff_date.replace('-', '')}.pdf"
+    bookmaker_lines = [
+        f"- {row.bookmaker_name}: balance {_format_eur(row.balance_eur)}, "
+        f"deposits {_format_eur(row.deposits_eur)}, "
+        f"withdrawals {_format_eur(row.withdrawals_eur)}"
+        for row in partner_section.bookmakers
+    ]
+    if not bookmaker_lines:
+        bookmaker_lines = ["- No bookmaker activity recorded."]
     lines = [
         f"Statement for {calc.associate_name}",
         f"Cutoff Date: {cutoff_date}",
-        partner_section.funding_summary,
-        partner_section.entitlement_summary,
-        partner_section.profit_loss_summary,
-        f"Admin Share: {partner_section.split_calculation['admin_share']}",
-        f"Associate Share: {partner_section.split_calculation['associate_share']}",
+        f"Total Deposits: {_format_eur(partner_section.total_deposits_eur)}",
+        f"Total Withdrawals: {_format_eur(partner_section.total_withdrawals_eur)}",
+        f"Bookmaker Balances: {_format_eur(partner_section.holdings_eur)}",
+        f"Associate Delta: {_format_eur(partner_section.delta_eur)}",
+        "Bookmaker Breakdown:",
+        *bookmaker_lines,
         internal_section.current_holdings,
         internal_section.reconciliation_delta,
     ]
@@ -288,36 +303,39 @@ def render_partner_facing_section(partner_section: PartnerFacingSection) -> None
     st.markdown("---")
     st.subheader(":material/savings: Partner Statement")
     
-    # Funding Summary
-    st.markdown("##### Funding Summary")
-    st.info(partner_section.funding_summary)
-    st.caption("Total deposits minus withdrawals up to cutoff date")
-    
-    # Entitlement Summary
-    st.markdown("##### Entitlement Summary")
-    st.info(partner_section.entitlement_summary)
-    st.caption("Total principal returned plus profit shares from all settled bets")
-    
-    # Profit/Loss Summary
-    st.markdown("##### Profit/Loss Summary")
-    summary = partner_section.profit_loss_summary
-    if summary.startswith("Profit:"):
-        st.success(summary)
-    elif summary.startswith("Loss:"):
-        st.error(summary)
-    else:
-        st.info(summary)
-    st.caption("Raw profit = Entitlement - Funding")
-    
-    # 50/50 Split Calculation
-    st.markdown("##### 50/50 Split Calculation")
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Admin Share", partner_section.split_calculation["admin_share"])
+        st.metric("Total Deposits", _format_eur(partner_section.total_deposits_eur))
     with col2:
-        st.metric("Associate Share", partner_section.split_calculation["associate_share"])
-    
-    st.caption(partner_section.split_calculation["explanation"])
+        st.metric("Total Withdrawals", _format_eur(partner_section.total_withdrawals_eur))
+    with col3:
+        st.metric("Associate Delta", _format_eur(partner_section.delta_eur))
+
+    st.info(
+        f"Bookmaker balances (including stakes and payouts): { _format_eur(partner_section.holdings_eur) }"
+    )
+    st.caption(
+        "Delta reflects how much the associate is overholding (+) or short (−) versus entitlement."
+    )
+
+    st.markdown("##### Bookmaker Breakdown")
+    if partner_section.bookmakers:
+        table_rows = [
+            {
+                "Bookmaker": row.bookmaker_name,
+                "Balance (EUR)": _format_eur(row.balance_eur),
+                "Deposits (EUR)": _format_eur(row.deposits_eur),
+                "Withdrawals (EUR)": _format_eur(row.withdrawals_eur),
+            }
+            for row in partner_section.bookmakers
+        ]
+        st.dataframe(pd.DataFrame(table_rows), hide_index=True, use_container_width=True)
+        st.caption(
+            "Balances are the running sum of all ledger entries for the bookmaker. "
+            "Profit can be derived as (bookmaker balances − deposits ± delta)."
+        )
+    else:
+        st.caption("No bookmaker activity recorded yet for this associate.")
 
 
 def render_internal_section(internal_section: InternalSection) -> None:
@@ -354,19 +372,23 @@ def render_export_options(calc: StatementCalculations, partner_section: PartnerF
     
     with col1:
         # Copy to Clipboard (partner-facing only)
+        bookmaker_lines = "\n".join(
+            f"- {row.bookmaker_name}: balance {_format_eur(row.balance_eur)}, "
+            f"deposits {_format_eur(row.deposits_eur)}, "
+            f"withdrawals {_format_eur(row.withdrawals_eur)}"
+            for row in partner_section.bookmakers
+        ) or "- No bookmaker activity recorded."
         clipboard_text = f"""
 PARTNER STATEMENT - {calc.associate_name}
 Period Ending: {calc.cutoff_date.split('T')[0]}
 
-{partner_section.funding_summary}
-{partner_section.entitlement_summary}
-{partner_section.profit_loss_summary}
+Total Deposits: {_format_eur(partner_section.total_deposits_eur)}
+Total Withdrawals: {_format_eur(partner_section.total_withdrawals_eur)}
+Bookmaker Balances: {_format_eur(partner_section.holdings_eur)}
+Associate Delta: {_format_eur(partner_section.delta_eur)}
 
-50/50 Split:
-- Admin Share: {partner_section.split_calculation["admin_share"]}
-- Associate Share: {partner_section.split_calculation["associate_share"]}
-
-{partner_section.split_calculation["explanation"]}
+Bookmaker Breakdown:
+{bookmaker_lines}
         """.strip()
         
         if st.button(":material/content_copy: Copy to Clipboard", key="copy_clipboard", width="stretch"):
@@ -535,7 +557,7 @@ def main() -> None:
     st.session_state.setdefault("daily_statements_error", None)
 
     st.title(f"{PAGE_ICON} {PAGE_TITLE}")
-    st.caption("Generate per-associate statements showing funding, entitlement, and 50/50 split")
+    st.caption("Generate per-associate statements showing funding, entitlement, bookmaker balances, and deltas")
 
     toggle_cols = st.columns([6, 2])
     with toggle_cols[1]:
@@ -681,10 +703,10 @@ def main() -> None:
         st.markdown("""
         ### About Monthly Statements
         
-        **Purpose:** Generate partner statements showing funding, entitlement, and profit splits.
+        **Purpose:** Generate partner statements showing funding, entitlement, bookmaker balances, and reconciliation deltas.
         
         **Sections:**
-        - **Partner Statement**: Shareable with associates showing funding, entitlement, and 50/50 split
+        - **Partner Statement**: Shareable with associates showing funding, entitlement, and bookmaker balances with deltas
         - **Internal Reconciliation**: Internal-only section showing current holdings vs. entitlement
         - **Transaction Details**: Complete transaction list for verification
         

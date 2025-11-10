@@ -18,6 +18,7 @@ from src.services.bet_verification import BetVerificationService
 from src.core.database import get_db_connection
 from src.core.schema import create_schema
 from src.core.seed_data import insert_seed_data
+from src.core.config import Config
 
 
 @pytest.fixture
@@ -51,6 +52,15 @@ def sample_bet(test_db):
     )
     test_db.commit()
     return cursor.lastrowid
+
+
+@pytest.fixture
+def enable_stake_flag(monkeypatch):
+    """Temporarily enable placement stake recording."""
+    original = Config.STAKE_AT_PLACEMENT
+    monkeypatch.setattr(Config, "STAKE_AT_PLACEMENT", True)
+    yield
+    monkeypatch.setattr(Config, "STAKE_AT_PLACEMENT", original)
 
 
 class TestBetApproval:
@@ -115,6 +125,27 @@ class TestBetApproval:
         assert audit is not None
         assert "market_code" in audit["diff_after"]
 
+    def test_approve_bet_writes_stake_entry(
+        self, verification_service, sample_bet, test_db, enable_stake_flag
+    ):
+        """Stake entries should be written at approval when the flag is enabled."""
+        bet_id = sample_bet
+
+        verification_service.approve_bet(bet_id)
+
+        entry = test_db.execute(
+            """
+            SELECT type, amount_native, bet_id
+            FROM ledger_entries
+            WHERE bet_id = ? AND type = 'BET_STAKE'
+            """,
+            (bet_id,),
+        ).fetchone()
+
+        assert entry is not None
+        assert entry["bet_id"] == bet_id
+        assert Decimal(entry["amount_native"]) == Decimal("-100.00")
+
     def test_approve_bet_already_processed(
         self, verification_service, sample_bet, test_db
     ):
@@ -133,6 +164,85 @@ class TestBetApproval:
         # Act & Assert
         with pytest.raises(ValueError, match="not found"):
             verification_service.approve_bet(99999)
+
+
+class TestStakeAdjustments:
+    """Validate BET_STAKE corrections when stake details change."""
+
+    def test_stake_increase_adds_negative_entry(
+        self, verification_service, sample_bet, test_db, enable_stake_flag
+    ):
+        bet_id = sample_bet
+        verification_service.approve_bet(bet_id)
+
+        verification_service.update_verified_bet(
+            bet_id,
+            {"stake_original": "150.00"},
+        )
+
+        entries = test_db.execute(
+            """
+            SELECT amount_native FROM ledger_entries
+            WHERE bet_id = ? AND type = 'BET_STAKE'
+            ORDER BY id
+            """,
+            (bet_id,),
+        ).fetchall()
+
+        native_amounts = [Decimal(row["amount_native"]) for row in entries]
+        assert native_amounts == [Decimal("-100.00"), Decimal("-50.00")]
+
+    def test_stake_decrease_writes_positive_correction(
+        self, verification_service, sample_bet, test_db, enable_stake_flag
+    ):
+        bet_id = sample_bet
+        verification_service.approve_bet(bet_id)
+
+        verification_service.update_verified_bet(
+            bet_id,
+            {"stake_original": "40.00"},
+        )
+
+        entries = test_db.execute(
+            """
+            SELECT amount_native FROM ledger_entries
+            WHERE bet_id = ? AND type = 'BET_STAKE'
+            ORDER BY id
+            """,
+            (bet_id,),
+        ).fetchall()
+
+        native_amounts = [Decimal(row["amount_native"]) for row in entries]
+        assert native_amounts == [Decimal("-100.00"), Decimal("60.00")]
+
+    def test_currency_change_offsets_previous_currency(
+        self, verification_service, sample_bet, test_db, enable_stake_flag
+    ):
+        bet_id = sample_bet
+        verification_service.approve_bet(bet_id)
+
+        verification_service.update_verified_bet(
+            bet_id,
+            {"stake_original": "50.00", "stake_currency": "GBP"},
+        )
+
+        rows = test_db.execute(
+            """
+            SELECT native_currency, amount_native
+            FROM ledger_entries
+            WHERE bet_id = ? AND type = 'BET_STAKE'
+            ORDER BY id
+            """,
+            (bet_id,),
+        ).fetchall()
+
+        assert rows[0]["native_currency"] == "AUD"
+        assert Decimal(rows[0]["amount_native"]) == Decimal("-100.00")
+        # Currency change should release original AUD stake before capturing the new GBP stake
+        assert rows[1]["native_currency"] == "AUD"
+        assert Decimal(rows[1]["amount_native"]) == Decimal("100.00")
+        assert rows[2]["native_currency"] == "GBP"
+        assert Decimal(rows[2]["amount_native"]) == Decimal("-50.00")
 
 
 class TestBetRejection:

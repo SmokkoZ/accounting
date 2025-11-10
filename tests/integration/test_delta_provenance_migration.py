@@ -120,15 +120,15 @@ class TestDeltaProvenanceMigration:
                  created_at_utc, created_by, note) VALUES 
                     -- Surebet 101: User 1 wins, User 2 loses
                     (1001, 'BET_RESULT', 1, 1, '250.00', 'EUR', '1.000000', '250.00', 'WON', '100.00', '150.00', 101, 1011, 'batch-101', datetime('now', '-5 days'), 'system', 'Settlement win'),
-                    (1002, 'BET_RESULT', 2, 2, '-100.00', 'EUR', '1.000000', '-100.00', 'LOST', '0.00', '-50.00', 101, 1012, 'batch-101', datetime('now', '-5 days'), 'system', 'Settlement loss'),
+                    (1002, 'BET_RESULT', 2, 2, '0.00', 'EUR', '1.000000', '0.00', 'LOST', '0.00', '-50.00', 101, 1012, 'batch-101', datetime('now', '-5 days'), 'system', 'Settlement loss'),
                     
                     -- Surebet 102: User 1 wins, User 3 loses
                     (1003, 'BET_RESULT', 1, 1, '480.00', 'EUR', '1.000000', '480.00', 'WON', '150.00', '330.00', 102, 1021, 'batch-102', datetime('now', '-3 days'), 'system', 'Settlement win'),
-                    (1004, 'BET_RESULT', 3, 3, '-150.00', 'EUR', '1.000000', '-150.00', 'LOST', '0.00', '-150.00', 102, 1022, 'batch-102', datetime('now', '-3 days'), 'system', 'Settlement loss'),
+                    (1004, 'BET_RESULT', 3, 3, '0.00', 'EUR', '1.000000', '0.00', 'LOST', '0.00', '-150.00', 102, 1022, 'batch-102', datetime('now', '-3 days'), 'system', 'Settlement loss'),
                     
                     -- Surebet 103: User 2 wins, User 3 loses
                     (1005, 'BET_RESULT', 2, 2, '420.00', 'EUR', '1.000000', '420.00', 'WON', '200.00', '220.00', 103, 1031, 'batch-103', datetime('now', '-1 day'), 'system', 'Settlement win'),
-                    (1006, 'BET_RESULT', 3, 3, '-200.00', 'EUR', '1.000000', '-200.00', 'LOST', '0.00', '-200.00', 103, 1032, 'batch-103', datetime('now', '-1 day'), 'system', 'Settlement loss');
+                    (1006, 'BET_RESULT', 3, 3, '0.00', 'EUR', '1.000000', '0.00', 'LOST', '0.00', '-200.00', 103, 1032, 'batch-103', datetime('now', '-1 day'), 'system', 'Settlement loss');
             """)
             
             conn.commit()
@@ -524,11 +524,10 @@ class TestBackfillPerformance:
                     (id, type, associate_id, amount_native, fx_rate_snapshot, amount_eur, 
                      settlement_state, surebet_id, bet_id, settlement_batch_id, 
                      created_at_utc, created_by, note) VALUES 
-                    (?, 'BET_RESULT', 2, ?, '1.000000', ?, 'LOST', ?, ?, 'batch-?', ?, 'system', 'Settlement')
+                    (?, 'BET_RESULT', 2, ?, '1.000000', '0.00', 'LOST', ?, ?, 'batch-?', ?, 'system', 'Settlement')
                 """, (
                     surebet_id * 10 + 2,
-                    str(loser_amount),
-                    str(abs(loser_amount)),
+                    '0.00',
                     surebet_id,
                     surebet_id * 10 + 2,
                     surebet_id,

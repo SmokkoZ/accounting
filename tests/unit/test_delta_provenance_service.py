@@ -272,7 +272,7 @@ class TestDeltaProvenanceService:
                 (100, 'BET_RESULT', 1, '50.00', 'EUR', '1.000000', '50.00',
                  'WON', '50.00', '0.00', 1, 10, 'batch-1', NULL,
                  datetime('now'), 'system', 'Test settlement'),
-                (101, 'BET_RESULT', 2, '-50.00', 'EUR', '1.000000', '-50.00',
+                (101, 'BET_RESULT', 2, '0.00', 'EUR', '1.000000', '0.00',
                  'LOST', '0.00', '0.00', 1, 11, 'batch-1', NULL,
                  datetime('now'), 'system', 'Test settlement')
         """)
@@ -355,7 +355,7 @@ class TestDeltaProvenanceService:
                 (200, 'BET_RESULT', 1, '25.00', 'EUR', '1.000000', '25.00',
                  'WON', '25.00', '0.00', 2, 20, 'batch-2', NULL,
                  datetime('now'), 'system', 'Backfill winner'),
-                (201, 'BET_RESULT', 2, '-25.00', 'EUR', '1.000000', '-25.00',
+                (201, 'BET_RESULT', 2, '0.00', 'EUR', '1.000000', '0.00',
                  'LOST', '0.00', '0.00', 2, 21, 'batch-2', NULL,
                  datetime('now'), 'system', 'Backfill loser')
             """

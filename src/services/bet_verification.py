@@ -16,12 +16,25 @@ from typing import Dict, Any, Optional, List, Tuple
 from decimal import Decimal
 from rapidfuzz import fuzz
 from src.services.event_normalizer import EventNormalizer
+from src.services.stake_ledger_service import StakeLedgerService
 
 logger = structlog.get_logger()
 
 
 class BetVerificationService:
     """Service for verifying and editing incoming bets."""
+
+    STAKE_FIELD_NAMES = {
+        "currency",
+        "fx_rate_to_eur",
+        "manual_stake_currency",
+        "manual_stake_override",
+        "stake",
+        "stake_amount",
+        "stake_currency",
+        "stake_eur",
+        "stake_original",
+    }
 
     def __init__(self, db: sqlite3.Connection):
         """Initialize the bet verification service.
@@ -195,8 +208,20 @@ class BetVerificationService:
         if edited_fields:
             self._log_edits(bet_id, bet, edited_fields, verified_by)
 
-        # Apply edits and update status
-        self._apply_bet_updates(bet_id, edited_fields, verified_by, "verified")
+        # Apply edits, mark verified, and record stake capture atomically
+        stake_note = f"Stake captured at verification (bet #{bet_id})"
+        try:
+            self._apply_bet_updates(bet_id, edited_fields, verified_by, "verified")
+            self._sync_bet_stake_entries(
+                bet_id=bet_id,
+                verified_by=verified_by,
+                note=stake_note,
+                release_when_missing=False,
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
 
         logger.info("bet_approved", bet_id=bet_id, verified_by=verified_by)
 
@@ -494,8 +519,22 @@ class BetVerificationService:
                 params.append(value)
             params.append(bet_id)
             query = f"UPDATE bets SET {', '.join(update_fields)} WHERE id = ?"
-            self.db.execute(query, tuple(params))
-            self.db.commit()
+
+            needs_stake_sync = self._stake_fields_updated(edited_fields)
+            stake_note = f"Stake adjustment after edit (bet #{bet_id})"
+            try:
+                self.db.execute(query, tuple(params))
+                if needs_stake_sync:
+                    self._sync_bet_stake_entries(
+                        bet_id=bet_id,
+                        verified_by=verified_by,
+                        note=stake_note,
+                        release_when_missing=True,
+                    )
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+                raise
 
         # Attempt matching only if bet is verified after updates
         bet_after = self._load_bet(bet_id)
@@ -845,6 +884,30 @@ class BetVerificationService:
             (bet_id, actor, diff_before_str, diff_after_str),
         )
 
+    def _stake_fields_updated(self, edited_fields: Dict[str, Any]) -> bool:
+        """Return True if any edited field impacts stake capture."""
+        return any(field in self.STAKE_FIELD_NAMES for field in edited_fields.keys())
+
+    def _sync_bet_stake_entries(
+        self,
+        *,
+        bet_id: int,
+        verified_by: str,
+        note: str,
+        release_when_missing: bool,
+    ) -> None:
+        """Ensure BET_STAKE ledger entries align with the current bet snapshot."""
+        bet_snapshot = self._load_bet(bet_id)
+        if not bet_snapshot:
+            return
+        stake_service = StakeLedgerService(self.db)
+        stake_service.sync_bet_stake(
+            bet=bet_snapshot,
+            created_by=verified_by,
+            note=note,
+            release_when_missing=release_when_missing,
+        )
+
     def _apply_bet_updates(
         self,
         bet_id: int,
@@ -892,5 +955,3 @@ class BetVerificationService:
             """,
             (bet_id, verified_by),
         )
-
-        self.db.commit()

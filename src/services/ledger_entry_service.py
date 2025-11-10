@@ -92,7 +92,6 @@ class LedgerEntryService:
                 (
                     ledger_ids,
                     total_amount_eur,
-                    entry_amounts_eur,
                 ) = self._write_ledger_entries(
                     conn,
                     batch_id,
@@ -109,7 +108,6 @@ class LedgerEntryService:
                     conn,
                     preview_data,
                     ledger_ids,
-                    entry_amounts_eur,
                 )
         except TransactionError as exc:  # pragma: no cover - defensive path
             raise SettlementCommitError(str(exc)) from exc
@@ -164,11 +162,10 @@ class LedgerEntryService:
         fx_snapshots: Dict[str, Decimal],
         preview_data: SettlementPreview,
         created_by: str,
-    ) -> Tuple[List[int], Decimal, List[Decimal]]:
+    ) -> Tuple[List[int], Decimal]:
         """Write append-only ledger rows for each participant."""
         ledger_ids: List[int] = []
         total_amount_eur = Decimal("0.00")
-        entry_amounts_eur: List[Decimal] = []
 
         for participant in preview_data.participants:
             fx_rate = fx_snapshots[participant.currency]
@@ -227,12 +224,10 @@ class LedgerEntryService:
             )
             ledger_ids.append(cursor.lastrowid)
             total_amount_eur += amount_eur
-            entry_amounts_eur.append(amount_eur)
 
         return (
             ledger_ids,
             self._quantize_currency(total_amount_eur),
-            entry_amounts_eur,
         )
 
     def _update_surebet_status(
@@ -324,7 +319,6 @@ class LedgerEntryService:
         conn: sqlite3.Connection,
         preview_data: SettlementPreview,
         ledger_entry_ids: List[int],
-        entry_amounts_eur: List[Decimal],
     ) -> None:
         """Create a settlement link to power delta provenance dashboards."""
         participants = preview_data.participants
@@ -352,9 +346,14 @@ class LedgerEntryService:
             )
             return
 
-        amount_eur = entry_amounts_eur[winner_idx]
+        amount_eur = preview_data.per_bet_net_gains.get(
+            participants[winner_idx].bet_id, Decimal("0.00")
+        )
         if amount_eur <= Decimal("0.00") and loser_idx is not None:
-            amount_eur = abs(entry_amounts_eur[loser_idx])
+            loss = preview_data.per_bet_net_gains.get(
+                participants[loser_idx].bet_id, Decimal("0.00")
+            )
+            amount_eur = abs(loss)
 
         if amount_eur <= Decimal("0.00"):
             logger.warning(
@@ -392,11 +391,10 @@ class LedgerEntryService:
         stake_native = participant.stake_native
 
         if participant.outcome == BetOutcome.WON:
-            payout = stake_native * participant.odds
-            return payout - stake_native
+            return stake_native * participant.odds
         if participant.outcome == BetOutcome.LOST:
-            return -stake_native
-        return Decimal("0.00")
+            return Decimal("0.00")
+        return stake_native
 
     @staticmethod
     def _quantize_currency(value: Decimal) -> Decimal:
