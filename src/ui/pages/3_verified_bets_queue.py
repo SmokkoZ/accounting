@@ -97,15 +97,23 @@ def load_resolve_events_queue(statuses: Optional[List[str]] = None) -> pd.DataFr
             SELECT
                 b.id AS bet_id,
                 a.display_alias AS associate,
-                b.selection_text,
+                bk.bookmaker_name AS bookmaker,
+                COALESCE(ce.normalized_event_name, b.selection_text) AS event_name,
+                b.odds_original,
+                b.stake_original,
+                b.market_code,
+                b.side,
+                b.period_scope,
+                b.line_value,
+                b.kickoff_time_utc,
                 b.normalization_confidence,
                 b.confidence_score,
-                b.created_at_utc,
                 COALESCE(b.resolve_status, 'needs_review') AS resolve_status,
-                b.status,
-                b.canonical_event_id
+                b.status
             FROM bets b
             JOIN associates a ON b.associate_id = a.id
+            JOIN bookmakers bk ON b.bookmaker_id = bk.id
+            LEFT JOIN canonical_events ce ON b.canonical_event_id = ce.id
             WHERE b.status IN ('incoming', 'verified')
               AND (b.canonical_event_id IS NULL OR COALESCE(b.resolve_status, 'needs_review') != 'auto_ok')
             ORDER BY b.created_at_utc DESC
@@ -125,9 +133,16 @@ def load_resolve_events_queue(statuses: Optional[List[str]] = None) -> pd.DataFr
             {
                 "bet_id": row["bet_id"],
                 "associate": row["associate"],
-                "alias_evidence": row["selection_text"] or "(no selection text)",
+                "bookmaker": row["bookmaker"],
+                "event_name": row["event_name"],
+                "odds": row["odds_original"],
+                "stake": row["stake_original"],
+                "market_code": row["market_code"],
+                "side": row["side"],
+                "period_scope": row["period_scope"],
+                "line_value": row["line_value"],
+                "kickoff_time_utc": row["kickoff_time_utc"],
                 "confidence_score": confidence_value,
-                "created_at_utc": row["created_at_utc"],
                 "resolve_status": row["resolve_status"],
                 "bet_status": row["status"],
             }
@@ -209,52 +224,6 @@ if not bets:
     st.info("No verified bets found.")
 else:
     st.caption(f"Showing {len(bets)} bet(s)")
-
-    # Present as a simple table to aid auditing
-    def simplify(row: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            "Bet #": row["bet_id"],
-            "Associate": row["associate"],
-            "Bookmaker": row["bookmaker"],
-            "Event": row.get("event_name") or "(unset)",
-            "Market": row.get("market_code") or "(unset)",
-            "Period": row.get("period_scope") or "(unset)",
-            "Side": row.get("side") or "(unset)",
-            "Line": row.get("line_value") or "",
-            "Conf": row.get("normalization_confidence") or "",
-            "Kickoff": row.get("kickoff_time_utc") or "",
-            "Status": row.get("status"),
-            "Screenshot": row.get("screenshot_path") or "",
-        }
-
-    table = [simplify(r) for r in bets]
-    st.dataframe(table)
-
-    # Quick checklist to highlight matching readiness
-    not_ready = [
-        r
-        for r in bets
-        if not all(
-            [
-                r.get("canonical_event_id") is not None,
-                r.get("market_code"),
-                r.get("period_scope"),
-                r.get("side"),
-            ]
-        )
-    ]
-
-    if not_ready:
-        st.warning(
-            f"{len(not_ready)} bet(s) missing fields required for matching (event/market/period/side)."
-        )
-        with st.expander("Show details"):
-            for r in not_ready:
-                st.write(
-                    f"- Bet #{r['bet_id']}: event={r.get('event_name') or '(unset)'} | "
-                    f"market={r.get('market_code') or '(unset)'} | period={r.get('period_scope') or '(unset)'} | "
-                    f"side={r.get('side') or '(unset)'}"
-                )
 
 # Resolve events triage
 st.markdown("---")

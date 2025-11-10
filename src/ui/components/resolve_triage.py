@@ -9,8 +9,6 @@ from typing import Iterable, List, Optional
 import pandas as pd
 import streamlit as st
 
-from src.ui.utils.formatters import format_utc_datetime_compact
-
 HIGH_CONFIDENCE = 0.8
 MEDIUM_CONFIDENCE = 0.5
 
@@ -48,25 +46,43 @@ def render_resolve_queue_with_triage(
         return []
 
     display_df = events_df.copy()
-    display_df["confidence_display"] = display_df["confidence_score"].apply(
-        render_confidence_indicator
-    )
-    if "created_at_utc" in display_df.columns:
-        display_df["created_local"] = display_df["created_at_utc"].apply(
-            lambda value: format_utc_datetime_compact(value) if value else "—"
-        )
+    display_df["Conf"] = display_df["confidence_score"].apply(render_confidence_indicator)
+
+    column_order = [
+        "bet_id",
+        "associate",
+        "bookmaker",
+        "event_name",
+        "odds",
+        "stake",
+        "market_code",
+        "side",
+        "period_scope",
+        "line_value",
+        "kickoff_time_utc",
+        "Conf",
+        "bet_status",
+    ]
+    column_labels = {
+        "bet_id": "Bet ID",
+        "associate": "Associate",
+        "bookmaker": "Bookmaker",
+        "event_name": "Event",
+        "odds": "Odds",
+        "stake": "Stake",
+        "market_code": "Market",
+        "side": "Side",
+        "period_scope": "Period",
+        "line_value": "Line",
+        "kickoff_time_utc": "Kickoff",
+        "Conf": "Conf",
+        "bet_status": "Status",
+    }
+
+    render_df = display_df[column_order].rename(columns=column_labels)
 
     st.dataframe(
-        display_df,
-        column_config={
-            "confidence_display": st.column_config.TextColumn(
-                "Confidence", help="LLM extraction confidence"
-            ),
-            "alias_evidence": st.column_config.TextColumn(
-                "Alias Evidence", help="Evidence for canonical alias"
-            ),
-            "created_local": st.column_config.TextColumn("Created (Perth)"),
-        },
+        render_df,
         hide_index=True,
         width="stretch",
     )
