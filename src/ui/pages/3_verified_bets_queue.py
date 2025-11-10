@@ -153,6 +153,49 @@ def load_resolve_events_queue(statuses: Optional[List[str]] = None) -> pd.DataFr
         df = df[df["resolve_status"].isin(statuses)]
     return df
 
+def _to_float(value: Any) -> Optional[float]:
+    if value in ("", None):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+EDITABLE_COLUMN_MAP = {
+    "event": ("selection_text", lambda v: (str(v).strip() or None) if v is not None else None),
+    "odds": ("odds_original", _to_float),
+    "stake": ("stake_original", _to_float),
+    "market": ("market_code", lambda v: (str(v).strip() or None) if v is not None else None),
+    "side": ("side", lambda v: (str(v).strip() or None) if v is not None else None),
+    "line": ("line_value", _to_float),
+    "period": ("period_scope", lambda v: (str(v).strip() or None) if v is not None else None),
+    "kickoff": ("kickoff_time_utc", lambda v: (str(v).strip() or None) if v is not None else None),
+}
+
+def persist_inline_edits(changes: List[tuple[int, Dict[str, Any]]]) -> int:
+    if not changes:
+        return 0
+    db = get_db_connection()
+    service = BetVerificationService(db)
+    updated = 0
+    errors: List[str] = []
+    try:
+        for bet_id, column_updates in changes:
+            if not column_updates:
+                continue
+            try:
+                service.update_verified_bet(bet_id, column_updates, verified_by="inline_editor")
+            except Exception as exc:  # pragma: no cover - user-visible errors
+                errors.append(f"Bet #{bet_id}: {exc}")
+            else:
+                updated += 1
+        db.commit()
+    finally:
+        db.close()
+
+    for message in errors:
+        st.error(message)
+    return updated
 
 def bulk_mark_events_auto_ok(bet_ids: List[int]) -> int:
     """Mark the provided bet IDs as auto-resolved."""
@@ -224,6 +267,86 @@ if not bets:
     st.info("No verified bets found.")
 else:
     st.caption(f"Showing {len(bets)} bet(s)")
+    display_rows: List[Dict[str, Any]] = []
+    for row in bets:
+        display_rows.append(
+            {
+                "bet_id": row["bet_id"],
+                "associate": row["associate"],
+                "bookmaker": row["bookmaker"],
+                "event": row.get("selection_text") or row.get("event_name") or "",
+                "canonical_event": row.get("event_name") or "",
+                "odds": row.get("odds"),
+                "stake": row.get("stake"),
+                "market": row.get("market_code") or "",
+                "side": row.get("side") or "",
+                "line": row.get("line_value"),
+                "period": row.get("period_scope") or "",
+                "kickoff": row.get("kickoff_time_utc") or "",
+                "conf": row.get("normalization_confidence"),
+                "bet_status": row.get("status"),
+            }
+        )
+
+    base_df = pd.DataFrame(display_rows)
+    editable_columns = ["event", "odds", "stake", "market", "side", "line", "period", "kickoff"]
+    disabled_columns = ["bet_id", "associate", "bookmaker", "canonical_event", "conf", "bet_status"]
+    column_config = {
+        "bet_id": st.column_config.NumberColumn("Bet ID", disabled=True),
+        "associate": st.column_config.TextColumn("Associate", disabled=True),
+        "bookmaker": st.column_config.TextColumn("Bookmaker", disabled=True),
+        "event": st.column_config.TextColumn("Event (editable alias)"),
+        "canonical_event": st.column_config.TextColumn("Canonical Event", disabled=True),
+        "odds": st.column_config.NumberColumn("Odds", format="%.2f"),
+        "stake": st.column_config.NumberColumn("Stake", format="%.2f"),
+        "market": st.column_config.TextColumn("Market"),
+        "side": st.column_config.TextColumn("Side"),
+        "line": st.column_config.NumberColumn("Line", format="%.2f"),
+        "period": st.column_config.TextColumn("Period"),
+        "kickoff": st.column_config.TextColumn("Kickoff (UTC)", help="YYYY-MM-DDTHH:MM:SSZ"),
+        "conf": st.column_config.TextColumn("Conf", disabled=True),
+        "bet_status": st.column_config.TextColumn("Status", disabled=True),
+    }
+
+    edited_df = st.data_editor(
+        base_df,
+        column_config=column_config,
+        disabled=disabled_columns,
+        hide_index=True,
+        use_container_width=True,
+        key="verified_bets_editor",
+    )
+
+    if st.button("Save inline edits", type="primary", key="save_inline_edits_button"):
+        base_records = base_df.to_dict("records")
+        edited_records = edited_df.to_dict("records")
+        changes: List[tuple[int, Dict[str, Any]]] = []
+
+        def _values_equal(val1: Any, val2: Any) -> bool:
+            if pd.isna(val1) and pd.isna(val2):
+                return True
+            return val1 == val2
+
+        for original, edited in zip(base_records, edited_records):
+            row_changes: Dict[str, Any] = {}
+            for field in editable_columns:
+                original_value = original.get(field)
+                edited_value = edited.get(field)
+                if not _values_equal(original_value, edited_value):
+                    column_name, normalizer = EDITABLE_COLUMN_MAP[field]
+                    row_changes[column_name] = normalizer(edited_value)
+            if row_changes:
+                changes.append((original["bet_id"], row_changes))
+
+        if not changes:
+            st.info("No inline changes detected.")
+        else:
+            updates = persist_inline_edits(changes)
+            if updates:
+                st.success(f"{updates} bet(s) updated.")
+                safe_rerun()
+            else:
+                st.warning("No bets were updated. Please verify your changes and try again.")
 
 # Resolve events triage
 st.markdown("---")
