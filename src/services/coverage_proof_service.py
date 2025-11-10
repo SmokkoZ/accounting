@@ -12,6 +12,7 @@ import asyncio
 import json
 import sqlite3
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,6 +23,10 @@ from telegram.error import TelegramError
 
 from src.core.config import Config
 from src.core.database import get_db_connection
+from src.services.rate_limit_settings import (
+    ChatRateLimitSettings,
+    RateLimitSettingsStore,
+)
 from src.utils.datetime_helpers import utc_now_iso
 from src.utils.logging_config import get_logger
 
@@ -47,6 +52,29 @@ class CoverageProofService:
     RATE_LIMIT_MESSAGES_PER_MINUTE = 10
     RATE_LIMIT_WINDOW_SECONDS = 60
     OUTBOX_DEFAULT_LIMIT = 200
+    DEFAULT_CHAT_RATE_LIMITS: List[ChatRateLimitSettings] = [
+        ChatRateLimitSettings(
+            chat_id="__default__",
+            label="All multibook chats",
+            messages_per_interval=10,
+            interval_seconds=60,
+            burst_allowance=2,
+        ),
+        ChatRateLimitSettings(
+            chat_id="-1002003004001",
+            label="Ops Primary Multibook",
+            messages_per_interval=8,
+            interval_seconds=60,
+            burst_allowance=2,
+        ),
+        ChatRateLimitSettings(
+            chat_id="-1002003004002",
+            label="VIP Multibook Escalations",
+            messages_per_interval=5,
+            interval_seconds=60,
+            burst_allowance=1,
+        ),
+    ]
 
     def __init__(self, db: Optional[sqlite3.Connection] = None):
         """
@@ -60,11 +88,42 @@ class CoverageProofService:
 
         # Rate limiting tracking: {chat_id: [(timestamp, message_count), ...]}
         self._rate_limit_tracker: Dict[str, List[Tuple[float, int]]] = {}
+        self._rate_limit_store = RateLimitSettingsStore()
+        self._rate_limit_profiles: "OrderedDict[str, ChatRateLimitSettings]" = (
+            self._rate_limit_store.load(self.DEFAULT_CHAT_RATE_LIMITS)
+        )
+        self._rate_limit_profiles_version = self._rate_limit_store.current_version()
 
     def close(self) -> None:
         """Close database connection if owned by this service."""
         if self._owns_connection and self.db:
             self.db.close()
+
+    def _ensure_rate_limit_profiles_current(self) -> None:
+        """Reload operator overrides if the backing file changed."""
+        current_version = self._rate_limit_store.current_version()
+        if current_version != self._rate_limit_profiles_version:
+            self._rate_limit_profiles = self._rate_limit_store.load(
+                self.DEFAULT_CHAT_RATE_LIMITS
+            )
+            self._rate_limit_profiles_version = current_version
+
+    def _get_chat_rate_limit_settings(
+        self, chat_id: Optional[str]
+    ) -> ChatRateLimitSettings:
+        """Return the configured profile for a chat or fall back to defaults."""
+        self._ensure_rate_limit_profiles_current()
+        if chat_id and chat_id in self._rate_limit_profiles:
+            return self._rate_limit_profiles[chat_id]
+        if "__default__" in self._rate_limit_profiles:
+            return self._rate_limit_profiles["__default__"]
+        # As a final fallback return the first configured profile.
+        return next(iter(self._rate_limit_profiles.values()))
+
+    def get_rate_limit_profiles(self) -> List[ChatRateLimitSettings]:
+        """Expose the hydrated profiles for UI surfaces."""
+        self._ensure_rate_limit_profiles_current()
+        return list(self._rate_limit_profiles.values())
 
     def get_opposite_screenshots(
         self, surebet_id: int, side: str
@@ -211,9 +270,12 @@ class CoverageProofService:
         if chat_ids is not None and not chat_ids:
             return {}
 
-        window_start = datetime.now(timezone.utc) - timedelta(
-            seconds=self.RATE_LIMIT_WINDOW_SECONDS
+        profiles = self.get_rate_limit_profiles()
+        longest_window = max(
+            (profile.interval_seconds for profile in profiles),
+            default=self.RATE_LIMIT_WINDOW_SECONDS,
         )
+        window_start = datetime.now(timezone.utc) - timedelta(seconds=longest_window)
         window_start_iso = self._format_utc(window_start)
 
         params: List[Any] = []
@@ -228,8 +290,7 @@ class CoverageProofService:
         query = f"""
             SELECT
                 assoc.multibook_chat_id AS chat_id,
-                COUNT(*) AS attempt_count,
-                MIN(COALESCE(log.sent_at_utc, log.created_at_utc)) AS oldest_attempt
+                COALESCE(log.sent_at_utc, log.created_at_utc) AS attempt_at
             FROM multibook_message_log log
             JOIN associates assoc ON assoc.id = log.associate_id
             WHERE
@@ -237,24 +298,29 @@ class CoverageProofService:
                 AND assoc.multibook_chat_id IS NOT NULL
                 {chat_filter}
                 AND COALESCE(log.sent_at_utc, log.created_at_utc) >= ?
-            GROUP BY assoc.multibook_chat_id
         """
 
+        attempt_map: Dict[str, List[datetime]] = {}
         cooldowns: Dict[str, Dict[str, Any]] = {}
         now = datetime.now(timezone.utc)
         for row in self.db.execute(query, params).fetchall():
             chat_id = row["chat_id"]
-            attempt_count = int(row["attempt_count"])
-            oldest_dt = self._parse_iso_timestamp(row["oldest_attempt"])
+            attempt_at = self._parse_iso_timestamp(row["attempt_at"])
+            if not chat_id or attempt_at is None:
+                continue
+            attempt_map.setdefault(chat_id, []).append(attempt_at)
+
+        for chat_id, attempts in attempt_map.items():
+            settings = self._get_chat_rate_limit_settings(chat_id)
+            window_seconds = settings.interval_seconds
+            cutoff = now - timedelta(seconds=window_seconds)
+            recent_attempts = [ts for ts in attempts if ts >= cutoff]
+            attempt_count = len(recent_attempts)
             seconds_remaining = 0
-            if (
-                attempt_count >= self.RATE_LIMIT_MESSAGES_PER_MINUTE
-                and oldest_dt is not None
-            ):
+            if attempt_count >= settings.total_allowed and recent_attempts:
+                oldest_dt = min(recent_attempts)
                 elapsed = (now - oldest_dt).total_seconds()
-                seconds_remaining = max(
-                    0, int(self.RATE_LIMIT_WINDOW_SECONDS - elapsed)
-                )
+                seconds_remaining = max(0, int(window_seconds - elapsed))
 
             cooldowns[chat_id] = {
                 "seconds_remaining": seconds_remaining,
@@ -383,7 +449,10 @@ class CoverageProofService:
             - wait_seconds: Seconds to wait before sending (0 if allowed)
         """
         current_time = time.time()
-        window_start = current_time - self.RATE_LIMIT_WINDOW_SECONDS
+        settings = self._get_chat_rate_limit_settings(chat_id)
+        window_seconds = settings.interval_seconds
+        allowed_messages = settings.total_allowed
+        window_start = current_time - window_seconds
 
         # Clean up old entries outside the rate limit window
         if chat_id in self._rate_limit_tracker:
@@ -398,10 +467,10 @@ class CoverageProofService:
             count for ts, count in self._rate_limit_tracker.get(chat_id, [])
         )
 
-        if message_count >= self.RATE_LIMIT_MESSAGES_PER_MINUTE:
+        if message_count >= allowed_messages and self._rate_limit_tracker.get(chat_id):
             # Calculate wait time until oldest message exits the window
             oldest_timestamp = self._rate_limit_tracker[chat_id][0][0]
-            wait_seconds = oldest_timestamp + self.RATE_LIMIT_WINDOW_SECONDS - current_time
+            wait_seconds = oldest_timestamp + window_seconds - current_time
             return False, max(0, wait_seconds)
 
         return True, 0.0

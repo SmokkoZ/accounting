@@ -20,6 +20,16 @@ _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_INITIALIZED = False
 
 
+class RowWithGet(sqlite3.Row):
+    """sqlite3.Row that also exposes ``dict.get`` semantics."""
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except (IndexError, KeyError, TypeError):
+            return default
+
+
 def ensure_data_directory() -> None:
     """Create the data directory if it doesn't exist."""
     db_path = Path(Config.DB_PATH)
@@ -46,9 +56,9 @@ def get_db_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     # Ensure data directory exists
     ensure_data_directory()
 
-    # Create connection with row factory for dict-like access
+    # Create connection with row factory providing dict-like ``get``
     conn = sqlite3.connect(db_path, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+    conn.row_factory = RowWithGet
 
     # Configure SQLite for optimal performance and data integrity
     conn.execute("PRAGMA foreign_keys = ON")  # Enforce referential integrity

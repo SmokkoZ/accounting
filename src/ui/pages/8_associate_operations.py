@@ -29,7 +29,6 @@ from src.ui.components.associate_hub import (
 )
 from src.ui.helpers.dialogs import open_dialog, render_confirmation_dialog
 from src.ui.helpers.fragments import fragment
-from src.ui.helpers.streaming import status_with_steps
 from src.ui.ui_components import load_global_styles
 from src.ui.utils.formatters import (
     format_currency_amount,
@@ -415,35 +414,18 @@ def main() -> None:
         return
 
     def render_listing_section() -> None:
-        load_label = "Loading associate data..."
-        payload: Dict[str, Any] = {}
-
-        def _load_payload() -> None:
-            (
-                payload["associates"],
-                payload["bookmakers"],
-                payload["total_count"],
-            ) = _load_associate_payload(repository, filter_state)
-
         try:
-            for _ in status_with_steps(
-                load_label,
-                [("Fetch associates", _load_payload)],
-                expanded=False,
-            ):
-                pass
+            associates, bookmakers_map, total_count = _load_associate_payload(
+                repository, filter_state
+            )
         except Exception as exc:
             st.error(f"Failed to load associate data: {exc}")
             logger.error("data_loading_failed", error=str(exc), exc_info=True)
             return
 
-        associates = payload.get("associates", [])
-        bookmakers = payload.get("bookmakers", [])
-        total_count = int(payload.get("total_count", 0))
-
         if associates:
             render_hub_dashboard(associates)
-            render_associate_listing(associates, bookmakers)
+            render_associate_listing(associates, bookmakers_map)
             render_pagination_info(total_count, filter_state)
         else:
             render_empty_state(filter_state)
@@ -451,7 +433,7 @@ def main() -> None:
         if st.session_state.get("show_debug_info"):
             st.markdown("### Debug Info")
             st.write(f"Associates returned: {len(associates)}")
-            st.write(f"Bookmakers loaded: {len(bookmakers)}")
+            st.write(f"Bookmakers loaded: {len(bookmakers_map)}")
             st.write(f"Current filter state: {filter_state}")
 
     @fragment("associate_hub.listing", run_every=60)

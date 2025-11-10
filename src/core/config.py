@@ -70,6 +70,9 @@ class Config:
     SCREENSHOT_DIR: str = os.getenv("SCREENSHOT_DIR", "data/screenshots")
     EXPORT_DIR: str = os.getenv("EXPORT_DIR", "data/exports")
     LOG_DIR: str = os.getenv("LOG_DIR", "data/logs")
+    RATE_LIMIT_SETTINGS_PATH: str = os.getenv(
+        "RATE_LIMIT_SETTINGS_PATH", "data/rate_limit_settings.json"
+    )
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

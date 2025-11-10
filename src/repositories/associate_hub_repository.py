@@ -232,7 +232,8 @@ class AssociateHubRepository:
             # Calculate should_hold and delta
             net_deposits = Decimal(str(row["net_deposits_eur"])).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
             current_holding = Decimal(str(row["current_holding_eur"])).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
-            pending_balance = Decimal(str(row.get("pending_balance_eur", 0))).quantize(
+            pending_raw = row["pending_balance_eur"]
+            pending_balance = Decimal(str(pending_raw if pending_raw is not None else 0)).quantize(
                 TWO_PLACES, rounding=ROUND_HALF_UP
             )
             delta_eur = current_holding - net_deposits

@@ -75,6 +75,57 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
     active_filter_count = get_active_filters_count(current_state)
 
     with st.container():
+        st.markdown(
+            """
+            <style>
+            .hub-filter-label {
+                font-size: 0.78rem;
+                color: #94a3b8;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                display: inline-flex;
+                align-items: center;
+                gap: 0.25rem;
+                margin-bottom: 0.15rem;
+            }
+            .hub-filter-label .divider {
+                width: 8px;
+                height: 1px;
+                background: rgba(148, 163, 184, 0.65);
+                display: inline-block;
+            }
+            .hub-filter-page-pill {
+                font-size: 1.1rem;
+                font-weight: 600;
+                color: #e5e7eb;
+                background: rgba(255, 255, 255, 0.04);
+                border: 1px solid var(--border, #1f2937);
+                border-radius: 10px;
+                padding: 0.4rem 0.9rem;
+                min-height: 66px;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                gap: 0.2rem;
+            }
+            .hub-filter-page-pill span {
+                font-size: 0.7rem;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                color: #94a3b8;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        def _compact_label(text: str) -> None:
+            st.markdown(
+                f'<span class="hub-filter-label"><span class="divider"></span>{text}</span>',
+                unsafe_allow_html=True,
+            )
+
         st.subheader("Filters & Search")
 
         top_cols = st.columns([3, 1, 1])
@@ -119,14 +170,20 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
 
         st.divider()
 
-        filter_cols = st.columns(3)
+        filter_cols = st.columns(
+            (1.15, 1.1, 1.1, 1.0, 0.9, 0.65, 0.45),
+            gap="small",
+        )
 
         with filter_cols[0]:
+            _compact_label("Admin Status")
             admin_selection = st.multiselect(
                 "Admin Status",
                 options=list(ADMIN_LABELS.values()),
                 default=_labels_from_state(current_state["admin_filter"], ADMIN_LABELS),
                 key="hub_admin_filter_select",
+                label_visibility="collapsed",
+                placeholder="Choose options",
                 help="Filter by whether the associate has admin privileges.",
             )
             admin_filter = _flags_from_selection(admin_selection, ADMIN_LABELS)
@@ -135,11 +192,14 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 should_refresh = True
 
         with filter_cols[1]:
+            _compact_label("Associate Status")
             associate_selection = st.multiselect(
                 "Associate Status",
                 options=list(STATUS_LABELS.values()),
                 default=_labels_from_state(current_state["associate_status_filter"], STATUS_LABELS),
                 key="hub_associate_status_filter_select",
+                label_visibility="collapsed",
+                placeholder="Choose options",
                 help="Filter by whether the associate is active.",
             )
             associate_filter = _flags_from_selection(associate_selection, STATUS_LABELS)
@@ -148,11 +208,14 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 should_refresh = True
 
         with filter_cols[2]:
+            _compact_label("Bookmaker Status")
             bookmaker_selection = st.multiselect(
                 "Bookmaker Status",
                 options=list(STATUS_LABELS.values()),
                 default=_labels_from_state(current_state["bookmaker_status_filter"], STATUS_LABELS),
                 key="hub_bookmaker_status_filter_select",
+                label_visibility="collapsed",
+                placeholder="Choose options",
                 help="Filter by whether any bookmaker mapped to the associate is active.",
             )
             bookmaker_filter = _flags_from_selection(bookmaker_selection, STATUS_LABELS)
@@ -160,9 +223,8 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 update_filter_state(bookmaker_status_filter=bookmaker_filter, page=0)
                 should_refresh = True
 
-        control_cols = st.columns([1, 1, 1, 1])
-
-        with control_cols[0]:
+        with filter_cols[3]:
+            _compact_label("Currencies")
             currency_cache_key = "hub_currency_options"
             if currency_cache_key not in st.session_state:
                 try:
@@ -180,6 +242,8 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 options=currencies,
                 default=current_state["currency_filter"],
                 key="hub_currency_filter_select",
+                label_visibility="collapsed",
+                placeholder="Choose options",
                 help="Filter associates by their home currency.",
             )
             if currency_selection != current_state["currency_filter"]:
@@ -200,12 +264,14 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
         )
         selected_sort_label = current_sort_label
 
-        with control_cols[1]:
+        with filter_cols[4]:
+            _compact_label("Sort By")
             selected_label = st.selectbox(
                 "Sort By",
                 options=sort_labels,
                 index=sort_labels.index(current_sort_label),
                 key="hub_sort_by_select",
+                label_visibility="collapsed",
                 help="Sort order for the associate listing.",
             )
             selected_sort_label = selected_label
@@ -213,21 +279,31 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 update_filter_state(sort_by=sort_options[selected_label], page=0)
                 should_refresh = True
 
-        with control_cols[2]:
+        with filter_cols[5]:
+            _compact_label("Page Size")
             page_size_options = [10, 25, 50, 100]
             page_size = st.selectbox(
                 "Page Size",
                 options=page_size_options,
                 index=page_size_options.index(current_state["page_size"]),
                 key="hub_page_size_select",
+                label_visibility="collapsed",
                 help="Number of associates to show per page.",
             )
             if page_size != current_state["page_size"]:
                 update_filter_state(page_size=page_size, page=0)
                 should_refresh = True
 
-        with control_cols[3]:
-            st.caption(f"Page: {current_state['page'] + 1}")
+        with filter_cols[6]:
+            st.markdown(
+                f"""
+                <div class="hub-filter-page-pill">
+                    <span>Page</span>
+                    {current_state['page'] + 1}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         st.divider()
 

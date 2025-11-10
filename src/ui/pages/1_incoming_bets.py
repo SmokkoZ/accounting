@@ -10,24 +10,34 @@ This page provides:
 - Inline editing and approval/rejection actions (Epic 2)
 """
 
-import streamlit as st
-import structlog
 from decimal import Decimal
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
+
+import streamlit as st
+import structlog
 
 from src.ui.cache import get_cached_connection, invalidate_query_cache, query_df
 from src.services.bet_verification import BetVerificationService
 from src.services.matching_service import MatchingService, MatchingSuggestions
+from src.ui.components.keyboard_shortcuts_listener import (
+    keyboard_shortcuts_listener,
+)
 from src.ui.components.manual_upload import render_manual_upload_panel
 from src.ui.components.bet_card import render_bet_card
 from src.ui.helpers import auto_refresh as auto_refresh_helper
+from src.ui.helpers import saved_views
 from src.ui.helpers import url_state
 from src.ui.helpers.fragments import (
     call_fragment,
     fragments_supported,
     render_debug_panel,
     render_debug_toggle,
+)
+from src.ui.helpers.keyboard_shortcuts import (
+    build_hotkey_help_rows,
+    group_shortcuts_by_category,
+    resolve_hotkey_toggle_state,
 )
 from src.ui.utils import feature_flags
 from src.ui.ui_components import advanced_section, form_gated_filters, load_global_styles
@@ -37,6 +47,39 @@ from src.ui.utils.performance import track_timing
 from src.ui.utils.state_management import render_reset_control, safe_rerun
 
 logger = structlog.get_logger()
+
+HOTKEY_TOGGLE_KEY = "incoming_hotkeys_enabled"
+HOTKEY_REQUESTED_STATE_KEY = "incoming_hotkeys_requested_state"
+HOTKEY_ACTION_STATE_KEY = "incoming_hotkey_action"
+HOTKEY_OVERLAY_STATE_KEY = "incoming_hotkeys_overlay_open"
+HOTKEY_STORAGE_KEY = "incoming-hotkeys-enabled"
+SEARCH_QUERY_KEY = "incoming_search_query"
+SEARCH_CONTAINER_ID = "incoming-hotkey-search"
+BET_CARD_DATA_ATTR = "data-hotkey-bet-card"
+
+_FILTER_FORM_KEY = "incoming_filters"
+_ASSOCIATE_FILTER_KEY = "incoming_filters_associates"
+_BOOKMAKER_FILTER_KEY = "incoming_filters_bookmakers"
+_BET_TYPE_FILTER_KEY = "incoming_filters_bet_type"
+_CONFIDENCE_FILTER_KEY = "incoming_filters_confidence"
+
+_BOOKMAKER_QUERY_KEY = "bookmaker"
+_BET_TYPE_QUERY_KEY = "bet"
+_CONFIDENCE_QUERY_KEY = "confidence"
+
+_BET_TYPE_OPTIONS: Sequence[tuple[str, Optional[str]]] = (
+    ("All bet types", None),
+    ("Singles (1-leg)", "single"),
+    ("Multi-leg (parlay)", "multi"),
+)
+
+_CONFIDENCE_OPTIONS: Sequence[tuple[str, Optional[str]]] = (
+    ("All", None),
+    ("High (>=80%)", "high"),
+    ("Medium (50-79%)", "medium"),
+    ("Low (<50%)", "low"),
+    ("Failed", "failed"),
+)
 
 
 # Helper functions for approval/rejection workflow
@@ -368,12 +411,65 @@ def _reject_selected_bets(
         if key in st.session_state:
             st.session_state[key] = False
 
-    st.session_state["batch_feedback"] = {
-        "approved": 0,
-        "rejected": successes,
-        "errors": failures,
-    }
-    safe_rerun()
+        st.session_state["batch_feedback"] = {
+            "approved": 0,
+            "rejected": successes,
+            "errors": failures,
+        }
+        safe_rerun()
+
+
+def _handle_hotkey_component_event(event: Mapping[str, Any]) -> None:
+    """Persist keyboard listener events into session state."""
+    kind = event.get("event")
+    if kind == "hotkey":
+        action = event.get("action")
+        if action in {"approve", "reject"}:
+            st.session_state[HOTKEY_ACTION_STATE_KEY] = action
+    elif kind == "toggle_sync":
+        desired = bool(event.get("enabled"))
+        if st.session_state.get(HOTKEY_TOGGLE_KEY) != desired:
+            st.session_state[HOTKEY_REQUESTED_STATE_KEY] = desired
+            st.session_state[HOTKEY_TOGGLE_KEY] = desired
+            safe_rerun("incoming_hotkeys_toggle_sync")
+    elif kind == "help_open":
+        if not st.session_state.get(HOTKEY_OVERLAY_STATE_KEY):
+            st.session_state[HOTKEY_OVERLAY_STATE_KEY] = True
+            safe_rerun("incoming_hotkeys_help_open")
+    elif kind == "help_close":
+        if st.session_state.get(HOTKEY_OVERLAY_STATE_KEY):
+            st.session_state[HOTKEY_OVERLAY_STATE_KEY] = False
+            safe_rerun("incoming_hotkeys_help_close")
+
+
+def _render_hotkey_help_overlay() -> None:
+    """Render the keyboard shortcut overlay when requested."""
+    if not st.session_state.get(HOTKEY_OVERLAY_STATE_KEY):
+        return
+
+    rows = build_hotkey_help_rows()
+    grouped = group_shortcuts_by_category(rows)
+
+    def _body() -> None:
+        st.caption("Keyboard shortcuts are disabled while this help overlay is open. Press Escape to close.")
+        for category, entries in grouped.items():
+            st.markdown(f"### {category}")
+            for entry in entries:
+                st.markdown(f"**{entry.key}** - {entry.label}")
+                st.caption(entry.description)
+        if st.button("Close shortcuts help", key="close_hotkey_overlay"):
+            st.session_state[HOTKEY_OVERLAY_STATE_KEY] = False
+            safe_rerun("incoming_hotkeys_help_close_button")
+
+    if feature_flags.supports_dialogs():
+        @st.dialog(":material/keyboard: Keyboard shortcuts", width="large")
+        def _overlay() -> None:
+            _body()
+
+        _overlay()
+    else:
+        with st.expander("Keyboard shortcuts", expanded=True):
+            _body()
 
 
 _AUTO_REFRESH_INTERVAL_SECONDS = 30
@@ -385,6 +481,49 @@ _AUTO_REFRESH_LAST_RUN_KEY = "_incoming_bets_auto_refresh_last_completed"
 _COMPACT_QUERY_KEY = "compact"
 _COMPACT_TOGGLE_KEY = "incoming_bets_compact_mode"
 _COMPACT_SYNC_KEY = "_incoming_bets_compact_last_synced"
+
+
+def _label_for_slug(options: Sequence[tuple[str, Optional[str]]], slug: Optional[str]) -> str:
+    for label, value in options:
+        if value == slug:
+            return label
+    return options[0][0]
+
+
+def _slug_for_label(options: Sequence[tuple[str, Optional[str]]], label: str) -> Optional[str]:
+    for option_label, slug in options:
+        if option_label == label:
+            return slug
+    return None
+
+
+def _sanitize_multiselect_selection(selection: Sequence[str], valid_options: Sequence[str]) -> List[str]:
+    valid_set = set(valid_options)
+    cleaned: List[str] = []
+    seen = set()
+    for value in selection:
+        if value == "All" or value not in valid_set or value in seen:
+            continue
+        cleaned.append(value)
+        seen.add(value)
+    return cleaned
+
+
+def _prime_filter_defaults_from_saved_view(
+    snapshot: saved_views.SavedViewSnapshot,
+    *,
+    bookmaker_options: Sequence[str],
+) -> None:
+    if snapshot.bookmaker and _BOOKMAKER_FILTER_KEY not in st.session_state:
+        valid = [value for value in snapshot.bookmaker if value in bookmaker_options]
+        if valid:
+            st.session_state[_BOOKMAKER_FILTER_KEY] = valid
+
+    if snapshot.bet_type and _BET_TYPE_FILTER_KEY not in st.session_state:
+        st.session_state[_BET_TYPE_FILTER_KEY] = _label_for_slug(_BET_TYPE_OPTIONS, snapshot.bet_type)
+
+    if snapshot.confidence and _CONFIDENCE_FILTER_KEY not in st.session_state:
+        st.session_state[_CONFIDENCE_FILTER_KEY] = _label_for_slug(_CONFIDENCE_OPTIONS, snapshot.confidence)
 
 
 def _read_compact_mode_from_query() -> bool:
@@ -427,9 +566,12 @@ def _render_compact_mode_toggle() -> bool:
 def _render_incoming_bets_queue(
     *,
     associate_filter: List[str],
+    bookmaker_filter: List[str],
+    bet_type_filter: Optional[str],
     confidence_filter: str,
     auto_refresh_enabled: bool,
     compact_mode: bool,
+    search_term: str,
 ) -> None:
     """Render the incoming bets queue within an isolated fragment."""
     st.subheader(":material/list_alt: Bets Awaiting Review")
@@ -456,10 +598,32 @@ def _render_incoming_bets_queue(
                 filters = ["b.status = 'incoming'"]
                 query_params: List[Any] = []
 
-                if "All" not in associate_filter and associate_filter:
+                if search_term:
+                    search_value = f"%{search_term.lower()}%"
+                    filters.append(
+                        "("
+                        "LOWER(a.display_alias) LIKE ? OR "
+                        "LOWER(bk.bookmaker_name) LIKE ? OR "
+                        "LOWER(IFNULL(b.selection_text, '')) LIKE ? OR "
+                        "CAST(b.id AS TEXT) LIKE ?"
+                        ")"
+                    )
+                    query_params.extend([search_value, search_value, search_value, search_value])
+
+                if associate_filter:
                     placeholders = ",".join(["?" for _ in associate_filter])
                     filters.append(f"a.display_alias IN ({placeholders})")
                     query_params.extend(associate_filter)
+
+                if bookmaker_filter:
+                    placeholders = ",".join(["?" for _ in bookmaker_filter])
+                    filters.append(f"bk.bookmaker_name IN ({placeholders})")
+                    query_params.extend(bookmaker_filter)
+
+                if bet_type_filter == "single":
+                    filters.append("(b.is_multi IS NULL OR b.is_multi = 0)")
+                elif bet_type_filter == "multi":
+                    filters.append("b.is_multi = 1")
 
                 if confidence_filter != "All":
                     if confidence_filter == "High (>=80%)":
@@ -545,6 +709,10 @@ def _render_incoming_bets_queue(
                     with select_col:
                         selected = st.checkbox("Select", key=checkbox_key)
                     with card_col:
+                        st.markdown(
+                            f"<div {BET_CARD_DATA_ATTR}=\"{bet_id}\">",
+                            unsafe_allow_html=True,
+                        )
                         render_bet_card(
                             bet_dict,
                             show_actions=True,
@@ -553,9 +721,25 @@ def _render_incoming_bets_queue(
                             matching_suggestions=suggestions,
                             compact_mode=compact_mode,
                         )
+                        st.markdown("</div>", unsafe_allow_html=True)
 
                     if selected:
                         selected_batch_ids.append(bet_id)
+
+                hotkey_action = st.session_state.pop(HOTKEY_ACTION_STATE_KEY, None)
+                if hotkey_action in {"approve", "reject"}:
+                    if selected_batch_ids:
+                        if hotkey_action == "approve":
+                            _approve_selected_bets(
+                                selected_batch_ids,
+                                verification_service,
+                                bets_by_id,
+                                suggestions_by_bet,
+                            )
+                        else:
+                            _reject_selected_bets(selected_batch_ids, verification_service)
+                    else:
+                        st.warning("Select at least one bet before using keyboard approvals.", icon=":material/keyboard:")
 
                 if compact_mode:
                     st.markdown(
@@ -605,6 +789,15 @@ load_global_styles()
 
 st.title(f"{PAGE_ICON} {PAGE_TITLE}")
 
+saved_view_manager = saved_views.SavedViewManager(slug="incoming_bets_filters")
+initial_saved_view = saved_view_manager.get_snapshot()
+if initial_saved_view.compact is not None and _COMPACT_TOGGLE_KEY not in st.session_state:
+    st.session_state[_COMPACT_TOGGLE_KEY] = initial_saved_view.compact
+    st.session_state[_COMPACT_SYNC_KEY] = initial_saved_view.compact
+if initial_saved_view.auto is not None and _AUTO_REFRESH_KEY not in st.session_state:
+    st.session_state[_AUTO_REFRESH_KEY] = initial_saved_view.auto
+    st.session_state[_AUTO_REFRESH_SYNC_KEY] = initial_saved_view.auto
+
 batch_feedback = st.session_state.pop("batch_feedback", None)
 if batch_feedback:
     if batch_feedback.get("approved"):
@@ -619,6 +812,7 @@ with toggle_cols[1]:
     render_debug_toggle(":material/monitor_heart: Performance debug")
 with toggle_cols[2]:
     compact_mode_enabled = _render_compact_mode_toggle()
+saved_view_manager.save(compact=compact_mode_enabled)
 
 # Manual upload panel at top (collapsible)
 with st.expander(":material/cloud_upload: Upload Manual Bet", expanded=False):
@@ -634,11 +828,70 @@ with action_cols[1]:
         prefixes=("incoming_", "filters_", "dialog_", "advanced_", "approve_", "reject_"),
     )
 
+requested_toggle_state = st.session_state.pop(HOTKEY_REQUESTED_STATE_KEY, None)
+resolve_hotkey_toggle_state(
+    st.session_state,
+    session_key=HOTKEY_TOGGLE_KEY,
+    requested_state=requested_toggle_state,
+    default_enabled=True,
+)
+
+keyboard_cols = st.columns([5, 2, 1])
+with keyboard_cols[0]:
+    st.caption("Press ? to open the shortcut overlay. A/R/E map to approve, reject, and edit.")
+with keyboard_cols[1]:
+    hotkeys_enabled = st.toggle(
+        ":material/keyboard: Enable keyboard shortcuts",
+        key=HOTKEY_TOGGLE_KEY,
+        help="Persisted in this browser session via sessionStorage for quick triage resumes.",
+    )
+hotkeys_enabled = bool(st.session_state.get(HOTKEY_TOGGLE_KEY, True))
+with keyboard_cols[2]:
+    if st.button(":material/help: Shortcut help (?)", key="incoming_hotkey_help_button"):
+        st.session_state[HOTKEY_OVERLAY_STATE_KEY] = True
+        safe_rerun("incoming_hotkeys_help_button")
+
+with st.container():
+    st.markdown(f"<div id=\"{SEARCH_CONTAINER_ID}\" data-hotkey-search=\"true\">", unsafe_allow_html=True)
+    search_query_value = st.text_input(
+        "Search bets",
+        key=SEARCH_QUERY_KEY,
+        value=st.session_state.get(SEARCH_QUERY_KEY, ""),
+        placeholder="Alias, bookmaker, selection text, or bet ID",
+        help="Filters the incoming queue (matches aliases, bookmakers, selections, and IDs).",
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+search_query = (search_query_value or "").strip()
+
+overlay_open = bool(st.session_state.get(HOTKEY_OVERLAY_STATE_KEY))
+hotkey_event = keyboard_shortcuts_listener(
+    storageKey=HOTKEY_STORAGE_KEY,
+    hotkeys=[
+        {"key": "a", "action": "approve"},
+        {"key": "r", "action": "reject"},
+        {"key": "e", "action": "focus_edit"},
+    ],
+    hotkeysEnabled=bool(hotkeys_enabled),
+    overlayOpen=overlay_open,
+    searchFocusSelector=f"#{SEARCH_CONTAINER_ID} input",
+    editFocusSelector=f"[{BET_CARD_DATA_ATTR}] input, [{BET_CARD_DATA_ATTR}] textarea, [{BET_CARD_DATA_ATTR}] select",
+)
+if isinstance(hotkey_event, Mapping):
+    _handle_hotkey_component_event(hotkey_event)
+
 # Metrics and filters
 filter_state: dict[str, object] = {
     "associate_filter": ["All"],
-    "confidence_filter": "All",
+    "bookmaker_filter": ["All"],
+    "bet_type_filter": _BET_TYPE_OPTIONS[0][0],
+    "confidence_filter": _CONFIDENCE_OPTIONS[0][0],
 }
+active_associate_filter: List[str] = []
+active_bookmaker_filter: List[str] = []
+bet_type_slug: Optional[str] = None
+confidence_label = _CONFIDENCE_OPTIONS[0][0]
+confidence_slug: Optional[str] = None
 
 try:
     try:
@@ -666,62 +919,119 @@ try:
 
     st.markdown("---")
 
+    try:
+        associates_df = query_df(
+            "SELECT DISTINCT display_alias FROM associates ORDER BY display_alias"
+        )
+        associate_options = ["All"] + associates_df["display_alias"].dropna().tolist()
+    except Exception as exc:
+        logger.error("failed_to_load_associates", error=str(exc))
+        st.warning("Unable to load associate list. Showing only 'All'.")
+        associate_options = ["All"]
+
+    try:
+        bookmakers_df = query_df(
+            "SELECT DISTINCT bookmaker_name FROM bookmakers ORDER BY bookmaker_name"
+        )
+        bookmaker_options = ["All"] + bookmakers_df["bookmaker_name"].dropna().tolist()
+    except Exception as exc:
+        logger.error("failed_to_load_bookmakers", error=str(exc))
+        st.warning("Unable to load bookmaker list. Showing only 'All'.")
+        bookmaker_options = ["All"]
+
+    saved_filter_snapshot = saved_view_manager.get_snapshot(
+        bookmaker_options=[option for option in bookmaker_options if option != "All"]
+    )
+    _prime_filter_defaults_from_saved_view(
+        saved_filter_snapshot,
+        bookmaker_options=[option for option in bookmaker_options if option != "All"],
+    )
+
+    bet_type_labels = [label for label, _ in _BET_TYPE_OPTIONS]
+    confidence_labels = [label for label, _ in _CONFIDENCE_OPTIONS]
+
     def _render_filter_controls() -> dict[str, object]:
         filter_col1, filter_col2 = st.columns(2)
 
         with filter_col1:
-            try:
-                associates_df = query_df(
-                    "SELECT DISTINCT display_alias FROM associates ORDER BY display_alias"
-                )
-                associate_options = ["All"] + associates_df["display_alias"].dropna().tolist()
-            except Exception as exc:
-                logger.error("failed_to_load_associates", error=str(exc))
-                st.warning("Unable to load associate list. Showing only 'All'.")
-                associate_options = ["All"]
-
             associate_filter = st.multiselect(
                 "Filter by Associate",
                 options=associate_options,
                 default=associate_options[:1],
-                key="incoming_filters_associates",
+                key=_ASSOCIATE_FILTER_KEY,
+            )
+            bookmaker_filter = st.multiselect(
+                "Filter by Bookmaker",
+                options=bookmaker_options,
+                default=bookmaker_options[:1],
+                key=_BOOKMAKER_FILTER_KEY,
             )
 
         with filter_col2:
-            confidence_options = [
-                "All",
-                "High (>=80%)",
-                "Medium (50-79%)",
-                "Low (<50%)",
-                "Failed",
-            ]
+            bet_type_filter = st.selectbox(
+                "Filter by Bet Type",
+                options=bet_type_labels,
+                key=_BET_TYPE_FILTER_KEY,
+            )
             confidence_filter = st.selectbox(
                 "Filter by Confidence",
-                options=confidence_options,
-                index=0,
-                key="incoming_filters_confidence",
+                options=confidence_labels,
+                key=_CONFIDENCE_FILTER_KEY,
             )
 
         return {
             "associate_filter": associate_filter,
+            "bookmaker_filter": bookmaker_filter,
+            "bet_type_filter": bet_type_filter,
             "confidence_filter": confidence_filter,
         }
 
     with advanced_section():
         filter_state, _ = form_gated_filters(
-            "incoming_filters",
+            _FILTER_FORM_KEY,
             _render_filter_controls,
             submit_label="Apply Filters",
-            help_text="Update the queue with the selected filters.",
+            help_text="Update the queue with the selected filters. Changes persist for saved views.",
         )
+
+    active_associate_filter = _sanitize_multiselect_selection(
+        filter_state["associate_filter"],
+        associate_options,
+    )
+    active_bookmaker_filter = _sanitize_multiselect_selection(
+        filter_state["bookmaker_filter"],
+        bookmaker_options,
+    )
+    bet_type_label = str(filter_state["bet_type_filter"])
+    bet_type_slug = _slug_for_label(_BET_TYPE_OPTIONS, bet_type_label)
+    confidence_label = str(filter_state["confidence_filter"])
+    confidence_slug = _slug_for_label(_CONFIDENCE_OPTIONS, confidence_label)
+
+    url_state.update_query_params(
+        {
+            _BOOKMAKER_QUERY_KEY: active_bookmaker_filter or None,
+            _BET_TYPE_QUERY_KEY: bet_type_slug,
+            _CONFIDENCE_QUERY_KEY: confidence_slug,
+        }
+    )
+    saved_view_manager.save(
+        bookmakers=active_bookmaker_filter or None,
+        bet_type=bet_type_slug,
+        confidence=confidence_slug,
+    )
+
+    st.caption(
+        ":material/save: Saved views sync filters to the URL and a 30-day local preference cache per `docs/front-end-spec.md:1`."
+    )
 
     st.markdown("---")
 except Exception as exc:
     logger.error("incoming_filter_failure", error=str(exc), exc_info=True)
     st.error("Failed to prepare filters; falling back to defaults.")
 
-associate_filter = filter_state["associate_filter"]
-confidence_filter = filter_state["confidence_filter"]
+associate_filter = active_associate_filter
+bookmaker_filter = active_bookmaker_filter
+confidence_filter = confidence_label
 
 auto_refresh_supported = fragments_supported()
 default_auto_refresh_state = auto_refresh_helper.resolve_toggle_state(
@@ -731,18 +1041,22 @@ default_auto_refresh_state = auto_refresh_helper.resolve_toggle_state(
     supported=auto_refresh_supported,
     default_on=True,
 )
+toggle_initial_value = (
+    {} if _AUTO_REFRESH_KEY in st.session_state else {"value": default_auto_refresh_state}
+)
 auto_refresh_enabled = st.toggle(
     ":material/autorenew: Auto-refresh queue (30s)",
     key=_AUTO_REFRESH_KEY,
-    value=default_auto_refresh_state,
     help="Run the incoming bets fragment on an interval when available.",
     disabled=not auto_refresh_supported,
+    **toggle_initial_value,
 )
 auto_refresh_helper.persist_query_state(
     value=auto_refresh_enabled,
     query_key=_AUTO_REFRESH_QUERY_KEY,
     sync_key=_AUTO_REFRESH_SYNC_KEY,
 )
+saved_view_manager.save(auto=auto_refresh_enabled)
 st.caption(
     auto_refresh_helper.format_status(
         enabled=auto_refresh_enabled,
@@ -764,9 +1078,13 @@ call_fragment(
     _render_incoming_bets_queue,
     run_every=auto_refresh_run_every,
     associate_filter=associate_filter,
+    bookmaker_filter=bookmaker_filter,
+    bet_type_filter=bet_type_slug,
     confidence_filter=confidence_filter,
     auto_refresh_enabled=bool(auto_refresh_run_every),
     compact_mode=compact_mode_enabled,
+    search_term=search_query,
 )
 
+_render_hotkey_help_overlay()
 render_debug_panel()
