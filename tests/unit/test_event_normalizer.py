@@ -24,3 +24,19 @@ def test_normalize_preserves_hyphenated_club_names() -> None:
         "Lens",
         "Paris Saint-Germain Fc",
     )
+
+
+def test_normalize_removes_duplicate_team_phrase() -> None:
+    """Duplicate team strings should collapse to a single occurrence."""
+    raw = "Eintracht Frankfurt Eintracht Frankfurt vs Bayern Munich"
+
+    normalized = EventNormalizer.normalize_event_name(raw)
+    assert normalized == "Eintracht Frankfurt vs Bayern Munich"
+
+
+def test_normalize_collapses_repeated_word_within_team() -> None:
+    """Duplicate trailing tokens are stripped from team names."""
+    raw = "Real Madrid Madrid vs Barcelona"
+
+    normalized = EventNormalizer.normalize_event_name(raw)
+    assert normalized == "Real Madrid vs Barcelona"

@@ -100,10 +100,10 @@ _METRIC_CARDS: tuple[MetricCardDefinition, ...] = (
         key="open_surebets",
         label="Open Surebets",
         description="Active opportunities",
-        link_script="pages/2_verified_bets.py",
-        link_label="Surebets",
+        link_script="pages/2_surebets_summary.py",
+        link_label="Surebets Summary",
         link_icon=":material/target:",
-        help_text="Open Surebets to inspect safety and ROI details.",
+        help_text="Open Surebets Summary to inspect safety and ROI details.",
     ),
     MetricCardDefinition(
         key="pending_settlements",
@@ -401,8 +401,8 @@ with col_shortcuts:
         help_text="Use sidebar navigation when page links are unavailable.",
     )
     render_navigation_link(
-        "pages/2_verified_bets.py",
-        label="Surebets",
+        "pages/2_surebets_summary.py",
+        label="Surebets Summary",
         icon=":material/target:",
     )
 

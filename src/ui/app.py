@@ -95,11 +95,18 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
         description="Review and triage incoming bets.",
     ),
     PageSpec(
-        title="Surebets",
+        title="Surebets Summary",
         section="Operations",
         icon=":material/target:",
-        script="pages/2_verified_bets.py",
-        description="Manage verified surebets and coverage.",
+        script="pages/2_surebets_summary.py",
+        description="Monitor verified surebets, coverage proofs, and risk.",
+    ),
+    PageSpec(
+        title="Surebets Ready for Settlement",
+        section="Operations",
+        icon=":material/receipt_long:",
+        script="pages/2b_surebets_ready_for_settlement.py",
+        description="Finalize surebets once coverage proof is complete.",
     ),
     PageSpec(
         title="Settlement",

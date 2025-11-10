@@ -502,18 +502,6 @@ if __name__ == "__main__":
         st.session_state["load_end_time"] = time.time()
 
     with st.sidebar:
-        st.divider()
-        st.markdown("### Tips")
-        st.caption("- Search covers aliases, bookmakers, and chat IDs.")
-        st.caption("- Expand rows to reveal bookmaker details and actions.")
-        st.caption("- Funding actions are available within each associate drawer.")
-        st.caption("- Filters persist across refreshes for rapid triage.")
-        st.caption("- Press 'R' to reset filters when keyboard shortcuts are enabled.")
-
-        st.divider()
-        st.markdown("### Help")
-        st.caption("Need assistance? Contact the system administrator.")
-
         if st.session_state.get("is_developer"):
             show_debug = st.checkbox(
                 "Show Debug Info", value=st.session_state.get("show_debug_info", False)

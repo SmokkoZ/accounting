@@ -418,7 +418,7 @@ def test_verified_bets_fragment_registration(monkeypatch, streamlit_stub):
     monkeypatch.setattr("src.utils.logging_config.get_logger", lambda *args, **kwargs: LoggerStub())
     monkeypatch.setattr("asyncio.run", lambda coroutine: [])
 
-    _reload("src.ui.pages.2_verified_bets")
+    _reload("src.ui.pages.2_surebets_summary")
 
     assert recorded, "Expected verified bets page to register fragment"
     call = recorded[-1]

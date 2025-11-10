@@ -158,6 +158,8 @@ class EventNormalizer:
         # Ensure single canonical separator
         s = re.sub(r"\s+vs\s+", " vs ", s, flags=re.IGNORECASE)
 
+        s = EventNormalizer._dedupe_team_names(s)
+
         return s
 
     @staticmethod
@@ -211,3 +213,46 @@ class EventNormalizer:
         s = re.sub(r"[^a-z0-9]+", "-", s)
         s = re.sub(r"-+", "-", s).strip("-")
         return s
+
+    @staticmethod
+    def _dedupe_team_names(normalized: str) -> str:
+        teams = EventNormalizer.split_teams(normalized)
+        if not teams:
+            return normalized
+        t1, t2 = teams
+        clean_t1 = EventNormalizer._dedupe_team_tokens(t1)
+        clean_t2 = EventNormalizer._dedupe_team_tokens(t2)
+        if clean_t1 == t1 and clean_t2 == t2:
+            return normalized
+        return f"{clean_t1} vs {clean_t2}"
+
+    @staticmethod
+    def _dedupe_team_tokens(team: str) -> str:
+        tokens = [tok for tok in re.split(r"\s+", team.strip()) if tok]
+        if not tokens:
+            return team
+
+        lower_tokens = [tok.lower() for tok in tokens]
+        length = len(tokens)
+
+        for pattern_len in range(1, (length // 2) + 1):
+            if length % pattern_len != 0:
+                continue
+            pattern = lower_tokens[:pattern_len]
+            if all(
+                lower_tokens[i : i + pattern_len] == pattern
+                for i in range(0, length, pattern_len)
+            ):
+                tokens = tokens[:pattern_len]
+                lower_tokens = lower_tokens[:pattern_len]
+                break
+
+        deduped_tokens = []
+        prev_lower = None
+        for token, lower_token in zip(tokens, lower_tokens):
+            if lower_token == prev_lower:
+                continue
+            deduped_tokens.append(token)
+            prev_lower = lower_token
+
+        return " ".join(deduped_tokens)

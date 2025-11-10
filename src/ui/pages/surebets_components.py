@@ -1,34 +1,26 @@
 """
-Surebets Safety Dashboard - display open surebets with risk indicators.
-
-This page shows all open surebets with risk classifications, allowing operators
-to prioritize review and identify potentially unsafe positions.
+Shared Surebets helpers for summary and settlement pages.
 """
 
-import streamlit as st
-from decimal import Decimal
-from datetime import date, datetime, timezone
-from pathlib import Path
 import asyncio
-from typing import List, Dict, Optional, Literal
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from pathlib import Path
+from typing import Dict, List, Literal, Optional
+
+import streamlit as st
+
 from src.core.database import get_db_connection
-from src.ui.utils.formatters import (
-    format_percentage,
-    format_utc_datetime_local,
-    format_market_display,
-    get_risk_badge_html,
-)
-from src.services.fx_manager import get_fx_rate, convert_to_eur
 from src.integrations.fx_api_client import fetch_daily_fx_rates
-from src.services.surebet_calculator import SurebetRiskCalculator
 from src.services.coverage_proof_service import CoverageProofService
+from src.services.fx_manager import convert_to_eur, get_fx_rate
 from src.services.ledger_entry_service import (
     LedgerEntryService,
     SettlementCommitError,
     SettlementConfirmation,
 )
-from src.services.settlement_service import SettlementService, BetOutcome
-from src.ui.media import render_thumbnail
+from src.services.settlement_service import BetOutcome, SettlementService
+from src.services.surebet_calculator import SurebetRiskCalculator
 from src.ui.helpers.dialogs import (
     ActionItem,
     open_dialog,
@@ -36,69 +28,67 @@ from src.ui.helpers.dialogs import (
     render_confirmation_dialog,
     render_settlement_confirmation,
 )
-from src.ui.helpers.fragments import (
-    call_fragment,
-    render_debug_panel,
-    render_debug_toggle,
-)
+from src.ui.helpers.fragments import call_fragment, render_debug_panel, render_debug_toggle
 from src.ui.helpers.streaming import (
     handle_streaming_error,
     show_success_toast,
     status_with_steps,
 )
-from src.ui.ui_components import advanced_section, form_gated_filters, load_global_styles
+from src.ui.media import render_thumbnail
 from src.ui.pages.coverage_proof_outbox_panel import (
     LEGACY_OUTBOX_RESEND_PREFIX,
     OUTBOX_RESEND_STATE_PREFIX,
     render_coverage_proof_outbox,
+)
+from src.ui.ui_components import advanced_section, form_gated_filters
+from src.ui.utils.formatters import (
+    format_market_display,
+    format_percentage,
+    format_utc_datetime_local,
+    get_risk_badge_html,
 )
 from src.ui.utils.navigation_links import render_navigation_link
 from src.ui.utils.pagination import paginate
 from src.ui.utils.performance import track_timing
 from src.ui.utils.state_management import render_reset_control, safe_rerun
 from src.utils.logging_config import get_logger
-
 logger = get_logger(__name__)
 
+SUMMARY_PAGE_SCRIPT = "pages/2_surebets_summary.py"
+SETTLEMENT_PAGE_SCRIPT = "pages/2b_surebets_ready_for_settlement.py"
 
-def _set_verified_bets_tab(tab_value: str) -> None:
-    """Keep radio widget and derived state in sync when switching tabs."""
-    st.session_state["verified_bets_active_tab"] = tab_value
-    st.session_state["verified_bets_tab_selector"] = tab_value
+def render_surebets_page_header(description: str) -> None:
+    """Render shared controls and success banners for Surebets pages."""
+    toggle_cols = st.columns([6, 2])
+    with toggle_cols[1]:
+        render_debug_toggle(":material/monitor_heart: Performance debug")
 
+    action_cols = st.columns([6, 2])
+    with action_cols[1]:
+        render_reset_control(
+            key="surebets_page_reset",
+            description="Clear Surebets filters, dialogs, and cached selections.",
+            prefixes=("verified_bets_", "filters_", "advanced_", "dialog_", "settlement_"),
+        )
 
-# Configure page
-PAGE_TITLE = "Surebets"
-PAGE_ICON = ":material/target:"
+    if "settlement_success_message" in st.session_state:
+        st.success(st.session_state.pop("settlement_success_message"))
+        render_navigation_link(
+            "pages/6_reconciliation.py",
+            label="Go To Reconciliation",
+            icon=":material/account_balance:",
+            help_text="Open 'Reconciliation' from navigation to confirm settlement impact.",
+        )
 
-st.set_page_config(page_title=PAGE_TITLE, layout="wide")
-load_global_styles()
+    st.markdown(description)
 
-st.title(f"{PAGE_ICON} {PAGE_TITLE}")
-
-toggle_cols = st.columns([6, 2])
-with toggle_cols[1]:
-    render_debug_toggle(":material/monitor_heart: Performance debug")
-
-action_cols = st.columns([6, 2])
-with action_cols[1]:
-    render_reset_control(
-        key="surebets_page_reset",
-        description="Clear Surebets filters, tab selections, and dialogs.",
-        prefixes=("verified_bets_", "filters_", "advanced_", "dialog_", "settlement_"),
-    )
-
-if "settlement_success_message" in st.session_state:
-    st.success(st.session_state.pop("settlement_success_message"))
-    render_navigation_link(
-        "pages/6_reconciliation.py",
-        label="Go To Reconciliation",
-        icon=":material/account_balance:",
-        help_text="Open 'Reconciliation' from navigation to confirm settlement impact.",
-    )
-
-if st.session_state.pop("pending_settle_tab_click", False):
-    _set_verified_bets_tab("⚖️ Settle")
+def _navigate_to_settlement_page() -> None:
+    """Attempt to navigate to the standalone settlement page."""
+    try:
+        st.switch_page(SETTLEMENT_PAGE_SCRIPT)
+    except Exception:
+        st.session_state["surebets_show_settlement_hint"] = True
+        safe_rerun()
 
 # ========================================
 # Settlement Interface Helper Functions
@@ -754,7 +744,7 @@ def render_surebet_card(surebet: Dict) -> None:
                 ),
                 ActionItem(
                     key="settle",
-                    label="Open Settlement Tab",
+                    label="Open Settlement Page",
                     icon=":material/receipt_long:",
                 ),
             ],
@@ -768,8 +758,7 @@ def render_surebet_card(surebet: Dict) -> None:
             st.session_state[f"pending_resend_id_{surebet_id}"] = True
             safe_rerun()
         elif triggered_action == "settle":
-            st.session_state["pending_settle_tab_click"] = True
-            safe_rerun()
+            _navigate_to_settlement_page()
 
         if st.session_state.get(f"pending_resend_id_{surebet_id}", False):
             decision = render_confirmation_dialog(
@@ -1353,31 +1342,40 @@ for key in list(st.session_state.keys()):
     safe_rerun()
 
 
-# Main page layout controls
-st.markdown("Monitor, settle, and manage all open surebets.")
+# ========================================
+# Page Renderers
+# ========================================
 
-tab_options = ["📊 Overview", "⚖️ Settle"]
-current_tab = st.session_state.get("verified_bets_active_tab", tab_options[0])
-selected_tab = st.radio(
-    "View",
-    tab_options,
-    horizontal=True,
-    label_visibility="collapsed",
-    index=tab_options.index(current_tab),
-    key="verified_bets_tab_selector",
-)
-st.session_state["verified_bets_active_tab"] = selected_tab
+def render_surebets_summary_page() -> None:
+    """Render the Surebets Summary view."""
+    render_surebets_page_header("Monitor, settle, and manage all open surebets.")
 
-if selected_tab == "📊 Overview":
-    st.markdown("Monitor all open surebets and identify risky positions requiring attention.")
+    if st.session_state.pop("surebets_show_settlement_hint", False):
+        st.info(
+            "Use the 'Surebets Ready for Settlement' page to finalize this position.",
+            icon=":material/info:",
+        )
+        render_navigation_link(
+            SETTLEMENT_PAGE_SCRIPT,
+            label="Open Surebets Ready for Settlement",
+            icon=":material/receipt_long:",
+            help_text="Launch the settlement workflow for the selected surebet.",
+        )
+
     st.markdown("### Summary")
     counter_cols = st.columns(2)
     total_open = count_open_surebets()
     total_unsafe = count_unsafe_surebets()
     counter_cols[0].metric("Open Surebets", total_open)
-    counter_cols[1].metric("Unsafe (⚠️)", total_unsafe, delta=None if total_unsafe == 0 else "⚠️ Attention")
+    counter_cols[1].metric(
+        "Unsafe (??)",
+        total_unsafe,
+        delta=None if total_unsafe == 0 else "?? Attention",
+    )
     st.markdown("---")
+
     render_coverage_proof_outbox()
+
     st.markdown("---")
     st.markdown("### Filters & Sorting")
 
@@ -1395,13 +1393,13 @@ if selected_tab == "📊 Overview":
                 key="surebets_sort_by",
             )
         with control_cols[1]:
-            unsafe_only_value = st.checkbox(
-                "Show only unsafe (⚠️)", key="surebets_show_unsafe"
-            )
+            unsafe_only_value = st.checkbox("Show only unsafe (??)", key="surebets_show_unsafe")
         with control_cols[2]:
             associates = ["All"] + load_associates()
             associate_value = st.selectbox(
-                "Filter by associate", associates, key="surebets_filter_associate"
+                "Filter by associate",
+                associates,
+                key="surebets_filter_associate",
             )
         return {
             "sort_by": sort_by_value,
@@ -1428,42 +1426,20 @@ if selected_tab == "📊 Overview":
                 if success:
                     st.success("FX rates updated. Recalculating open surebets...")
                     db_fx = get_db_connection()
-                    rows = db_fx.execute(
-                        "SELECT id FROM surebets WHERE status='open'"
-                    ).fetchall()
+                    rows = db_fx.execute("SELECT id FROM surebets WHERE status='open'").fetchall()
                     calc = SurebetRiskCalculator(db_fx)
                     for r in rows:
                         sid = r["id"]
                         try:
                             data = calc.calculate_surebet_risk(sid)
-                            db_fx.execute(
-                                """
-                                UPDATE surebets
-                                SET worst_case_profit_eur = ?,
-                                    total_staked_eur = ?,
-                                    roi = ?,
-                                    risk_classification = ?,
-                                    updated_at_utc = datetime('now') || 'Z'
-                                WHERE id = ?
-                                """,
-                                (
-                                    str(data["worst_case_profit_eur"]),
-                                    str(data["total_staked_eur"]),
-                                    str(data["roi"]),
-                                    data["risk_classification"],
-                                    sid,
-                                ),
-                            )
-                            db_fx.commit()
-                        except Exception:
-                            pass
+                            if data:
+                                calc.update_cache(sid, data)
+                        except Exception as exc:  # pragma: no cover - log only
+                            logger.error("surebet_fx_recalc_failed", surebet_id=sid, error=str(exc))
                     db_fx.close()
-                    st.success("Open surebets recalculated. Refresh to view updates.")
-                else:
-                    st.error("Failed to update FX rates from API. Check config/network.")
-            except Exception as e:
-                st.error(f"FX update failed: {e}")
-    st.markdown("---")
+            except Exception as exc:
+                st.error(f"FX update failed: {exc}")
+
     call_fragment(
         "surebets.overview.table",
         _render_surebets_overview_fragment,
@@ -1471,9 +1447,14 @@ if selected_tab == "📊 Overview":
         show_unsafe_only=show_unsafe_only,
         filter_associate=filter_associate,
     )
-else:
-    st.markdown('<div id="settle-tab-anchor"></div>', unsafe_allow_html=True)
-    st.markdown("Settle completed surebets in chronological order by kickoff time.")
+
+    render_debug_panel()
+
+
+def render_surebets_settlement_page() -> None:
+    """Render the standalone settlement workflow."""
+    render_surebets_page_header("Settle completed surebets in chronological order by kickoff time.")
+
     st.markdown("### Summary")
     counter_cols = st.columns(2)
     settled_today = count_settled_today()
@@ -1483,6 +1464,7 @@ else:
     st.markdown("---")
     st.markdown("### Surebets Ready for Settlement")
     st.caption("Sorted by kickoff time (oldest first)")
+
     settlement_surebets = load_open_surebets_for_settlement()
     if not settlement_surebets:
         st.info("No open surebets available for settlement.")
@@ -1491,4 +1473,6 @@ else:
         for idx, surebet in enumerate(settlement_surebets):
             render_settlement_surebet_card(surebet, idx)
 
-render_debug_panel()
+    render_debug_panel()
+
+

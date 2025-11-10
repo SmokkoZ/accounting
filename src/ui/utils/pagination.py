@@ -100,10 +100,9 @@ def paginate(
 
     prev_size = session[size_key]
     default_index = unique_options.index(prev_size) if prev_size in unique_options else 0
-    col_size, col_info, col_prev, col_next = st.columns([1.3, 2.6, 1.1, 1.1])
+    col_size, col_goto, col_prev, col_next = st.columns([1.2, 1.2, 1.0, 1.0])
 
     with col_size:
-        st.caption("Rows per page")
         st.selectbox(
             "Rows per page",
             options=unique_options,
@@ -111,6 +110,7 @@ def paginate(
             key=size_key,
             label_visibility="collapsed",
         )
+        st.caption("Rows per page")
 
     if session[size_key] != prev_size:
         session[page_key] = 1
@@ -123,46 +123,56 @@ def paginate(
         page_size=int(session[size_key]),
         total_rows=total_rows,
     )
+    previous_page = session[page_key]
     session[page_key] = min(pagination.page, pagination.total_pages)
+    if session[page_key] != previous_page:
+        session[goto_key] = session[page_key]
     pagination = Pagination(
         table_key=table_key,
         page=session[page_key],
         page_size=pagination.page_size,
         total_rows=total_rows,
     )
-    with col_info:
-        if pagination.total_rows == 0:
-            st.caption("No rows to display")
-        else:
-            st.caption(
-                f"Showing {pagination.start_row}-{pagination.end_row} of "
-                f"{pagination.total_rows} {label}"
-            )
-        if pagination.total_pages > 1:
-            target = st.number_input(
-                "Go to page",
-                min_value=1,
-                max_value=pagination.total_pages,
-                value=pagination.page,
-                step=1,
-                key=goto_key,
-                label_visibility="collapsed",
-            )
-            if int(target) != pagination.page:
-                session[page_key] = int(target)
-                safe_rerun(f"{table_key}_goto")
+    summary_text = (
+        "No rows to display"
+        if pagination.total_rows == 0
+        else f"Showing {pagination.start_row}-{pagination.end_row} of "
+        f"{pagination.total_rows} {label}"
+    )
+    goto_max_value = max(1, pagination.total_pages)
+    session[goto_key] = min(max(1, session[goto_key]), goto_max_value)
+
+    with col_goto:
+        target = st.number_input(
+            "Go to page",
+            min_value=1,
+            max_value=goto_max_value,
+            value=session[goto_key],
+            step=1,
+            key=goto_key,
+            label_visibility="collapsed",
+        )
+        st.caption("Go to page")
+        if goto_max_value > 1 and int(target) != pagination.page:
+            session[page_key] = int(target)
+            session[goto_key] = session[page_key]
+            safe_rerun(f"{table_key}_goto")
 
     with col_prev:
         disabled = not pagination.has_prev
         if st.button("◀ Prev", key=_state_key(table_key, "prev"), disabled=disabled, width="stretch"):
             session[page_key] = max(1, pagination.page - 1)
+            session[goto_key] = session[page_key]
             safe_rerun(f"{table_key}_prev")
 
     with col_next:
         disabled = not pagination.has_next
         if st.button("Next ▶", key=_state_key(table_key, "next"), disabled=disabled, width="stretch"):
             session[page_key] = min(pagination.total_pages, pagination.page + 1)
+            session[goto_key] = session[page_key]
             safe_rerun(f"{table_key}_next")
+
+    st.caption(summary_text)
 
     return pagination
 

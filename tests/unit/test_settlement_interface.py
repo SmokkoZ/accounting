@@ -17,7 +17,7 @@ import sqlite3
 
 # ========================================
 # Duplicate Functions for Testing
-# (These mirror the implementation in 2_verified_bets.py)
+# (These mirror the implementation in surebets_components.py)
 # ========================================
 
 

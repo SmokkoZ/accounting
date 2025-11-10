@@ -476,8 +476,8 @@ else:
                 svc.update_verified_bet(target_bet_id, edited)
                 st.success(":material/check_circle: Bet updated. If matchable, it will be paired automatically.")
                 render_navigation_link(
-                    "pages/2_verified_bets.py",
-                    label="Open Surebets",
+                    "pages/2_surebets_summary.py",
+                    label="Open Surebets Summary",
                     icon=":material/target:",
                     help_text="Use the navigation to open 'Surebets' and continue settlement prep.",
                 )
