@@ -34,6 +34,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
     create_chat_registrations_table(conn)
     create_funding_drafts_table(conn)
     create_notification_audit_table(conn)
+    create_telegram_audit_log_table(conn)
 
     # Create triggers for data integrity
     create_ledger_append_only_trigger(conn)
@@ -899,6 +900,41 @@ def create_notification_audit_table(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_notification_audit_draft
         ON notification_audit(draft_id)
     """
+    )
+
+
+def create_telegram_audit_log_table(conn: sqlite3.Connection) -> None:
+    """Create audit log capturing Telegram pending photo interventions."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS telegram_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pending_photo_id INTEGER,
+            chat_id TEXT,
+            message_id TEXT,
+            action TEXT NOT NULL CHECK (action IN ('discard','force_ingest','auto_discard','ingest')),
+            operator TEXT,
+            reason TEXT,
+            outcome TEXT NOT NULL,
+            source TEXT NOT NULL,
+            created_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
+            FOREIGN KEY (pending_photo_id) REFERENCES pending_photos(id)
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_telegram_audit_log_event
+        ON telegram_audit_log(action, created_at_utc DESC)
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_telegram_audit_log_message
+        ON telegram_audit_log(message_id)
+        """
     )
 
 

@@ -157,6 +157,13 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
         script="pages/6_statements.py",
         description="Generate monthly partner statements with funding, entitlement, and reconciliation.",
     ),
+    PageSpec(
+        title="Telegram Pending Photos",
+        section="Telegram",
+        icon=":material/photo_library:",
+        script="pages/telegram_pending_photos.py",
+        description="Monitor confirm-before-ingest queue with TTL countdowns and actions.",
+    ),
 )
 
 

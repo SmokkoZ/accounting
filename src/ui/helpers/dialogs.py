@@ -232,6 +232,148 @@ def render_confirmation_dialog(
     return None
 
 
+def render_reason_dialog(
+    *,
+    key: str,
+    title: str,
+    description: str,
+    text_label: str = "Reason",
+    placeholder: str = "Provide justification",
+    confirm_label: str = "Confirm",
+    cancel_label: str = "Cancel",
+    require_text: bool = True,
+) -> Optional[str]:
+    """
+    Render a dialog that captures a short justification string.
+
+    Returns the submitted text (stripped) when confirmed, empty string when cancelled,
+    and None while pending input.
+    """
+    state = _InteractionState(key)
+    payload = state.pop_payload()
+    if payload is not None:
+        return payload
+
+    if not state.is_open():
+        return None
+
+    renderer = (
+        _render_reason_modal if feature_flags.supports_dialogs() else _render_reason_fallback
+    )
+    renderer(
+        state=state,
+        key=key,
+        title=title,
+        description=description,
+        text_label=text_label,
+        placeholder=placeholder,
+        confirm_label=confirm_label,
+        cancel_label=cancel_label,
+        require_text=require_text,
+    )
+    return None
+
+
+def _reason_value(key: str) -> str:
+    return str(st.session_state.get(f"{key}__text", "")).strip()
+
+
+def _render_reason_modal(
+    *,
+    state: _InteractionState,
+    key: str,
+    title: str,
+    description: str,
+    text_label: str,
+    placeholder: str,
+    confirm_label: str,
+    cancel_label: str,
+    require_text: bool,
+) -> None:
+    @st.dialog(title)
+    def _modal() -> None:
+        st.info(description)
+        st.text_area(
+            text_label,
+            key=f"{key}__text",
+            placeholder=placeholder,
+            height=150,
+        )
+        value = _reason_value(key)
+        confirm_disabled = require_text and not value
+
+        confirm_col, cancel_col = st.columns([2, 1])
+        with confirm_col:
+            if st.button(
+                confirm_label,
+                key=f"{key}__confirm",
+                type="primary",
+                disabled=confirm_disabled,
+                width="stretch",
+            ):
+                state.push_payload(value)
+                state.close()
+                _safe_rerun()
+        with cancel_col:
+            if st.button(
+                cancel_label,
+                key=f"{key}__cancel",
+                width="stretch",
+            ):
+                state.push_payload("")
+                state.close()
+                _safe_rerun()
+
+    _modal()
+
+
+def _render_reason_fallback(
+    *,
+    state: _InteractionState,
+    key: str,
+    title: str,
+    description: str,
+    text_label: str,
+    placeholder: str,
+    confirm_label: str,
+    cancel_label: str,
+    require_text: bool,
+) -> None:
+    with st.container(border=True):
+        st.markdown(f"### {title}")
+        st.info(description)
+        st.text_area(
+            text_label,
+            key=f"{key}__text",
+            placeholder=placeholder,
+            height=150,
+        )
+        value = _reason_value(key)
+        confirm_disabled = require_text and not value
+
+        confirm_col, cancel_col = st.columns([2, 1])
+        with confirm_col:
+            if st.button(
+                confirm_label,
+                key=f"{key}__confirm",
+                type="primary",
+                disabled=confirm_disabled,
+                width="stretch",
+            ):
+                state.push_payload(value)
+                state.close()
+                _safe_rerun()
+        with cancel_col:
+            if st.button(
+                cancel_label,
+                key=f"{key}__cancel",
+                width="stretch",
+            ):
+                state.push_payload("")
+                state.close()
+                _safe_rerun()
+
+
 def _render_confirmation_modal(
     *,
     state: _InteractionState,
@@ -702,6 +844,7 @@ __all__ = [
     "render_action_menu",
     "render_canonical_event_dialog",
     "render_confirmation_dialog",
+    "render_reason_dialog",
     "render_correction_dialog",
     "render_settlement_confirmation",
 ]

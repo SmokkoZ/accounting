@@ -294,6 +294,39 @@ footer,
   max-width: 420px; 
 }
 
+.ttl-pill {
+  display: inline-block;
+  padding: 0.15rem 0.65rem;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  background: rgba(76, 175, 80, 0.18);
+  color: #2e7d32;
+  margin-bottom: 0.2rem;
+}
+
+.ttl-pill.warning {
+  background: rgba(255, 193, 7, 0.2);
+  color: #f57c00;
+}
+
+.ttl-pill.expired {
+  background: rgba(158, 158, 158, 0.15);
+  color: #616161;
+}
+
+.pending-text {
+  font-size: 0.95rem;
+}
+
+.pending-text.warning {
+  color: #f57c00;
+}
+
+.pending-text.expired {
+  color: #9e9e9e;
+}
+
 @media (max-width: 768px) {
   .toolbar {
     flex-direction: column;
