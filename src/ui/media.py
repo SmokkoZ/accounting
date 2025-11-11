@@ -89,7 +89,7 @@ def render_thumbnail(
     *,
     caption: Optional[str] = None,
     width: int = 300,
-    expander_label: str = ":material/zoom_in: View full size",
+    expander_label: Optional[str] = ":material/zoom_in: View full size",
 ) -> None:
     """
     Render a thumbnail with a full-size expander fallback.
@@ -106,8 +106,9 @@ def render_thumbnail(
         return
 
     st.image(thumb, caption=caption, width=width)
-    with st.expander(expander_label):
-        st.image(str(absolute_path), width="stretch", caption=caption)
+    if expander_label:
+        with st.expander(expander_label):
+            st.image(str(absolute_path), width="stretch", caption=caption)
 
 
 __all__ = ["THUMB_CACHE_TTL", "clear_thumbnail_cache", "make_thumb", "render_thumbnail"]

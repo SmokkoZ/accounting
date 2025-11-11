@@ -23,9 +23,7 @@ from src.services.ledger_entry_service import (
 from src.services.settlement_service import BetOutcome, SettlementService
 from src.services.surebet_calculator import SurebetRiskCalculator
 from src.ui.helpers.dialogs import (
-    ActionItem,
     open_dialog,
-    render_action_menu,
     render_confirmation_dialog,
     render_settlement_confirmation,
 )
@@ -145,20 +143,44 @@ def _stake_eur_for_bet(bet: Dict[str, Any]) -> Optional[Decimal]:
         return None
 
 
+
+def _potential_win_eur(bet: Dict[str, Any]) -> Optional[Decimal]:
+    """
+    Return the potential total return in EUR for a bet.
+    """
+    stake_eur = _stake_eur_for_bet(bet)
+    if stake_eur is None:
+        return None
+
+    odds_value = bet.get("odds_original") or bet.get("odds")
+    odds_decimal = _to_decimal_or_none(odds_value)
+    if odds_decimal is None:
+        return None
+
+    try:
+        total_return = stake_eur * odds_decimal
+        return total_return.quantize(Decimal("0.01"))
+    except Exception:
+        return None
+
+
+
 def _build_bet_table(bets: List[Dict[str, Any]]) -> pd.DataFrame:
     rows: List[Dict[str, str]] = []
     for bet in bets:
         stake_display, eur_display = _format_stake_displays(bet)
-        odds_value = bet.get("odds_original")
-        if not odds_value:
-            odds_value = bet.get("odds")
+        odds_value = bet.get("odds_original") or bet.get("odds")
+        potential_win = _potential_win_eur(bet)
         rows.append(
             {
-                "Associate": bet.get("associate_name") or "—",
-                "Bookmaker": bet.get("bookmaker_name") or "—",
+                "Associate": bet.get("associate_name") or "�",
+                "Bookmaker": bet.get("bookmaker_name") or "�",
                 "Stake": stake_display,
                 "EUR": eur_display,
-                "Odds": str(odds_value) if odds_value not in (None, "") else "—",
+                "Odds": str(odds_value) if odds_value not in (None, "") else "�",
+                "Potential Winning (EUR)": _format_amount_code(potential_win, "EUR")
+                if potential_win is not None
+                else "�",
             }
         )
     return pd.DataFrame(rows)
@@ -189,6 +211,79 @@ def _info_block(label: str, value: str) -> str:
         f"</div>"
     )
 
+
+def _describe_side_context(
+    *,
+    side_label: str,
+    event_title: str,
+    default_market_display: str,
+    default_period_scope: Optional[str],
+    default_line_value: Optional[str],
+    side_bets: List[Dict[str, Any]],
+) -> str:
+    """
+    Build a caption describing the requested context (event, market, side, line).
+    """
+
+    market_display = default_market_display
+    period_scope = default_period_scope
+    line_value = default_line_value
+    selection_side: Optional[str] = None
+
+    for bet in side_bets:
+        if not selection_side:
+            selection_side = bet.get("outcome_side") or bet.get("selection_text")
+        if market_display == default_market_display:
+            market_code = bet.get("bet_market_code")
+            if market_code:
+                market_display = format_market_display(market_code)
+        if not period_scope and bet.get("bet_period_scope"):
+            period_scope = bet.get("bet_period_scope")
+        if (line_value in (None, "", "N/A")) and bet.get("bet_line_value"):
+            line_value = bet.get("bet_line_value")
+
+    market_fragment = f"Market: {market_display}"
+    if period_scope:
+        market_fragment = f"{market_fragment} ({period_scope.replace('_', ' ').title()})"
+
+    line_fragment = (
+        f"Line: {line_value}"
+        if line_value not in (None, "", "N/A")
+        else "Line: N/A"
+    )
+
+    return " | ".join(
+        [
+            f"Event: {event_title}",
+            market_fragment,
+            f"Side: {selection_side or side_label}",
+            line_fragment,
+        ]
+    )
+
+
+def _render_side_screenshot_preview(
+    label: str, side_bets: List[Dict[str, Any]]
+) -> None:
+    """
+    Render thumbnail previews for all available screenshots on a side.
+    """
+
+    screenshot_bets = [bet for bet in side_bets if bet.get("screenshot_path")]
+    if not screenshot_bets:
+        st.caption(f"No screenshot for {label}")
+        return
+
+    cols = st.columns(min(2, len(screenshot_bets)))
+    for idx, bet in enumerate(screenshot_bets):
+        col = cols[idx % len(cols)]
+        with col:
+            render_thumbnail(
+                bet["screenshot_path"],
+                caption=f"{label} · {bet.get('associate_name') or 'Associate'} · Bet #{bet['bet_id']}",
+                width=260,
+                expander_label=None,
+            )
 
 def render_surebets_page_header(description: str) -> None:
     """Render shared controls and success banners for Surebets pages."""
@@ -505,6 +600,11 @@ def load_surebet_bets(db, surebet_id: int) -> Dict[str, List[Dict]]:
             b.currency,
             b.stake_eur,
             b.screenshot_path,
+            b.selection_text,
+            b.market_code as bet_market_code,
+            b.period_scope as bet_period_scope,
+            b.line_value as bet_line_value,
+            b.side as outcome_side,
             sb.side,
             a.display_alias as associate_name,
             bk.bookmaker_name
@@ -595,6 +695,7 @@ def load_associates() -> List[str]:
 def render_surebet_card(surebet: Dict) -> None:
     """Render a detailed surebet card with risk context and bet breakdown."""
     bets = surebet.get("bets", {"A": [], "B": []})
+    surebet_id = surebet["surebet_id"]
     bet_alias_source = bets.get("A", []) + bets.get("B", [])
     fallback_alias = next((bet.get("selection_text") for bet in bet_alias_source if bet.get("selection_text")), None)
     event_title = _format_event_title(
@@ -620,6 +721,8 @@ def render_surebet_card(surebet: Dict) -> None:
     kickoff_value = format_utc_datetime_local(surebet.get("kickoff_time_utc")) or "TBD"
     sport_value = surebet.get("sport") or "TBD"
     league_value = surebet.get("league") or "TBD"
+    coverage_sent = surebet.get("coverage_proof_sent_at_utc")
+    triggered_action: Optional[str] = None
 
     with st.container(border=True):
         header_cols = st.columns([3, 1])
@@ -669,6 +772,16 @@ def render_surebet_card(surebet: Dict) -> None:
         bet_col_a, bet_col_b = st.columns(2)
         with bet_col_a:
             st.markdown("**Side A**")
+            st.caption(
+                _describe_side_context(
+                    side_label="Side A",
+                    event_title=event_title,
+                    default_market_display=market_display,
+                    default_period_scope=surebet.get("period_scope"),
+                    default_line_value=surebet.get("line_value"),
+                    side_bets=bets.get("A", []),
+                )
+            )
             side_a_df = _build_bet_table(bets.get("A", []))
             if side_a_df.empty:
                 st.caption("No bets on Side A")
@@ -676,11 +789,46 @@ def render_surebet_card(surebet: Dict) -> None:
                 st.dataframe(side_a_df, hide_index=True, use_container_width=True)
         with bet_col_b:
             st.markdown("**Side B**")
+            st.caption(
+                _describe_side_context(
+                    side_label="Side B",
+                    event_title=event_title,
+                    default_market_display=market_display,
+                    default_period_scope=surebet.get("period_scope"),
+                    default_line_value=surebet.get("line_value"),
+                    side_bets=bets.get("B", []),
+                )
+            )
             side_b_df = _build_bet_table(bets.get("B", []))
             if side_b_df.empty:
                 st.caption("No bets on Side B")
             else:
                 st.dataframe(side_b_df, hide_index=True, use_container_width=True)
+
+        st.markdown("")
+        if coverage_sent:
+            sent_at = format_utc_datetime_local(coverage_sent)
+            st.caption(f":material/schedule: Coverage proof sent at {sent_at}")
+        else:
+            st.caption("Coverage proof not yet sent.")
+
+        button_cols = st.columns(2)
+        send_label = "Send Coverage Proof" if not coverage_sent else "Re-send Coverage Proof"
+        send_action = "send_coverage" if not coverage_sent else "resend_coverage"
+        with button_cols[0]:
+            if st.button(
+                send_label,
+                key=f"surebet_send_coverage_{surebet_id}",
+                use_container_width=True,
+            ):
+                triggered_action = send_action
+        with button_cols[1]:
+            if st.button(
+                "Open Settlement Page",
+                key=f"surebet_settle_{surebet_id}",
+                use_container_width=True,
+            ):
+                triggered_action = "settle"
 
         with st.expander("Detailed Breakdown"):
             def _sum_pl_if_side_wins(winning_bets, losing_bets):
@@ -705,81 +853,27 @@ def render_surebet_card(surebet: Dict) -> None:
             pl_a_net, pl_a_profit, pl_a_lost = _sum_pl_if_side_wins(bets["A"], bets["B"])
             pl_b_net, pl_b_profit, pl_b_lost = _sum_pl_if_side_wins(bets["B"], bets["A"])
 
-            detail_cols = st.columns(2)
-            with detail_cols[0]:
+            outcome_cols = st.columns(2)
+            with outcome_cols[0]:
                 st.write(f"**If Side A wins:** {_format_amount_code(pl_a_net, 'EUR')}")
                 st.caption(
-                    f"Profit on A: {_format_amount_code(pl_a_profit, 'EUR')}  ·  Lost on B: {_format_amount_code(pl_a_lost, 'EUR')}"
+                    f"Profit on A: {_format_amount_code(pl_a_profit, 'EUR')}  ·  "
+                    f"Lost on B: {_format_amount_code(pl_a_lost, 'EUR')}"
                 )
-            with detail_cols[1]:
+            with outcome_cols[1]:
                 st.write(f"**If Side B wins:** {_format_amount_code(pl_b_net, 'EUR')}")
                 st.caption(
-                    f"Profit on B: {_format_amount_code(pl_b_profit, 'EUR')}  ·  Lost on A: {_format_amount_code(pl_b_lost, 'EUR')}"
+                    f"Profit on B: {_format_amount_code(pl_b_profit, 'EUR')}  ·  "
+                    f"Lost on A: {_format_amount_code(pl_b_lost, 'EUR')}"
                 )
 
-            st.write(f"**Worst case:** {_format_amount_code(worst_case, 'EUR')}")
+            screenshots = st.columns(2)
+            with screenshots[0]:
+                _render_side_screenshot_preview("Side A", bets["A"])
+            with screenshots[1]:
+                _render_side_screenshot_preview("Side B", bets["B"])
 
-            st.markdown("##### Screenshot Links")
-            all_bets = bets["A"] + bets["B"]
-            if all_bets:
-                cols = st.columns(3)
-                shown = 0
-                for bet in all_bets:
-                    path = bet.get("screenshot_path")
-                    if path:
-                        try:
-                            col = cols[shown % 3]
-                            col.image(path, caption=f"Bet #{bet['bet_id']}", width="stretch")
-                            try:
-                                data = Path(path).read_bytes()
-                                col.download_button(
-                                    label="Download",
-                                    data=data,
-                                    file_name=Path(path).name,
-                                    mime=None,
-                                )
-                            except Exception:
-                                pass
-                            shown += 1
-                        except Exception:
-                            st.write(f"- Bet #{bet['bet_id']}: {path} (image not found)")
-            else:
-                st.caption("No screenshots available")
-
-            st.markdown("##### FX Rates Used")
-            st.caption(
-                "FX rate transparency: Check fx_rates_daily table for rates used in EUR conversion"
-            )
-
-    surebet_id = surebet["surebet_id"]
     st.markdown("---")
-
-    coverage_sent = surebet.get("coverage_proof_sent_at_utc")
-    if coverage_sent:
-        sent_at = format_utc_datetime_local(coverage_sent)
-        st.caption(f":material/schedule: Coverage proof sent at {sent_at}")
-    else:
-        st.caption("Coverage proof not yet sent.")
-
-    triggered_action = render_action_menu(
-        key=f"surebet_actions_{surebet_id}",
-        label="Actions",
-        actions=[
-            ActionItem(
-                key="send_coverage" if not coverage_sent else "resend_coverage",
-                label="Send Coverage Proof"
-                if not coverage_sent
-                else "Re-send Coverage Proof",
-                icon=":material/mail:",
-                button_type="primary" if not coverage_sent else "secondary",
-            ),
-            ActionItem(
-                key="settle",
-                label="Open Settlement Page",
-                icon=":material/receipt_long:",
-            ),
-        ],
-    )
 
     if triggered_action == "send_coverage":
         st.session_state[f"send_coverage_{surebet_id}"] = True
@@ -1006,8 +1100,6 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
     preview_key = f"settlement_preview_{surebet_id}"
     preview_outcomes_key = f"settlement_preview_outcomes_{surebet_id}"
     preview_base_key = f"settlement_preview_base_{surebet_id}"
-    time_info = surebet.get("time_info", {})
-
     bets = surebet.get("bets", {"A": [], "B": []})
     bet_alias_source = bets.get("A", []) + bets.get("B", [])
     fallback_alias = next(
@@ -1020,40 +1112,16 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
     )
 
     with st.container(border=True):
-        # Header with event name and time indicator
-        col1, col2 = st.columns([3, 1])
+        st.markdown(f"### {event_title}")
+        market_display = format_market_display(surebet["market_code"])
+        details = [market_display]
+        if surebet.get("period_scope"):
+            details.append(surebet["period_scope"].replace("_", " ").title())
+        if surebet.get("line_value"):
+            details.append(f"Line: {surebet['line_value']}")
+        st.caption(" • ".join(details))
 
-        with col1:
-            st.markdown(f"### {event_title}")
-            market_display = format_market_display(surebet["market_code"])
-            details = [market_display]
-            if surebet.get("period_scope"):
-                details.append(surebet["period_scope"].replace("_", " ").title())
-            if surebet.get("line_value"):
-                details.append(f"Line: {surebet['line_value']}")
-            st.caption(" • ".join(details))
-
-        with col2:
-            if time_info.get("is_past", False):
-                elapsed_hours = time_info.get("elapsed_hours", 0)
-                if elapsed_hours > 24:
-                    st.error(f"⏱️ {time_info.get('display_text', 'Past')}")
-                else:
-                    st.warning(f"⏱️ {time_info.get('display_text', 'Past')}")
-            else:
-                st.info(f"⏱️ {time_info.get('display_text', 'Upcoming')}")
-
-        st.markdown("---")
-
-        col_a, col_b = st.columns(2)
-        col_a.metric(
-            "Kickoff", format_utc_datetime_local(surebet.get("kickoff_time_utc"))
-        )
-        col_b.metric(
-            "Sport / League",
-            f"{surebet.get('sport', '—')} / {surebet.get('league', '—')}",
-        )
-
+        # Divider before settlement controls
         st.markdown("---")
 
         base_outcome_key = f"base_outcome_{surebet_id}_{index}"
@@ -1064,17 +1132,29 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
             st.session_state[previous_base_outcome_key] = None
 
         st.markdown("#### Settlement Outcome")
-        base_outcome = st.radio(
-            "Select base outcome:",
-            options=["A_WON", "B_WON"],
-            format_func=lambda x: (
-                "Side A WON / Side B LOST"
-                if x == "A_WON"
-                else "Side B WON / Side A LOST"
-            ),
-            key=base_outcome_key,
-            horizontal=True,
-        )
+        st.caption("Select base outcome:")
+        button_cols = st.columns(2)
+        current_selection = st.session_state.get(base_outcome_key)
+        with button_cols[0]:
+            if st.button(
+                "Side A WON / Side B LOST",
+                key=f"{base_outcome_key}_btn_a",
+                use_container_width=True,
+                type="primary" if current_selection == "A_WON" else "secondary",
+            ):
+                st.session_state[base_outcome_key] = "A_WON"
+                current_selection = "A_WON"
+        with button_cols[1]:
+            if st.button(
+                "Side B WON / Side A LOST",
+                key=f"{base_outcome_key}_btn_b",
+                use_container_width=True,
+                type="primary" if current_selection == "B_WON" else "secondary",
+            ):
+                st.session_state[base_outcome_key] = "B_WON"
+                current_selection = "B_WON"
+
+        base_outcome = current_selection
 
         st.markdown("---")
 
@@ -1143,14 +1223,6 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                         label_visibility="collapsed",
                     )
 
-                    if bet.get("screenshot_path"):
-                        render_thumbnail(
-                            bet["screenshot_path"],
-                            caption=f"Screenshot for Bet #{bet_id}",
-                            width=300,
-                            expander_label="View screenshot",
-                        )
-
                     st.markdown("---")
             else:
                 st.caption("No bets on Side A")
@@ -1193,14 +1265,6 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                         key=outcome_key,
                         label_visibility="collapsed",
                     )
-
-                    if bet.get("screenshot_path"):
-                        render_thumbnail(
-                            bet["screenshot_path"],
-                            caption=f"Screenshot for Bet #{bet_id}",
-                            width=300,
-                            expander_label="View screenshot",
-                        )
 
                     st.markdown("---")
             else:

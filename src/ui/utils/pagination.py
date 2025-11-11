@@ -147,7 +147,6 @@ def paginate(
             "Go to page",
             min_value=1,
             max_value=goto_max_value,
-            value=session[goto_key],
             step=1,
             key=goto_key,
             label_visibility="collapsed",
