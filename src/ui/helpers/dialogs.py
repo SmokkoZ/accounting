@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Literal
 
 import streamlit as st
 
@@ -65,10 +65,11 @@ def close_dialog(key: str) -> None:
 def render_settlement_confirmation(
     *,
     key: str,
-    button_label: str = "âœ… Confirm Settlement",
+    button_label: str = "Confirm Settlement",
     title: str = "Confirm Settlement",
     warning_text: str = "This action is PERMANENT and will post ledger entries.",
     note_label: Optional[str] = "Optional note for audit trail",
+    button_type: Literal["primary", "secondary"] = "primary",
 ) -> Optional[str]:
     """
     Render the settlement confirmation trigger and dialog.
@@ -83,7 +84,7 @@ def render_settlement_confirmation(
     if st.button(
         button_label,
         key=f"{key}__open_button",
-        type="primary",
+        type=button_type,
         width="stretch",
     ):
         state.open()
