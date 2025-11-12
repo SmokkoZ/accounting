@@ -1118,10 +1118,11 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                     current_value = st.session_state.get(
                         outcome_key, default_outcomes.get(bet_id, "WON")
                     )
+                    if outcome_key not in st.session_state:
+                        st.session_state[outcome_key] = current_value
                     st.selectbox(
                         "Outcome:",
                         options=options,
-                        index=options.index(current_value),
                         key=outcome_key,
                         label_visibility="collapsed",
                     )
@@ -1161,10 +1162,11 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
                     current_value = st.session_state.get(
                         outcome_key, default_outcomes.get(bet_id, "LOST")
                     )
+                    if outcome_key not in st.session_state:
+                        st.session_state[outcome_key] = current_value
                     st.selectbox(
                         "Outcome:",
                         options=options,
-                        index=options.index(current_value),
                         key=outcome_key,
                         label_visibility="collapsed",
                     )

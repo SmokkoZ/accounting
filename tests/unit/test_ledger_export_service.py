@@ -280,6 +280,39 @@ class TestLedgerExportService:
         assert "ledger_20250101_100000.csv" in filenames
 
     @patch('src.services.ledger_export_service.get_db_connection')
+    def test_get_export_history_includes_scope_metadata(self, mock_get_conn, service):
+        """Test that history entries include associate scope information."""
+        # Create generic export
+        full_file = service.export_dir / "ledger_20250101_100000.csv"
+        with open(full_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['entry_id'])
+            writer.writerow([1])
+
+        # Create associate-scoped export
+        assoc_file = service.export_dir / "ledger_assoc-7-jane-doe_20250101_120000.csv"
+        with open(assoc_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['entry_id'])
+            writer.writerow([1])
+            writer.writerow([2])
+
+        # Mock DB alias lookup
+        mock_conn = MagicMock()
+        mock_execute = MagicMock()
+        mock_execute.fetchone.return_value = {"display_alias": "Jane Doe"}
+        mock_conn.execute.return_value = mock_execute
+        mock_get_conn.return_value = mock_conn
+
+        history = service.get_export_history(limit=5)
+
+        assert len(history) == 2
+        scoped_entry = next(h for h in history if h["scope"] == "associate")
+        assert scoped_entry["associate_id"] == 7
+        assert scoped_entry["associate_alias"] == "Jane Doe"
+        assert scoped_entry["alias_slug"] == "jane-doe"
+
+    @patch('src.services.ledger_export_service.get_db_connection')
     def test_export_csv_headers_and_format(self, mock_get_conn, service, mock_db_data):
         """Test that CSV export has correct headers and format."""
         mock_conn = MagicMock()
@@ -312,11 +345,45 @@ class TestLedgerExportService:
         assert len(headers) == len(expected_headers)
         assert len(rows) == len(mock_db_data)
 
+    @patch('src.services.ledger_export_service.get_db_connection')
+    def test_export_full_ledger_with_associate_filter(self, mock_get_conn, service, mock_db_data):
+        """Test exporting ledger for a specific associate."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = mock_db_data
+        mock_conn.cursor.return_value = mock_cursor
+
+        alias_cursor = MagicMock()
+        alias_cursor.fetchone.return_value = {"display_alias": "Alice Smith"}
+        mock_conn.execute.return_value = alias_cursor
+
+        mock_get_conn.return_value = mock_conn
+
+        file_path, row_count = service.export_full_ledger(associate_id=3)
+
+        assert row_count == len(mock_db_data)
+        assert "ledger_assoc-3-alice-smith_" in Path(file_path).name
+
+        executed_query, params = mock_cursor.execute.call_args[0]
+        assert "WHERE le.associate_id = ?" in executed_query
+        assert params == (3,)
+
+    @patch('src.services.ledger_export_service.get_db_connection')
+    def test_export_full_ledger_raises_for_missing_associate(self, mock_get_conn, service):
+        """Ensure exporting for a non-existent associate raises an error."""
+        mock_conn = MagicMock()
+        missing_cursor = MagicMock()
+        missing_cursor.fetchone.return_value = None
+        mock_conn.execute.return_value = missing_cursor
+        mock_get_conn.return_value = mock_conn
+
+        with pytest.raises(ValueError, match="Associate 99 not found"):
+            service.export_full_ledger(associate_id=99)
+
     @patch('src.services.ledger_export_service.datetime')
     @patch('src.services.ledger_export_service.get_db_connection')
     def test_export_filename_format(self, mock_get_conn, mock_datetime, service, mock_db_data):
         """Test that export filename follows correct timestamp format."""
-        # Mock timestamp (service adds milliseconds with slice)
         mock_datetime.now.return_value.strftime.return_value = "20250101_123456"
         
         mock_conn = MagicMock()
@@ -327,5 +394,5 @@ class TestLedgerExportService:
         
         file_path, _ = service.export_full_ledger()
         
-        expected_filename = "ledger_20250101_123.csv"
+        expected_filename = "ledger_20250101_123456.csv"
         assert Path(file_path).name == expected_filename

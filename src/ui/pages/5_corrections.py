@@ -27,19 +27,6 @@ st.set_page_config(page_title=PAGE_TITLE, layout="wide")
 load_global_styles()
 st.title(f"{PAGE_ICON} {PAGE_TITLE}")
 
-st.markdown(
-    """
-Apply forward-only corrections to bookmaker holdings. All corrections create new
-BOOKMAKER_CORRECTION ledger entries without modifying existing records.
-
-**Common Use Cases:**
-- Late VOID corrections (refunds not processed during settlement)
-- Grading error fixes (incorrect win/loss classification)
-- Bookmaker fee deductions
-- Manual balance adjustments
-"""
-)
-
 # Display success message if present
 if "correction_success_message" in st.session_state:
     st.success(st.session_state.pop("correction_success_message"))
@@ -143,7 +130,6 @@ if prefill_payload and not st.session_state.get("correction_prefill_applied"):
 
     st.session_state["correction_amount"] = prefill_amount
     st.session_state["correction_note"] = prefill_payload.get("note", "")
-    st.session_state["correction_currency"] = prefill_payload.get("native_currency", "EUR")
     st.session_state["correction_prefill_associate_id"] = prefill_payload.get("associate_id")
     st.session_state["correction_prefill_bookmaker_id"] = prefill_payload.get("bookmaker_id")
     st.session_state["correction_prefill_applied"] = True
@@ -153,7 +139,6 @@ if prefill_payload:
 else:
     st.session_state.setdefault("correction_amount", "")
     st.session_state.setdefault("correction_note", "")
-    st.session_state.setdefault("correction_currency", "EUR")
 
 st.header("Apply Correction")
 
@@ -187,6 +172,7 @@ associate_id = associate_options[selected_associate]
 # Get selected associate details
 selected_associate_data = next(a for a in associates if a["id"] == associate_id)
 associate_home_currency = selected_associate_data["home_currency"]
+currency = associate_home_currency or "EUR"
 
 # Load bookmakers for selected associate
 bookmakers = load_bookmakers_for_associate(associate_id)
@@ -230,21 +216,6 @@ with st.form("correction_form", clear_on_submit=True):
                 key="bookmaker_selection",
             )
             bookmaker_id = bookmaker_options[selected_bookmaker]
-
-        # Currency selection (default to associate's home currency)
-        currency_options = ["EUR", "USD", "GBP", "AUD", "CAD"]
-        current_currency = st.session_state.get("correction_currency", associate_home_currency)
-        if current_currency not in currency_options:
-            current_currency = associate_home_currency if associate_home_currency in currency_options else "EUR"
-            st.session_state["correction_currency"] = current_currency
-        default_currency_index = currency_options.index(current_currency)
-        currency = st.selectbox(
-            "Currency *",
-            options=currency_options,
-            index=default_currency_index,
-            help="Select the currency for this correction (defaults to associate's home currency)",
-            key="correction_currency",
-        )
 
     with col2:
         # Amount input
@@ -423,13 +394,3 @@ else:
 # Footer Notes
 # ========================================
 
-st.markdown("---")
-st.caption(
-    """
-**Important Notes:**
-- All corrections create NEW ledger entries (type: BOOKMAKER_CORRECTION)
-- Existing ledger entries are NEVER modified or deleted
-- FX rates are frozen at the time of correction
-- All corrections require an explanatory note for audit trail
-"""
-)
