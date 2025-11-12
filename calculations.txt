@@ -1,0 +1,21 @@
+About Monthly Statements
+Purpose: Generate partner statements showing funding, entitlement, bookmaker balances, and reconciliation deltas.
+
+Sections:
+
+Partner Statement: Shareable with associates showing funding, entitlement, and bookmaker balances with deltas
+Internal Reconciliation: Internal-only section showing current holdings vs. entitlement
+Transaction Details: Complete transaction list for verification
+Calculations:
+
+Net Deposits: SUM(DEPOSITS) - SUM(WITHDRAWALS)
+Should Hold: SUM(principal_returned + per_surebet_share)
+Current Holding: SUM(all ledger entries)
+Raw Profit: Should Hold - Net Deposits
+Delta: Current Holding - Should Hold
+Export Options:
+
+Copy to Clipboard: Partner-facing section only
+Export to CSV: Complete transaction list
+Export to PDF: Coming soon
+Important: Statements are read-only snapshots and do not modify any ledger entries.

@@ -28,6 +28,8 @@ class BookmakerStatementRow:
     balance_eur: Decimal
     deposits_eur: Decimal
     withdrawals_eur: Decimal
+    balance_native: Decimal
+    native_currency: str
 
 
 @dataclass
@@ -44,6 +46,7 @@ class StatementCalculations:
     total_withdrawals_eur: Decimal
     bookmakers: List[BookmakerStatementRow]
     associate_name: str
+    home_currency: str
     cutoff_date: str
     generated_at: str
 
@@ -92,7 +95,7 @@ class StatementService:
         conn = get_db_connection()
         try:
             # Validate associate exists and get name
-            associate_name = self._get_associate_name(conn, associate_id)
+            associate_name, home_currency = self._get_associate_details(conn, associate_id)
             if not associate_name:
                 raise ValueError(f"Associate ID {associate_id} not found")
             
@@ -122,6 +125,7 @@ class StatementService:
                 total_withdrawals_eur=total_withdrawals,
                 bookmakers=bookmakers,
                 associate_name=associate_name,
+                home_currency=home_currency or "",
                 cutoff_date=cutoff_date,
                 generated_at=utc_now_iso()
             )
@@ -141,15 +145,17 @@ class StatementService:
         finally:
             conn.close()
     
-    def _get_associate_name(self, conn, associate_id: int) -> Optional[str]:
-        """Get associate display name by ID."""
+    def _get_associate_details(self, conn, associate_id: int) -> Tuple[Optional[str], Optional[str]]:
+        """Get associate display name and currency by ID."""
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT display_alias FROM associates WHERE id = ?",
+            "SELECT display_alias, home_currency FROM associates WHERE id = ?",
             (associate_id,)
         )
         row = cursor.fetchone()
-        return row["display_alias"] if row else None
+        if not row:
+            return None, None
+        return row["display_alias"], row["home_currency"]
     
     def _calculate_funding_totals(
         self, conn, associate_id: int, cutoff_date: str
@@ -260,14 +266,17 @@ class StatementService:
                 b.bookmaker_name,
                 SUM(CASE WHEN le.id IS NULL THEN 0 ELSE CAST(le.amount_eur AS REAL) END) AS balance_eur,
                 SUM(CASE WHEN le.type = 'DEPOSIT' THEN CAST(le.amount_eur AS REAL) ELSE 0 END) AS deposits_eur,
-                SUM(CASE WHEN le.type = 'WITHDRAWAL' THEN ABS(CAST(le.amount_eur AS REAL)) ELSE 0 END) AS withdrawals_eur
+                SUM(CASE WHEN le.type = 'WITHDRAWAL' THEN ABS(CAST(le.amount_eur AS REAL)) ELSE 0 END) AS withdrawals_eur,
+                SUM(CASE WHEN le.id IS NULL THEN 0 ELSE CAST(le.amount_native AS REAL) END) AS balance_native,
+                a.home_currency AS native_currency
             FROM bookmakers b
+            JOIN associates a ON a.id = b.associate_id
             LEFT JOIN ledger_entries le
                 ON le.bookmaker_id = b.id
                AND le.associate_id = ?
                AND le.created_at_utc <= ?
             WHERE b.associate_id = ?
-            GROUP BY b.id, b.bookmaker_name
+            GROUP BY b.id, b.bookmaker_name, a.home_currency
             ORDER BY b.bookmaker_name
             """,
             (associate_id, cutoff_date, associate_id),
@@ -279,12 +288,16 @@ class StatementService:
             balance = Decimal(str(row["balance_eur"] or 0.0))
             deposits = Decimal(str(row["deposits_eur"] or 0.0))
             withdrawals = Decimal(str(row["withdrawals_eur"] or 0.0))
+            balance_native = Decimal(str(row["balance_native"] or 0.0))
+            native_currency = row["native_currency"] or ""
             breakdown.append(
                 BookmakerStatementRow(
                     bookmaker_name=row["bookmaker_name"],
                     balance_eur=balance.quantize(Decimal("0.01")),
                     deposits_eur=deposits.quantize(Decimal("0.01")),
                     withdrawals_eur=withdrawals.quantize(Decimal("0.01")),
+                    balance_native=balance_native.quantize(Decimal("0.01")),
+                    native_currency=native_currency,
                 )
             )
         return breakdown
@@ -396,6 +409,6 @@ class StatementService:
         try:
             cutoff_dt = datetime.fromisoformat(cutoff_date.replace('Z', '+00:00'))
             now_dt = datetime.fromisoformat(utc_now_iso().replace('Z', '+00:00'))
-            return cutoff_dt <= now_dt
+            return cutoff_dt.date() <= now_dt.date()
         except ValueError:
             return False

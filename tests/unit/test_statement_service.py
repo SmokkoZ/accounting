@@ -27,8 +27,8 @@ def service(monkeypatch: pytest.MonkeyPatch) -> StatementService:
 
     monkeypatch.setattr(
         StatementService,
-        "_get_associate_name",
-        lambda self, conn, associate_id: "Demo Associate",
+        "_get_associate_details",
+        lambda self, conn, associate_id: ("Demo Associate", "EUR"),
     )
     monkeypatch.setattr(
         StatementService,
@@ -57,6 +57,8 @@ def service(monkeypatch: pytest.MonkeyPatch) -> StatementService:
                 balance_eur=Decimal("500.00"),
                 deposits_eur=Decimal("400.00"),
                 withdrawals_eur=Decimal("100.00"),
+                balance_native=Decimal("500.00"),
+                native_currency="EUR",
             )
         ],
     )
@@ -92,9 +94,12 @@ def test_partner_section_formats_summaries(service: StatementService):
                 balance_eur=Decimal("640.00"),
                 deposits_eur=Decimal("500.00"),
                 withdrawals_eur=Decimal("100.00"),
+                balance_native=Decimal("640.00"),
+                native_currency="EUR",
             )
         ],
         associate_name="Demo",
+        home_currency="EUR",
         cutoff_date="2025-10-31T23:59:59Z",
         generated_at="2025-11-07T00:00:00Z",
     )
@@ -118,6 +123,7 @@ def test_internal_section_detects_over_and_short_states(service: StatementServic
             total_withdrawals_eur=Decimal("0"),
             bookmakers=[],
             associate_name="",
+             home_currency="EUR",
             cutoff_date="",
             generated_at="",
         )
@@ -137,6 +143,7 @@ def test_internal_section_detects_over_and_short_states(service: StatementServic
             total_withdrawals_eur=Decimal("0"),
             bookmakers=[],
             associate_name="",
+            home_currency="EUR",
             cutoff_date="",
             generated_at="",
         )

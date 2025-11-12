@@ -8,10 +8,13 @@ Partner-facing and internal-only sections with export functionality.
 from __future__ import annotations
 
 import asyncio
+import base64
 import csv
 import io
 import json
-import tempfile
+import re
+import uuid
+import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -37,14 +40,14 @@ from src.ui.helpers.fragments import (
     render_debug_panel,
     render_debug_toggle,
 )
-from src.ui.helpers.streaming import show_pdf_preview, show_success_toast
+from src.ui.helpers.streaming import show_success_toast
 from src.ui.ui_components import advanced_section, form_gated_filters, load_global_styles
 from src.ui.utils.formatters import format_utc_datetime
 from src.ui.utils.state_management import render_reset_control, safe_rerun
 
 PAGE_TITLE = "Statements"
 PAGE_ICON = ":material/contract:"
-STATEMENT_PDF_DIR = Path("data/exports/statements")
+STATEMENT_EXPORT_DIR = Path("data/exports/statements")
 
 
 def _format_eur(value: Decimal | float | str) -> str:
@@ -52,52 +55,33 @@ def _format_eur(value: Decimal | float | str) -> str:
     return f"€{Decimal(str(value)):,.2f}"
 
 
-def _escape_pdf_text(value: str) -> str:
-    """Escape characters reserved in PDF text objects."""
-    return (
-        value.replace("\\", "\\\\")
-        .replace("(", "\\(")
-        .replace(")", "\\)")
+def _decimal_str(value: Decimal | float | str) -> str:
+    """Return standardized decimal string with two decimal places."""
+    return f"{Decimal(str(value)).quantize(Decimal('0.01'))}"
+
+
+def _slugify_name(value: str) -> str:
+    """Return filesystem-safe slug for filenames."""
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", value.strip()).strip("-").lower()
+    return slug or "statement"
+
+
+def trigger_auto_download(file_path: Path, error_prefix: str = "Download") -> None:
+    """Auto-trigger file download via HTML anchor."""
+    try:
+        data = file_path.read_bytes()
+    except OSError as exc:
+        st.warning(f"{error_prefix} unavailable ({exc}). Use the link below.")
+        return
+
+    b64 = base64.b64encode(data).decode()
+    download_id = f"download-link-{uuid.uuid4().hex}"
+    download_html = (
+        f'<a id="{download_id}" href="data:application/octet-stream;base64,{b64}" '
+        f'download="{file_path.name}"></a>'
+        f"<script>document.getElementById('{download_id}').click();</script>"
     )
-
-
-def _write_simple_pdf(lines: List[str], output_path: Path) -> None:
-    """Write a minimal PDF file containing the provided lines."""
-    content_lines = ["BT", "/F1 12 Tf", "16 TL", "72 720 Td"]
-    for line in lines:
-        content_lines.append(f"({_escape_pdf_text(line)}) Tj")
-        content_lines.append("T*")
-    content_lines.append("ET")
-    content = "\n".join(content_lines)
-    content_bytes = content.encode("utf-8")
-
-    objects = [
-        "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
-        "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n",
-        "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n",
-        f"4 0 obj << /Length {len(content_bytes)} >>\nstream\n{content}\nendstream\nendobj\n",
-        "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n",
-    ]
-
-    buffer = io.BytesIO()
-    buffer.write(b"%PDF-1.4\n")
-    offsets = []
-    for obj in objects:
-        offsets.append(buffer.tell())
-        buffer.write(obj.encode("utf-8"))
-    xref_offset = buffer.tell()
-    buffer.write(f"xref\n0 {len(objects) + 1}\n".encode("utf-8"))
-    buffer.write(b"0000000000 65535 f \n")
-    for offset in offsets:
-        buffer.write(f"{offset:010d} 00000 n \n".encode("utf-8"))
-    buffer.write(
-        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF".encode(
-            "utf-8"
-        )
-    )
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(buffer.getvalue())
+    st.markdown(download_html, unsafe_allow_html=True)
 
 
 def _daily_statement_log_records(log_entries: List[Any]) -> List[Dict[str, Any]]:
@@ -198,36 +182,126 @@ def _modal_context(title: str):
             yield
 
 
-def generate_statement_pdf(
-    calc: StatementCalculations,
-    partner_section: PartnerFacingSection,
-    internal_section: InternalSection,
+def generate_statement_summary_csv(
+    calc: StatementCalculations, partner_section: PartnerFacingSection
 ) -> Path:
-    """Generate a lightweight PDF summary for the statement."""
+    """Generate per-bookmaker CSV summary for the statement."""
+    STATEMENT_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     cutoff_date = calc.cutoff_date.split("T")[0]
-    pdf_path = STATEMENT_PDF_DIR / f"statement_{calc.associate_id}_{cutoff_date.replace('-', '')}.pdf"
-    bookmaker_lines = [
-        f"- {row.bookmaker_name}: balance {_format_eur(row.balance_eur)}, "
-        f"deposits {_format_eur(row.deposits_eur)}, "
-        f"withdrawals {_format_eur(row.withdrawals_eur)}"
-        for row in partner_section.bookmakers
+    date_str = datetime.strptime(cutoff_date, "%Y-%m-%d").strftime("%d-%m-%Y")
+    currency = (calc.home_currency or "MULTI").upper()
+    base_name = f"{_slugify_name(calc.associate_name)}_{currency}_{date_str}_statement"
+    file_path = STATEMENT_EXPORT_DIR / f"{base_name}.csv"
+    counter = 1
+    while file_path.exists():
+        file_path = STATEMENT_EXPORT_DIR / f"{base_name}_{counter}.csv"
+        counter += 1
+
+    columns = [
+        "label",
+        "native_amount",
+        "native_currency",
+        "eur_amount",
+        "eur_currency",
+        "note",
     ]
-    if not bookmaker_lines:
-        bookmaker_lines = ["- No bookmaker activity recorded."]
-    lines = [
-        f"Statement for {calc.associate_name}",
-        f"Cutoff Date: {cutoff_date}",
-        f"Total Deposits: {_format_eur(partner_section.total_deposits_eur)}",
-        f"Total Withdrawals: {_format_eur(partner_section.total_withdrawals_eur)}",
-        f"Bookmaker Balances: {_format_eur(partner_section.holdings_eur)}",
-        f"Associate Delta: {_format_eur(partner_section.delta_eur)}",
-        "Bookmaker Breakdown:",
-        *bookmaker_lines,
-        internal_section.current_holdings,
-        internal_section.reconciliation_delta,
-    ]
-    _write_simple_pdf(lines, pdf_path)
-    return pdf_path
+
+    rows: List[Dict[str, str]] = []
+    for bookmaker in partner_section.bookmakers:
+        label = f"{bookmaker.bookmaker_name} - {bookmaker.native_currency}"
+        rows.append(
+            {
+                "label": label,
+                "native_amount": _decimal_str(bookmaker.balance_native),
+                "native_currency": bookmaker.native_currency,
+                "eur_amount": _decimal_str(bookmaker.balance_eur),
+                "eur_currency": "EUR",
+                "note": "Bookmaker balance",
+            }
+        )
+
+    rows.append(
+        {
+            "label": f"LIQUIDITA - {calc.home_currency}",
+            "native_amount": "",
+            "native_currency": calc.home_currency,
+            "eur_amount": _decimal_str(-calc.net_deposits_eur),
+            "eur_currency": "EUR",
+            "note": "Net deposits (out-of-pocket)",
+        }
+    )
+
+    rows.append(
+        {
+            "label": f"MULTIBOOK - {calc.home_currency}",
+            "native_amount": "",
+            "native_currency": calc.home_currency,
+            "eur_amount": _decimal_str(calc.delta_eur),
+            "eur_currency": "EUR",
+            "note": "Delta (current holding - should hold)",
+        }
+    )
+
+    rows.append(
+        {
+            "label": f"BALANCE - {calc.home_currency}",
+            "native_amount": "",
+            "native_currency": calc.home_currency,
+            "eur_amount": _decimal_str(calc.current_holding_eur),
+            "eur_currency": "EUR",
+            "note": "Current holdings",
+        }
+    )
+
+    rows.append(
+        {
+            "label": f"UTILE - {calc.home_currency}",
+            "native_amount": "",
+            "native_currency": calc.home_currency,
+            "eur_amount": _decimal_str(calc.raw_profit_eur),
+            "eur_currency": "EUR",
+            "note": "Profit (Should Hold - Net Deposits)",
+        }
+    )
+
+    with file_path.open("w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    return file_path
+
+
+def export_all_statements_zip(cutoff_date: str) -> tuple[Optional[Path], List[str]]:
+    """Generate statements for all associates and bundle into ZIP."""
+    associates = get_associates()
+    if not associates:
+        return None, []
+
+    statement_service = StatementService()
+    csv_paths: List[Path] = []
+    errors: List[str] = []
+
+    for associate in associates:
+        try:
+            calc = statement_service.generate_statement(associate["id"], cutoff_date)
+            partner_section = statement_service.format_partner_facing_section(calc)
+            csv_paths.append(generate_statement_summary_csv(calc, partner_section))
+        except Exception as exc:
+            errors.append(f"{associate['name']}: {exc}")
+
+    if not csv_paths:
+        return None, errors
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    zip_name = f"statements_all_{timestamp}.zip"
+    zip_path = STATEMENT_EXPORT_DIR / zip_name
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zipf:
+        for path in csv_paths:
+            zipf.write(path, arcname=path.name)
+
+    return zip_path, errors
 
 def get_associates() -> List[Dict[str, int]]:
     """Get list of associates for dropdown selection."""
@@ -320,15 +394,42 @@ def render_partner_facing_section(partner_section: PartnerFacingSection) -> None
 
     st.markdown("##### Bookmaker Breakdown")
     if partner_section.bookmakers:
-        table_rows = [
+        table_rows = []
+        total_balance_native = Decimal("0")
+        total_balance_eur = Decimal("0")
+        total_deposits = Decimal("0")
+        total_withdrawals = Decimal("0")
+        native_currencies = {row.native_currency for row in partner_section.bookmakers}
+
+        for row in partner_section.bookmakers:
+            table_rows.append(
+                {
+                    "Bookmaker": row.bookmaker_name,
+                    "Balance (Native)": f"{_decimal_str(row.balance_native)} {row.native_currency}",
+                    "Balance (EUR)": _format_eur(row.balance_eur),
+                    "Deposits (EUR)": _format_eur(row.deposits_eur),
+                    "Withdrawals (EUR)": _format_eur(row.withdrawals_eur),
+                }
+            )
+            total_balance_native += row.balance_native
+            total_balance_eur += row.balance_eur
+            total_deposits += row.deposits_eur
+            total_withdrawals += row.withdrawals_eur
+
+        total_native_display = ""
+        if len(native_currencies) == 1:
+            currency = native_currencies.pop()
+            total_native_display = f"{_decimal_str(total_balance_native)} {currency}"
+
+        table_rows.append(
             {
-                "Bookmaker": row.bookmaker_name,
-                "Balance (EUR)": _format_eur(row.balance_eur),
-                "Deposits (EUR)": _format_eur(row.deposits_eur),
-                "Withdrawals (EUR)": _format_eur(row.withdrawals_eur),
+                "Bookmaker": "TOTAL",
+                "Balance (Native)": total_native_display or "—",
+                "Balance (EUR)": _format_eur(total_balance_eur),
+                "Deposits (EUR)": _format_eur(total_deposits),
+                "Withdrawals (EUR)": _format_eur(total_withdrawals),
             }
-            for row in partner_section.bookmakers
-        ]
+        )
         st.dataframe(pd.DataFrame(table_rows), hide_index=True, use_container_width=True)
         st.caption(
             "Balances are the running sum of all ledger entries for the bookmaker. "
@@ -397,43 +498,22 @@ Bookmaker Breakdown:
             st.code(clipboard_text)
     
     with col2:
-        # Export to CSV
-        if st.button(":material/grid_on: Export to CSV", key="export_csv", width="stretch"):
-            with st.spinner("Generating CSV export..."):
+        # Export summary CSV
+        if st.button(":material/grid_on: Export Statement CSV", key="export_statement_csv", width="stretch"):
+            with st.spinner("Generating statement summary CSV..."):
                 try:
-                    export_service = StatementService()
-                    transactions = export_service.get_associate_transactions(
-                        calc.associate_id, calc.cutoff_date
-                    )
-                    
-                    if transactions:
-                        # Create DataFrame
-                        df = pd.DataFrame(transactions)
-                        
-                        # Create temporary file
-                        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8') as f:
-                            df.to_csv(f.name, index=False)
-                            temp_path = f.name
-                        
-                        st.success(f"CSV exported with {len(transactions)} transactions")
+                    csv_path = generate_statement_summary_csv(calc, partner_section)
+                    st.success("Statement summary ready.")
+                    with open(csv_path, "rb") as csv_file:
                         st.download_button(
-                            label="Download CSV",
-                            data=open(temp_path, 'rb').read(),
-                            file_name=f"statement_{calc.associate_name}_{calc.cutoff_date.split('T')[0]}.csv",
-                            mime="text/csv"
+                            label="Download Statement CSV",
+                            data=csv_file.read(),
+                            file_name=csv_path.name,
+                            mime="text/csv",
+                            key=f"download_statement_csv_{csv_path.name}",
                         )
-                        
-                        # Clean up
-                        Path(temp_path).unlink(missing_ok=True)
-                    else:
-                        st.info("No transactions found for this period")
-                        
                 except Exception as e:
                     st.error(f"CSV export failed: {str(e)}")
-    
-    with col3:
-        st.markdown("### PDF Preview")
-        st.caption("Preview and download options are available below.")
 
 
 def render_generate_button(associate_id: int, cutoff_date: str) -> bool:
@@ -490,30 +570,6 @@ def render_statement_details(calc: StatementCalculations, *, expanded: bool = Fa
             st.error(f"Failed to load transaction details: {str(e)}")
 
 
-
-
-def render_statement_pdf_preview(
-    calc: StatementCalculations,
-    partner_section: PartnerFacingSection,
-    internal_section: InternalSection,
-) -> None:
-    """Generate and render PDF preview for the statement."""
-    pdf_path = generate_statement_pdf(calc, partner_section, internal_section)
-    st.markdown("### :material/picture_as_pdf: PDF Preview")
-    show_pdf_preview(
-        pdf_path,
-        height=520,
-        fallback_message="Update Streamlit or download the PDF below to preview.",
-    )
-    with open(pdf_path, "rb") as pdf_file:
-        st.download_button(
-            label=":material/download: Download PDF",
-            data=pdf_file.read(),
-            file_name=pdf_path.name,
-            mime="application/pdf",
-        )
-
-
 def _render_statement_output(
     calc: StatementCalculations,
     *,
@@ -522,7 +578,6 @@ def _render_statement_output(
     """Render the complete statement output within a fragment."""
     options = options or {}
     show_internal = bool(options.get("show_internal_section", True))
-    show_pdf = bool(options.get("show_pdf_preview", True))
     auto_expand_transactions = bool(options.get("auto_expand_transactions", False))
 
     statement_service = StatementService()
@@ -534,8 +589,6 @@ def _render_statement_output(
     if show_internal:
         render_internal_section(internal_section)
     render_export_options(calc, partner_section)
-    if show_pdf:
-        render_statement_pdf_preview(calc, partner_section, internal_section)
     render_statement_details(calc, expanded=auto_expand_transactions)
 
 def render_validation_errors(errors: List[str]) -> None:
@@ -619,27 +672,20 @@ def main() -> None:
                 st.session_state.daily_statements_modal_open = False
 
     def _render_statement_options() -> Dict[str, bool]:
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         with col1:
-            show_pdf_preview = st.checkbox(
-                ":material/picture_as_pdf: Show PDF preview",
-                value=True,
-                key="statements_show_pdf",
-            )
-        with col2:
             show_internal_section = st.checkbox(
                 ":material/admin_panel_settings: Show internal section",
                 value=True,
                 key="statements_show_internal",
             )
-        with col3:
+        with col2:
             auto_expand_transactions = st.checkbox(
                 ":material/table_rows: Auto-expand transactions",
                 value=False,
                 key="statements_expand_transactions",
             )
         return {
-            "show_pdf_preview": show_pdf_preview,
             "show_internal_section": show_internal_section,
             "auto_expand_transactions": auto_expand_transactions,
         }
@@ -661,24 +707,54 @@ def main() -> None:
     # Render input panel
     associate_id, cutoff_date = render_input_panel()
     
-    # Generate button with validation
+    # Generate buttons with validation
     if associate_id and cutoff_date:
-        if render_generate_button(associate_id, cutoff_date):
+        action_cols = st.columns(2)
+        with action_cols[0]:
+            generate_clicked = render_generate_button(associate_id, cutoff_date)
+        with action_cols[1]:
+            export_all_clicked = st.button(
+                ":material/archive: Export All Statements (ZIP)",
+                key="export_all_statements_zip",
+                help="Generate statement summaries for every associate and download a ZIP.",
+            )
+
+        if generate_clicked:
             with st.spinner("Generating statement..."):
                 try:
                     statement_service = StatementService()
                     calc = statement_service.generate_statement(associate_id, cutoff_date)
-                    
+
+                    partner_section = statement_service.format_partner_facing_section(calc)
+                    summary_path = generate_statement_summary_csv(calc, partner_section)
                     st.session_state.current_statement = calc
                     st.session_state.statement_generated = True
                     st.success(f"Statement generated for {calc.associate_name}")
                     show_success_toast(f"Statement generated for {calc.associate_name}")
-                    safe_rerun()
-                    
+                    summary_resolved = summary_path.resolve()
+                    trigger_auto_download(summary_resolved, "Statement download")
+                    st.caption(
+                        f"If the download was blocked, "
+                        f"[click here to download manually]({summary_resolved.as_uri()})."
+                    )
                 except ValueError as e:
                     st.error(f"Validation Error: {str(e)}")
                 except Exception as e:
                     st.error(f"Statement generation failed: {str(e)}")
+
+        if export_all_clicked:
+            with st.spinner("Generating statements for all associates..."):
+                zip_path, errors = export_all_statements_zip(cutoff_date)
+            if zip_path:
+                show_success_toast("All statements generated.")
+                zip_resolved = zip_path.resolve()
+                trigger_auto_download(zip_resolved, "Statements ZIP download")
+                st.caption(
+                    f"If the ZIP download was blocked, "
+                    f"[download it manually]({zip_resolved.as_uri()})."
+                )
+            if errors:
+                st.error("Some statements failed:\n" + "\n".join(f"- {err}" for err in errors))
     
     # Display generated statement
     if st.session_state.statement_generated and st.session_state.current_statement:
@@ -703,26 +779,19 @@ def main() -> None:
         st.markdown("""
         ### About Monthly Statements
         
-        **Purpose:** Generate partner statements showing funding, entitlement, bookmaker balances, and reconciliation deltas.
-        
-        **Sections:**
-        - **Partner Statement**: Shareable with associates showing funding, entitlement, and bookmaker balances with deltas
-        - **Internal Reconciliation**: Internal-only section showing current holdings vs. entitlement
-        - **Transaction Details**: Complete transaction list for verification
-        
-        **Calculations:**
-        - **Net Deposits**: SUM(DEPOSITS) - SUM(WITHDRAWALS)
-        - **Should Hold**: SUM(principal_returned + per_surebet_share)
-        - **Current Holding**: SUM(all ledger entries)
-        - **Raw Profit**: Should Hold - Net Deposits
-        - **Delta**: Current Holding - Should Hold
-        
-        **Export Options:**
-        - **Copy to Clipboard**: Partner-facing section only
-        - **Export to CSV**: Complete transaction list
-        - **Export to PDF**: Coming soon
-        
-        **Important:** Statements are read-only snapshots and do not modify any ledger entries.
+        - **Partner Statement**: Shareable with associates showing funding, entitlement, and bookmaker balances with deltas  
+        - **Internal Reconciliation**: Internal-only section showing current holdings vs. entitlement  
+        - **Transaction Details**: Complete transaction list for verification  
+
+        **Calculations**
+
+        - `Net Deposits = SUM(DEPOSITS) − SUM(WITHDRAWALS)`  
+        - `Should Hold = SUM(principal_returned + per_surebet_share)`  
+        - `Current Holding = SUM(all ledger entries)`  
+        - `Raw Profit = Should Hold − Net Deposits`  
+        - `Delta = Current Holding − Should Hold`  
+
+        Each bookmaker is exported on its own row (native + EUR balance). Additional rows detail **LIQUIDITA** (net deposits), **MULTIBOOK** (delta), **BALANCE** (current holdings), and **UTILE** (profit) so you can track associate performance at a glance.
         """)
 
     render_debug_panel()

@@ -23,7 +23,8 @@ def sample_associate_data():
     """Sample associate data for testing."""
     return {
         "id": 1,
-        "display_alias": "Test Associate"
+        "display_alias": "Test Associate",
+        "home_currency": "EUR",
     }
 
 
@@ -113,7 +114,7 @@ def mock_database_with_data(sample_associate_data, sample_ledger_entries):
     # Mock associate lookup
     def mock_execute(query, params=None):
         normalized = " ".join(query.split())
-        if "SELECT display_alias FROM associates" in normalized:
+        if "SELECT display_alias" in normalized and "FROM associates" in normalized:
             cursor.fetchone.return_value = sample_associate_data
             cursor.fetchall.return_value = []
         elif "SUM(CASE WHEN type = 'DEPOSIT'" in normalized and "total_deposits" in normalized:
@@ -133,6 +134,8 @@ def mock_database_with_data(sample_associate_data, sample_ledger_entries):
                     "balance_eur": 550.0,
                     "deposits_eur": 1000.0,
                     "withdrawals_eur": 200.0,
+                    "balance_native": 550.0,
+                    "native_currency": "EUR",
                 }
             ]
         elif "SELECT id, type, amount_eur" in normalized:
@@ -176,7 +179,7 @@ class TestCompleteStatementGeneration:
         
         # Mock data for loss scenario
         cursor.fetchone.side_effect = [
-            {"display_alias": "Loss Associate"},
+            {"display_alias": "Loss Associate", "home_currency": "EUR"},
             {"total_deposits": 2000.0, "total_withdrawals": 0.0},
             {"should_hold_eur": 1200.0},
             {"current_holding_eur": 1100.0},
@@ -200,7 +203,7 @@ class TestCompleteStatementGeneration:
         
         # Mock data for balanced scenario
         cursor.fetchone.side_effect = [
-            {"display_alias": "Balanced Associate"},
+            {"display_alias": "Balanced Associate", "home_currency": "EUR"},
             {"total_deposits": 1000.0, "total_withdrawals": 0.0},
             {"should_hold_eur": 1000.0},
             {"current_holding_eur": 1000.0},
@@ -273,9 +276,12 @@ class TestFormattingIntegration:
                     balance_eur=Decimal("7200.00"),
                     deposits_eur=Decimal("5000.00"),
                     withdrawals_eur=Decimal("0.00"),
+                    balance_native=Decimal("7200.00"),
+                    native_currency="EUR",
                 )
             ],
             associate_name="Profitable Associate",
+            home_currency="EUR",
             cutoff_date="2025-10-31T23:59:59Z",
             generated_at="2025-11-05T11:00:00Z"
         )
@@ -303,6 +309,7 @@ class TestFormattingIntegration:
             total_withdrawals_eur=Decimal("0.00"),
             bookmakers=[],
             associate_name="Test Associate",
+            home_currency="EUR",
             cutoff_date="2025-10-31T23:59:59Z",
             generated_at="2025-11-05T11:00:00Z"
         )
@@ -324,6 +331,7 @@ class TestFormattingIntegration:
             total_withdrawals_eur=Decimal("0.00"),
             bookmakers=[],
             associate_name="Test Associate",
+            home_currency="EUR",
             cutoff_date="2025-10-31T23:59:59Z",
             generated_at="2025-11-05T11:00:00Z"
         )
@@ -344,7 +352,7 @@ class TestCutoffDateScenarios:
         
         # Mock data
         cursor.fetchone.side_effect = [
-            {"display_alias": "Test Associate"},
+            {"display_alias": "Test Associate", "home_currency": "EUR"},
             {"total_deposits": 1000.0, "total_withdrawals": 0.0},
             {"should_hold_eur": 1200.0},
             {"current_holding_eur": 1150.0},
@@ -374,7 +382,7 @@ class TestCutoffDateScenarios:
         
         # Mock data
         cursor.fetchone.side_effect = [
-            {"display_alias": "Test Associate"},
+            {"display_alias": "Test Associate", "home_currency": "EUR"},
             {"total_deposits": 500.0, "total_withdrawals": 0.0},
             {"should_hold_eur": 600.0},
             {"current_holding_eur": 550.0}
@@ -416,7 +424,7 @@ class TestErrorHandlingIntegration:
         
         # Mock scenario where some calculations return NULL
         cursor.fetchone.side_effect = [
-            {"display_alias": "Test Associate"},
+            {"display_alias": "Test Associate", "home_currency": "EUR"},
             {"total_deposits": 1000.0, "total_withdrawals": 0.0},
             {"should_hold_eur": None},    # No bet results yet
             {"current_holding_eur": 1000.0}
@@ -443,7 +451,7 @@ class TestLargeDatasetPerformance:
         
         # Mock calculation results
         cursor.fetchone.side_effect = [
-            {"display_alias": "High Volume Associate"},
+            {"display_alias": "High Volume Associate", "home_currency": "EUR"},
             {"total_deposits": 50000.0, "total_withdrawals": 0.0},
             {"should_hold_eur": 55000.0},
             {"current_holding_eur": 54500.0}

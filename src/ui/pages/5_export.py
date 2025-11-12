@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import base64
 import uuid
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 import inspect
+import zipfile
 
 import streamlit as st
 
@@ -36,6 +38,7 @@ from src.utils.logging_config import get_logger
 PAGE_TITLE = "Export"
 PAGE_ICON = ":material/ios_share:"
 logger = get_logger(__name__)
+ALL_ASSOC_SPLIT = "__ALL_SPLIT__"
 
 
 def _supports_associate_filtering() -> bool:
@@ -112,18 +115,12 @@ def trigger_auto_download(file_path: Path) -> None:
 
 def render_export_button(*, validate_after_export: bool = True) -> None:
     """Render the main export button and handle export logic."""
-    st.subheader("Export Full Ledger")
-
-    st.info(
-        "Export the complete ledger with all entries, including joins to associate "
-        "names and bookmaker names. Use the associate filter below to scope the "
-        "export to a single account. Files are saved to `data/exports/`. The CSV "
-        "download now starts automatically."
-    )
-
     associates = load_associates_for_export()
     supports_filter = _supports_associate_filtering()
-    associate_options: Dict[str, Optional[int]] = {"All Associates": None}
+    associate_options: Dict[str, Union[int, str, None]] = {
+        "All Associates (split files)": ALL_ASSOC_SPLIT,
+        "Multi (single file)": None,
+    }
     for associate in associates:
         label = (
             f"{associate['display_alias']} ({associate['home_currency']})"
@@ -139,7 +136,10 @@ def render_export_button(*, validate_after_export: bool = True) -> None:
         key="export_associate_filter",
     )
     selected_associate_id = associate_options[selected_label]
-    if selected_associate_id is not None and not supports_filter:
+    if (
+        selected_associate_id not in (None, ALL_ASSOC_SPLIT)
+        and not supports_filter
+    ):
         st.warning(
             "This running version cannot filter exports per associate yet. "
             "Restart the app after updating to enable scoped exports."
@@ -147,11 +147,62 @@ def render_export_button(*, validate_after_export: bool = True) -> None:
 
     if st.button(":material/ios_share: Export Ledger", type="primary", width="stretch"):
         export_service = LedgerExportService()
-        if selected_associate_id is not None and not supports_filter:
+        if (
+            selected_associate_id not in (None, ALL_ASSOC_SPLIT)
+            and not supports_filter
+        ):
             st.error(
                 "Per-associate exports are unavailable until the backend reloads with the latest version. "
                 "Please restart and try again."
             )
+            return
+        if selected_associate_id == ALL_ASSOC_SPLIT:
+            if not supports_filter:
+                st.error(
+                    "Per-associate exports are unavailable until the backend reloads with the latest version."
+                )
+                return
+            split_results = []
+            errors = []
+            with st.spinner("Exporting all associates..."):
+                for associate in associates:
+                    try:
+                        file_path, row_count = export_service.export_full_ledger(
+                            associate_id=associate["id"]
+                        )
+                        split_results.append(
+                            {
+                                "associate": associate,
+                                "file_path": file_path,
+                                "row_count": row_count,
+                            }
+                        )
+                    except Exception as exc:
+                        errors.append((associate["display_alias"], exc))
+
+            if split_results:
+                parent_dir = Path(split_results[0]["file_path"]).resolve().parent
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                zip_name = f"all_associates_{timestamp}_ledger.zip"
+                zip_path = parent_dir / zip_name
+                with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zipf:
+                    for result in split_results:
+                        file_path = Path(result["file_path"]).resolve()
+                        zipf.write(file_path, arcname=file_path.name)
+
+                show_success_toast(
+                    f"Exported {len(split_results)} associate files into {zip_name}."
+                )
+                trigger_auto_download(zip_path)
+                st.caption(
+                    "If the ZIP download was blocked, "
+                    f"[click here to download manually]({zip_path.as_uri()})."
+                )
+            if errors:
+                st.error(
+                    "Some exports failed:\n"
+                    + "\n".join(f"- {name}: {err}" for name, err in errors)
+                )
             return
         progress: Dict[str, str | int | None] = {"scope_label": selected_label}
 
@@ -326,63 +377,56 @@ with action_cols[1]:
         description="Clear export options and dialog state.",
         prefixes=("export_", "filters_", "advanced_", "dialog_"),
     )
+    validate_after_export = st.checkbox(
+        "Validate file after export",
+        value=True,
+        key="export_validate_file",
+        help="Read the generated CSV and verify the row count before completing.",
+    )
 
 
-def _render_export_options() -> Dict[str, object]:
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        validate_after_export = st.checkbox(
-            "Validate file after export",
-            value=True,
-            key="export_validate_file",
-            help="Read the generated CSV and verify the row count before completing.",
-        )
-    with col2:
-        history_limit = st.number_input(
-            "History entries",
-            min_value=5,
-            max_value=50,
-            step=5,
-            value=10,
-            key="export_history_limit",
-        )
-    return {
-        "validate_after_export": validate_after_export,
-        "history_limit": int(history_limit),
-    }
+def _render_history_options() -> Dict[str, object]:
+    history_limit = st.number_input(
+        "History entries",
+        min_value=5,
+        max_value=50,
+        step=5,
+        value=10,
+        key="export_history_limit",
+    )
+    return {"history_limit": int(history_limit)}
 
+
+call_fragment(
+    "export.action",
+    render_export_button,
+    validate_after_export=validate_after_export,
+)
 
 with advanced_section():
-    export_options, _ = form_gated_filters(
-        "export_filters",
-        _render_export_options,
-        submit_label="Apply Options",
-        help_text="Update export validation and history preferences.",
+    st.subheader("Advanced: Export History")
+    history_options, _ = form_gated_filters(
+        "export_history_filters",
+        _render_history_options,
+        submit_label="Apply History Options",
+        help_text="Adjust export history retrieval preferences.",
     )
-    
-    # Render main sections
-    call_fragment(
-        "export.action",
-        render_export_button,
-        validate_after_export=export_options["validate_after_export"],
-    )
-    st.divider()
     call_fragment(
         "export.history",
         render_export_history,
-        limit=export_options["history_limit"],
-    )
-    st.divider()
-    render_export_instructions()
-    
-    # Footer info
-    st.markdown("---")
-    st.caption(
-        ":material/lightbulb: **Tip:** For very large ledgers (10,000+ rows), the export may take "
-        "several seconds. The progress spinner will indicate when the export is complete."
+        limit=history_options["history_limit"],
     )
 
-    render_debug_panel()
+st.divider()
+render_export_instructions()
+
+st.markdown("---")
+st.caption(
+    ":material/lightbulb: **Tip:** For very large ledgers (10,000+ rows), the export may take "
+    "several seconds. The progress spinner will indicate when the export is complete."
+)
+
+render_debug_panel()
 
 
 if __name__ == "__main__":

@@ -25,7 +25,8 @@ class LedgerExportService:
     """Service for exporting ledger entries to CSV format."""
 
     def __init__(self, export_dir: str = "data/exports"):
-        self.export_dir = Path(export_dir)
+        base_dir = Path(export_dir)
+        self.export_dir = base_dir / "ledger"
         self.export_dir.mkdir(parents=True, exist_ok=True)
 
     def export_full_ledger(self, associate_id: Optional[int] = None) -> Tuple[str, int]:
