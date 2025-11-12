@@ -7,6 +7,8 @@ Includes export history and re-download functionality.
 
 from __future__ import annotations
 
+import base64
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 import inspect
@@ -90,6 +92,24 @@ def format_scope_label(history_entry: Dict[str, object]) -> str:
         return "All Associates"
     return "Unknown"
 
+
+def trigger_auto_download(file_path: Path) -> None:
+    """Inject a hidden download link and auto-click it."""
+    try:
+        data = file_path.read_bytes()
+    except OSError as exc:
+        st.warning(f"Auto-download unavailable ({exc}). Use the manual link below.")
+        return
+
+    b64 = base64.b64encode(data).decode()
+    download_id = f"download-link-{uuid.uuid4().hex}"
+    download_html = (
+        f'<a id="{download_id}" href="data:text/csv;base64,{b64}" '
+        f'download="{file_path.name}"></a>'
+        f"<script>document.getElementById('{download_id}').click();</script>"
+    )
+    st.markdown(download_html, unsafe_allow_html=True)
+
 def render_export_button(*, validate_after_export: bool = True) -> None:
     """Render the main export button and handle export logic."""
     st.subheader("Export Full Ledger")
@@ -97,8 +117,8 @@ def render_export_button(*, validate_after_export: bool = True) -> None:
     st.info(
         "Export the complete ledger with all entries, including joins to associate "
         "names and bookmaker names. Use the associate filter below to scope the "
-        "export to a single account. Files are saved to `data/exports/` and a download "
-        "link will be provided."
+        "export to a single account. Files are saved to `data/exports/`. The CSV "
+        "download now starts automatically."
     )
 
     associates = load_associates_for_export()
@@ -173,7 +193,8 @@ def render_export_button(*, validate_after_export: bool = True) -> None:
 
         show_success_toast(f"Ledger exported for {selected_label} ({int(row_count):,} rows)")
 
-        st.markdown("### Download Link")
+        trigger_auto_download(Path(file_path))
+        st.caption("If your browser blocked the automatic download, use the link below.")
         st.markdown(f":material/download: [{Path(file_path).name}](file://{Path(file_path).absolute()})")
 
         file_stat = Path(file_path).stat()
@@ -267,23 +288,13 @@ def render_export_instructions() -> None:
         - NULL values as empty strings
         
         **Columns Included:**
-        - `entry_id` - Unique identifier for the ledger entry
-        - `entry_type` - Type (BET_RESULT, DEPOSIT, WITHDRAWAL, BOOKMAKER_CORRECTION)
-        - `associate_alias` - Associate display name
-        - `bookmaker_name` - Bookmaker name (if applicable)
-        - `surebet_id` - Related surebet ID (if applicable)
-        - `bet_id` - Related bet ID (if applicable)
-        - `settlement_batch_id` - Settlement batch identifier
-        - `settlement_state` - WON/LOST/VODE (for bet results)
-        - `amount_native` - Amount in native currency
-        - `native_currency` - Native currency code
-        - `fx_rate_snapshot` - Exchange rate used (EUR per 1 unit native)
-        - `amount_eur` - Amount converted to EUR
-        - `principal_returned_eur` - Principal amount returned (EUR)
-        - `per_surebet_share_eur` - Share amount in surebet split (EUR)
-        - `created_at_utc` - Entry creation timestamp (UTC)
-        - `created_by` - Who created the entry
-        - `note` - Any additional notes
+        - `associate_alias`, `bookmaker_name`
+        - `event_name` (canonical when available) and `market_selection`
+        - `settlement_state`, `native_currency`, `amount_native`
+        - `principal_returned_native` (new) and `note`
+        - `amount_eur`, `principal_returned_eur`, `per_surebet_share_eur`
+        - `entry_id`, `entry_type`, `surebet_id`, `bet_id`, `settlement_batch_id`
+        - `fx_rate_snapshot`, `created_at_utc`, `created_by`
         
         **File Location:** All exports are saved to `data/exports/` with timestamp naming.
 

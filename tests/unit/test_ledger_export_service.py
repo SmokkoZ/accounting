@@ -41,6 +41,13 @@ class TestLedgerExportService:
                 "entry_type": "BET_RESULT",
                 "associate_alias": "Alice",
                 "bookmaker_name": "Bet365",
+                "selection_text": "Manchester United vs Liverpool",
+                "selection": "Over 2.5 Goals",
+                "market_code": "TOTAL_GOALS_OVER_UNDER",
+                "market_description": "Total Goals Over/Under",
+                "side": "OVER",
+                "line_value": "2.5",
+                "canonical_event_name": "Manchester United vs Liverpool",
                 "amount_native": "100.50",
                 "native_currency": "AUD",
                 "fx_rate_snapshot": "0.65",
@@ -60,6 +67,13 @@ class TestLedgerExportService:
                 "entry_type": "DEPOSIT",
                 "associate_alias": "Bob",
                 "bookmaker_name": None,
+                "selection_text": None,
+                "selection": None,
+                "market_code": None,
+                "market_description": None,
+                "side": None,
+                "line_value": None,
+                "canonical_event_name": None,
                 "amount_native": "500.00",
                 "native_currency": "EUR",
                 "fx_rate_snapshot": "1.00",
@@ -223,9 +237,9 @@ class TestLedgerExportService:
         """Test export history with existing files."""
         # Create test export files
         files_data = [
-            ("ledger_20250101_100000.csv", 100),
-            ("ledger_20250101_110000.csv", 150),
-            ("ledger_20250101_120000.csv", 200)
+            ("all_MULTI_01-01-2025_ledger.csv", 100),
+            ("all_MULTI_02-01-2025_ledger.csv", 150),
+            ("all_MULTI_03-01-2025_ledger.csv", 200)
         ]
         
         for filename, row_count in files_data:
@@ -244,9 +258,9 @@ class TestLedgerExportService:
         filenames = [h['filename'] for h in history]
         row_counts = [h['row_count'] for h in history]
         
-        assert "ledger_20250101_120000.csv" in filenames
-        assert "ledger_20250101_110000.csv" in filenames
-        assert "ledger_20250101_100000.csv" in filenames
+        assert "all_MULTI_03-01-2025_ledger.csv" in filenames
+        assert "all_MULTI_02-01-2025_ledger.csv" in filenames
+        assert "all_MULTI_01-01-2025_ledger.csv" in filenames
         assert 200 in row_counts
         assert 150 in row_counts
         assert 100 in row_counts
@@ -255,7 +269,8 @@ class TestLedgerExportService:
         """Test export history with limit parameter."""
         # Create more files than limit
         for i in range(15):
-            filename = f"ledger_20250101_{i:02d}0000.csv"
+            day = (i % 28) + 1
+            filename = f"all_MULTI_{day:02d}-01-2025_ledger.csv"
             file_path = service.export_dir / filename
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
@@ -270,47 +285,53 @@ class TestLedgerExportService:
         # Create mix of files
         (service.export_dir / "other.csv").touch()
         (service.export_dir / "ledger_test.csv").touch()
-        (service.export_dir / "ledger_20250101_100000.csv").touch()
+        (service.export_dir / "all_MULTI_01-01-2025_ledger.csv").touch()
         
         history = service.get_export_history()
         
-        # Should only find proper ledger file (generic pattern now includes all ledger_*.csv files)
+        # Should only find proper ledger file
         assert len(history) >= 1
         filenames = [h['filename'] for h in history]
-        assert "ledger_20250101_100000.csv" in filenames
+        assert "all_MULTI_01-01-2025_ledger.csv" in filenames
 
     @patch('src.services.ledger_export_service.get_db_connection')
     def test_get_export_history_includes_scope_metadata(self, mock_get_conn, service):
         """Test that history entries include associate scope information."""
         # Create generic export
-        full_file = service.export_dir / "ledger_20250101_100000.csv"
+        full_file = service.export_dir / "all_MULTI_01-01-2025_ledger.csv"
         with open(full_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(['entry_id'])
             writer.writerow([1])
 
         # Create associate-scoped export
-        assoc_file = service.export_dir / "ledger_assoc-7-jane-doe_20250101_120000.csv"
-        with open(assoc_file, 'w', newline='', encoding='utf-8') as f:
+        assoc_file_new = service.export_dir / "jane-doe_EUR_01-01-2025_ledger.csv"
+        with open(assoc_file_new, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['entry_id'])
+            writer.writerow([1])
+
+        assoc_file_legacy = service.export_dir / "ledger_assoc-7-jane-doe_20250101_130000.csv"
+        with open(assoc_file_legacy, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(['entry_id'])
             writer.writerow([1])
             writer.writerow([2])
-
         # Mock DB alias lookup
         mock_conn = MagicMock()
         mock_execute = MagicMock()
-        mock_execute.fetchone.return_value = {"display_alias": "Jane Doe"}
+        mock_execute.fetchone.return_value = {"display_alias": "Legacy Jane", "home_currency": "EUR"}
         mock_conn.execute.return_value = mock_execute
         mock_get_conn.return_value = mock_conn
 
         history = service.get_export_history(limit=5)
 
-        assert len(history) == 2
-        scoped_entry = next(h for h in history if h["scope"] == "associate")
-        assert scoped_entry["associate_id"] == 7
-        assert scoped_entry["associate_alias"] == "Jane Doe"
-        assert scoped_entry["alias_slug"] == "jane-doe"
+        assert len(history) == 3
+        scoped_entries = [h for h in history if h["scope"] == "associate"]
+        assert any(h["associate_alias"] == "Jane Doe" for h in scoped_entries if h["associate_id"] is None)
+        legacy_entry = next(h for h in scoped_entries if h["associate_id"] == 7)
+        assert legacy_entry["associate_alias"] == "Legacy Jane"
+        assert legacy_entry["alias_slug"] == "jane-doe"
 
     @patch('src.services.ledger_export_service.get_db_connection')
     def test_export_csv_headers_and_format(self, mock_get_conn, service, mock_db_data):
@@ -329,13 +350,28 @@ class TestLedgerExportService:
             headers = reader.fieldnames
             rows = list(reader)
         
-        # Check all expected headers are present
+        # Check all expected headers are present (ordered per spec)
         expected_headers = [
-            "entry_id", "entry_type", "associate_alias", "bookmaker_name",
-            "surebet_id", "bet_id", "settlement_batch_id", "settlement_state",
-            "amount_native", "native_currency", "fx_rate_snapshot", "amount_eur",
-            "principal_returned_eur", "per_surebet_share_eur",
-            "created_at_utc", "created_by", "note"
+            "created_at_utc",
+            "entry_type",
+            "associate_alias",
+            "bookmaker_name",
+            "event_name",
+            "market_selection",
+            "settlement_state",
+            "native_currency",
+            "amount_native",
+            "principal_returned_native",
+            "note",
+            "amount_eur",
+            "principal_returned_eur",
+            "per_surebet_share_eur",
+            "entry_id",
+            "surebet_id",
+            "bet_id",
+            "settlement_batch_id",
+            "fx_rate_snapshot",
+            "created_by",
         ]
         
         for header in expected_headers:
@@ -344,6 +380,12 @@ class TestLedgerExportService:
         # Verify UTF-8 encoding by reading special characters
         assert len(headers) == len(expected_headers)
         assert len(rows) == len(mock_db_data)
+
+        first_row = rows[0]
+        assert first_row["created_at_utc"] == "01/01/2025"
+        assert first_row["event_name"] == "Manchester United vs Liverpool"
+        assert first_row["market_selection"] == "Total Goals Over/Under - OVER (2.5)"
+        assert first_row["principal_returned_native"] == "154.62"
 
     @patch('src.services.ledger_export_service.get_db_connection')
     def test_export_full_ledger_with_associate_filter(self, mock_get_conn, service, mock_db_data):
@@ -354,7 +396,7 @@ class TestLedgerExportService:
         mock_conn.cursor.return_value = mock_cursor
 
         alias_cursor = MagicMock()
-        alias_cursor.fetchone.return_value = {"display_alias": "Alice Smith"}
+        alias_cursor.fetchone.return_value = {"display_alias": "Alice Smith", "home_currency": "EUR"}
         mock_conn.execute.return_value = alias_cursor
 
         mock_get_conn.return_value = mock_conn
@@ -362,7 +404,7 @@ class TestLedgerExportService:
         file_path, row_count = service.export_full_ledger(associate_id=3)
 
         assert row_count == len(mock_db_data)
-        assert "ledger_assoc-3-alice-smith_" in Path(file_path).name
+        assert Path(file_path).name.startswith("alice-smith_EUR_")
 
         executed_query, params = mock_cursor.execute.call_args[0]
         assert "WHERE le.associate_id = ?" in executed_query
@@ -384,7 +426,9 @@ class TestLedgerExportService:
     @patch('src.services.ledger_export_service.get_db_connection')
     def test_export_filename_format(self, mock_get_conn, mock_datetime, service, mock_db_data):
         """Test that export filename follows correct timestamp format."""
-        mock_datetime.now.return_value.strftime.return_value = "20250101_123456"
+        mock_datetime.now.return_value.strftime.return_value = "20250101_123456_654321"
+        parsed_dt = datetime.strptime("20250101_123456_654321", "%Y%m%d_%H%M%S_%f")
+        mock_datetime.strptime.return_value = parsed_dt
         
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -394,5 +438,5 @@ class TestLedgerExportService:
         
         file_path, _ = service.export_full_ledger()
         
-        expected_filename = "ledger_20250101_123456.csv"
+        expected_filename = "all_MULTI_01-01-2025_ledger.csv"
         assert Path(file_path).name == expected_filename

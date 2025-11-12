@@ -39,6 +39,13 @@ class TestExportFlowIntegration:
                 "entry_type": "BET_RESULT",
                 "associate_alias": "Alice Smith",
                 "bookmaker_name": "Bet365",
+                "selection_text": "Manchester United vs Liverpool",
+                "selection": "Over 2.5 Goals",
+                "market_code": "TOTAL_GOALS_OVER_UNDER",
+                "market_description": "Total Goals Over/Under",
+                "side": "OVER",
+                "line_value": "2.5",
+                "canonical_event_name": "Manchester United vs Liverpool",
                 "amount_native": "100.50",
                 "native_currency": "AUD",
                 "fx_rate_snapshot": "0.6523",
@@ -58,6 +65,13 @@ class TestExportFlowIntegration:
                 "entry_type": "DEPOSIT",
                 "associate_alias": "Bob Johnson",
                 "bookmaker_name": None,
+                "selection_text": None,
+                "selection": None,
+                "market_code": None,
+                "market_description": None,
+                "side": None,
+                "line_value": None,
+                "canonical_event_name": None,
                 "amount_native": "1000.00",
                 "native_currency": "EUR",
                 "fx_rate_snapshot": "1.0000",
@@ -77,6 +91,13 @@ class TestExportFlowIntegration:
                 "entry_type": "WITHDRAWAL",
                 "associate_alias": "Charlie Brown",
                 "bookmaker_name": "William Hill",
+                "selection_text": None,
+                "selection": None,
+                "market_code": None,
+                "market_description": None,
+                "side": None,
+                "line_value": None,
+                "canonical_event_name": None,
                 "amount_native": "200.00",
                 "native_currency": "GBP",
                 "fx_rate_snapshot": "1.1567",
@@ -96,6 +117,13 @@ class TestExportFlowIntegration:
                 "entry_type": "BOOKMAKER_CORRECTION",
                 "associate_alias": "Alice Smith",
                 "bookmaker_name": "Bet365",
+                "selection_text": None,
+                "selection": None,
+                "market_code": None,
+                "market_description": None,
+                "side": None,
+                "line_value": None,
+                "canonical_event_name": None,
                 "amount_native": "-50.00",
                 "native_currency": "AUD",
                 "fx_rate_snapshot": "0.6523",
@@ -151,7 +179,7 @@ class TestExportFlowIntegration:
             headers = reader.fieldnames
         
         # Check structure
-        assert len(headers) == 17  # Expected number of columns
+        assert len(headers) == 20  # Expected number of columns
         assert len(rows) == 4  # All sample records
         
         # Verify specific data
@@ -160,6 +188,10 @@ class TestExportFlowIntegration:
         assert bet_result_row['bookmaker_name'] == 'Bet365'
         assert bet_result_row['amount_native'] == '100.50'
         assert bet_result_row['settlement_state'] == 'WON'
+        assert bet_result_row['created_at_utc'] == '01/01/2025'
+        assert bet_result_row['event_name'] == 'Manchester United vs Liverpool'
+        assert bet_result_row['market_selection'] == 'Total Goals Over/Under - OVER (2.5)'
+        assert bet_result_row['principal_returned_native'] == '154.07'
         assert bet_result_row['surebet_id'] == '123'
         assert bet_result_row['bet_id'] == '456'
         
