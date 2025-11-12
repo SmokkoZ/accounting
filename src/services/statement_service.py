@@ -40,6 +40,7 @@ class StatementCalculations:
     net_deposits_eur: Decimal
     should_hold_eur: Decimal
     current_holding_eur: Decimal
+    profit_before_payout_eur: Decimal
     raw_profit_eur: Decimal
     delta_eur: Decimal
     total_deposits_eur: Decimal
@@ -58,6 +59,8 @@ class PartnerFacingSection:
     total_withdrawals_eur: Decimal
     holdings_eur: Decimal
     delta_eur: Decimal
+    profit_before_payout_eur: Decimal
+    raw_profit_eur: Decimal
     bookmakers: List[BookmakerStatementRow]
 
 
@@ -106,6 +109,9 @@ class StatementService:
             net_deposits = total_deposits - total_withdrawals
             should_hold = self._calculate_should_hold(conn, associate_id, cutoff_date)
             current_holding = self._calculate_current_holding(conn, associate_id, cutoff_date)
+            profit_before_payout = self._calculate_profit_before_payout(
+                conn, associate_id, cutoff_date
+            )
             bookmakers = self._calculate_bookmaker_breakdown(
                 conn, associate_id, cutoff_date
             )
@@ -119,6 +125,7 @@ class StatementService:
                 net_deposits_eur=net_deposits,
                 should_hold_eur=should_hold,
                 current_holding_eur=current_holding,
+                profit_before_payout_eur=profit_before_payout,
                 raw_profit_eur=raw_profit,
                 delta_eur=delta,
                 total_deposits_eur=total_deposits,
@@ -252,6 +259,45 @@ class StatementService:
         result = row["current_holding_eur"] or 0.0
         return Decimal(str(result))
 
+    def _calculate_profit_before_payout(
+        self, conn, associate_id: int, cutoff_date: str
+    ) -> Decimal:
+        """
+        Calculate PROFIT_BEFORE_PAYOUT_EUR = SUM(per_surebet_share_eur).
+
+        Args:
+            conn: Database connection
+            associate_id: Associate ID
+            cutoff_date: Cutoff date (inclusive)
+
+        Returns:
+            Profit before payout as Decimal
+        """
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT
+                SUM(CAST(per_surebet_share_eur AS REAL)) AS profit_before_payout_eur
+            FROM ledger_entries
+            WHERE associate_id = ?
+              AND type = 'BET_RESULT'
+              AND per_surebet_share_eur IS NOT NULL
+              AND created_at_utc <= ?
+            """,
+            (associate_id, cutoff_date),
+        )
+
+        row = cursor.fetchone()
+        if not row:
+            return Decimal("0.00")
+
+        try:
+            result = row["profit_before_payout_eur"]  # type: ignore[index]
+        except (TypeError, KeyError, IndexError):
+            result = row[0] if isinstance(row, (list, tuple)) else 0.0  # type: ignore[index]
+
+        return Decimal(str(result or 0.0))
+
     def _calculate_bookmaker_breakdown(
         self, conn, associate_id: int, cutoff_date: str
     ) -> List[BookmakerStatementRow]:
@@ -317,6 +363,8 @@ class StatementService:
             total_withdrawals_eur=calc.total_withdrawals_eur,
             holdings_eur=calc.current_holding_eur,
             delta_eur=calc.delta_eur,
+            profit_before_payout_eur=calc.profit_before_payout_eur,
+            raw_profit_eur=calc.raw_profit_eur,
             bookmakers=calc.bookmakers,
         )
     

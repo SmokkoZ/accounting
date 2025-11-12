@@ -16,6 +16,8 @@ from src.services.settlement_service import (
     SettlementService,
     BetOutcome,
     SettlementPreview,
+    LedgerEntryPreview,
+    Participant,
 )
 
 
@@ -659,3 +661,158 @@ def test_preview_settlement_with_void_participant(
 
     # Bet 2 (LOST, staked): gets share of -40
     assert preview.ledger_entries[1].total_amount_eur == Decimal("-40.00")
+
+
+@patch("src.services.settlement_service.get_fx_rate")
+def test_per_surebet_share_population_across_outcomes(
+    mock_fx_rate, settlement_service, mock_db
+):
+    """Ensure per-surebet share column is populated for positive, negative, and VOID seats."""
+    mock_fx_rate.return_value = 1.0
+    cursor = mock_db.cursor.return_value
+    cursor.fetchall.return_value = [
+        {
+            "id": 1,
+            "associate_id": 10,
+            "bookmaker_id": 20,
+            "stake": "100.00",
+            "odds": "1.90",
+            "currency": "EUR",
+            "associate_alias": "Alice",
+            "bookmaker_name": "BetFair",
+        },
+        {
+            "id": 2,
+            "associate_id": 11,
+            "bookmaker_id": 21,
+            "stake": "80.00",
+            "odds": "2.10",
+            "currency": "EUR",
+            "associate_alias": "Bob",
+            "bookmaker_name": "Pinnacle",
+        },
+    ]
+
+    scenarios = [
+        (
+            {1: BetOutcome.WON, 2: BetOutcome.LOST},
+            [Decimal("5.00"), Decimal("5.00")],
+        ),
+        (
+            {1: BetOutcome.LOST, 2: BetOutcome.LOST},
+            [Decimal("-90.00"), Decimal("-90.00")],
+        ),
+        (
+            {1: BetOutcome.VOID, 2: BetOutcome.LOST},
+            [Decimal("0.00"), Decimal("-40.00")],
+        ),
+    ]
+
+    for outcomes, expected_shares in scenarios:
+        preview = settlement_service.preview_settlement(1, outcomes)
+        shares = [entry.per_surebet_share_eur for entry in preview.ledger_entries]
+        assert shares == expected_shares
+
+
+def test_execute_settlement_persists_share_and_identifiers(
+    monkeypatch, settlement_service, mock_db
+):
+    """Verify execute_settlement writes per-surebet share and trace IDs."""
+    insert_params = []
+
+    def execute_side_effect(sql, params=None):
+        mock_cursor = Mock()
+        if "INSERT INTO ledger_entries" in sql:
+            insert_params.append(params)
+            mock_cursor.lastrowid = len(insert_params)
+        return mock_cursor
+
+    mock_db.execute.side_effect = execute_side_effect
+
+    participants = [
+        Participant(
+            bet_id=501,
+            associate_id=10,
+            bookmaker_id=20,
+            associate_alias="Alice",
+            bookmaker_name="BetFair",
+            outcome=BetOutcome.WON,
+            seat_type="staked",
+            stake_eur=Decimal("100.00"),
+            stake_native=Decimal("100.00"),
+            odds=Decimal("2.00"),
+            currency="EUR",
+            fx_rate=Decimal("1.0"),
+        ),
+        Participant(
+            bet_id=502,
+            associate_id=11,
+            bookmaker_id=21,
+            associate_alias="Bob",
+            bookmaker_name="Pinnacle",
+            outcome=BetOutcome.VOID,
+            seat_type="non-staked",
+            stake_eur=Decimal("80.00"),
+            stake_native=Decimal("80.00"),
+            odds=Decimal("1.50"),
+            currency="EUR",
+            fx_rate=Decimal("1.0"),
+        ),
+    ]
+    ledger_entries = [
+        LedgerEntryPreview(
+            bet_id=501,
+            associate_alias="Alice",
+            bookmaker_name="BetFair",
+            outcome="WON",
+            principal_returned_eur=Decimal("100.00"),
+            per_surebet_share_eur=Decimal("12.34"),
+            total_amount_eur=Decimal("112.34"),
+            fx_rate=Decimal("1.0"),
+            currency="EUR",
+        ),
+        LedgerEntryPreview(
+            bet_id=502,
+            associate_alias="Bob",
+            bookmaker_name="Pinnacle",
+            outcome="VOID",
+            principal_returned_eur=Decimal("0.00"),
+            per_surebet_share_eur=Decimal("0.00"),
+            total_amount_eur=Decimal("0.00"),
+            fx_rate=Decimal("1.0"),
+            currency="EUR",
+        ),
+    ]
+    preview = SettlementPreview(
+        surebet_id=77,
+        per_bet_outcomes={501: BetOutcome.WON, 502: BetOutcome.VOID},
+        per_bet_net_gains={501: Decimal("12.34"), 502: Decimal("0.00")},
+        surebet_profit_eur=Decimal("12.34"),
+        num_participants=2,
+        participants=participants,
+        per_surebet_share_eur=Decimal("6.17"),
+        ledger_entries=ledger_entries,
+        settlement_batch_id="batch-xyz",
+        warnings=[],
+    )
+
+    monkeypatch.setattr(
+        settlement_service, "preview_settlement", lambda surebet_id, outcomes: preview
+    )
+    monkeypatch.setattr(
+        settlement_service, "_create_settlement_link", lambda *args, **kwargs: 123
+    )
+    monkeypatch.setattr(
+        settlement_service, "_update_ledger_opposing_associates", lambda *args, **kwargs: None
+    )
+
+    settlement_service.execute_settlement(77, {501: BetOutcome.WON, 502: BetOutcome.VOID})
+
+    assert len(insert_params) == 2
+    first_entry, second_entry = insert_params
+
+    assert first_entry[9] == "12.34"
+    assert second_entry[9] == "0.00"
+    assert first_entry[10] == 77
+    assert first_entry[11] == 501
+    assert first_entry[13] == "batch-xyz"

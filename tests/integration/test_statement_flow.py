@@ -4,12 +4,20 @@ Integration tests for Statement generation workflow.
 Tests complete flow from UI to database with realistic data scenarios.
 """
 
-import pytest
-from decimal import Decimal
+import csv
+import importlib
 from datetime import datetime
+from decimal import Decimal
 from unittest.mock import patch, Mock
 
-from src.services.statement_service import StatementService
+import pytest
+
+from src.services.statement_service import (
+    BookmakerStatementRow,
+    PartnerFacingSection,
+    StatementCalculations,
+    StatementService,
+)
 
 
 @pytest.fixture
@@ -124,6 +132,8 @@ def mock_database_with_data(sample_associate_data, sample_ledger_entries):
             }
         elif "principal_returned_eur AS REAL" in normalized:
             cursor.fetchone.return_value = {"should_hold_eur": 275.0}
+        elif "profit_before_payout_eur" in normalized:
+            cursor.fetchone.return_value = {"profit_before_payout_eur": 125.0}
         elif "SUM(CAST(amount_eur AS REAL)) AS current_holding_eur" in normalized:
             cursor.fetchone.return_value = {"current_holding_eur": 550.0}
         elif "FROM bookmakers" in normalized and "balance_eur" in normalized:
@@ -165,6 +175,7 @@ class TestCompleteStatementGeneration:
         assert result.net_deposits_eur == Decimal("800.00")    # 1000 deposit - 200 withdrawal
         assert result.should_hold_eur == Decimal("275.00")      # 100+50 + 150+75
         assert result.current_holding_eur == Decimal("550.00")   # 1000 - 100 - 200 - 150
+        assert result.profit_before_payout_eur == Decimal("125.00")  # 50 + 75
         assert result.raw_profit_eur == Decimal("-525.00")       # 275 - 800 (loss)
         assert result.delta_eur == Decimal("275.00")           # 550 - 275
         
@@ -183,6 +194,7 @@ class TestCompleteStatementGeneration:
             {"total_deposits": 2000.0, "total_withdrawals": 0.0},
             {"should_hold_eur": 1200.0},
             {"current_holding_eur": 1100.0},
+            {"profit_before_payout_eur": 0.0},
         ]
         cursor.fetchall.return_value = []
         
@@ -192,6 +204,7 @@ class TestCompleteStatementGeneration:
         assert result.net_deposits_eur == Decimal("2000.00")
         assert result.should_hold_eur == Decimal("1200.00")
         assert result.current_holding_eur == Decimal("1100.00")
+        assert result.profit_before_payout_eur == Decimal("0.00")
         assert result.raw_profit_eur == Decimal("-800.00")    # 1200 - 2000 (loss)
         assert result.delta_eur == Decimal("-100.00")        # 1100 - 1200 (short)
     
@@ -207,6 +220,7 @@ class TestCompleteStatementGeneration:
             {"total_deposits": 1000.0, "total_withdrawals": 0.0},
             {"should_hold_eur": 1000.0},
             {"current_holding_eur": 1000.0},
+            {"profit_before_payout_eur": 0.0},
         ]
         cursor.fetchall.return_value = []
         
@@ -216,6 +230,7 @@ class TestCompleteStatementGeneration:
         assert result.net_deposits_eur == Decimal("1000.00")
         assert result.should_hold_eur == Decimal("1000.00")
         assert result.current_holding_eur == Decimal("1000.00")
+        assert result.profit_before_payout_eur == Decimal("0.00")
         assert result.raw_profit_eur == Decimal("0.00")      # 1000 - 1000 (break-even)
         assert result.delta_eur == Decimal("0.00")           # 1000 - 1000 (balanced)
 
@@ -259,13 +274,13 @@ class TestFormattingIntegration:
     
     def test_partner_facing_section_realistic_profit(self, service):
         """Test partner-facing formatting with realistic profit scenario."""
-        from src.services.statement_service import StatementCalculations, BookmakerStatementRow
 
         calc = StatementCalculations(
             associate_id=1,
             net_deposits_eur=Decimal("5000.00"),
             should_hold_eur=Decimal("7500.00"),
             current_holding_eur=Decimal("7200.00"),
+            profit_before_payout_eur=Decimal("1800.00"),
             raw_profit_eur=Decimal("2500.00"),
             delta_eur=Decimal("-300.00"),
             total_deposits_eur=Decimal("5000.00"),
@@ -295,7 +310,6 @@ class TestFormattingIntegration:
     
     def test_internal_section_realistic_scenarios(self, service):
         """Test internal section formatting with realistic scenarios."""
-        from src.services.statement_service import StatementCalculations
         
         # Test holding more scenario
         calc_holding_more = StatementCalculations(
@@ -303,6 +317,7 @@ class TestFormattingIntegration:
             net_deposits_eur=Decimal("1000.00"),
             should_hold_eur=Decimal("2000.00"),
             current_holding_eur=Decimal("2500.00"),
+            profit_before_payout_eur=Decimal("400.00"),
             raw_profit_eur=Decimal("1000.00"),
             delta_eur=Decimal("500.00"),
             total_deposits_eur=Decimal("1000.00"),
@@ -325,6 +340,7 @@ class TestFormattingIntegration:
             net_deposits_eur=Decimal("1000.00"),
             should_hold_eur=Decimal("2000.00"),
             current_holding_eur=Decimal("1500.00"),
+            profit_before_payout_eur=Decimal("200.00"),
             raw_profit_eur=Decimal("1000.00"),
             delta_eur=Decimal("-500.00"),
             total_deposits_eur=Decimal("1000.00"),
@@ -356,6 +372,7 @@ class TestCutoffDateScenarios:
             {"total_deposits": 1000.0, "total_withdrawals": 0.0},
             {"should_hold_eur": 1200.0},
             {"current_holding_eur": 1150.0},
+            {"profit_before_payout_eur": 0.0},
         ]
         cursor.fetchall.return_value = []
         
@@ -385,7 +402,8 @@ class TestCutoffDateScenarios:
             {"display_alias": "Test Associate", "home_currency": "EUR"},
             {"total_deposits": 500.0, "total_withdrawals": 0.0},
             {"should_hold_eur": 600.0},
-            {"current_holding_eur": 550.0}
+            {"current_holding_eur": 550.0},
+            {"profit_before_payout_eur": 0.0},
         ]
         cursor.fetchall.return_value = []
         
@@ -427,15 +445,17 @@ class TestErrorHandlingIntegration:
             {"display_alias": "Test Associate", "home_currency": "EUR"},
             {"total_deposits": 1000.0, "total_withdrawals": 0.0},
             {"should_hold_eur": None},    # No bet results yet
-            {"current_holding_eur": 1000.0}
+            {"current_holding_eur": 1000.0},
+            {"profit_before_payout_eur": None},
         ]
         cursor.fetchall.return_value = []
         
         with patch('src.services.statement_service.get_db_connection', return_value=conn):
             result = service.generate_statement(1, "2025-10-31T23:59:59Z")
-        
+
         # Should handle NULL gracefully
         assert result.should_hold_eur == Decimal("0.00")
+        assert result.profit_before_payout_eur == Decimal("0.00")
         assert result.raw_profit_eur == Decimal("-1000.00")  # 0 - 1000
         assert result.delta_eur == Decimal("1000.00")      # 1000 - 0
 
@@ -454,7 +474,8 @@ class TestLargeDatasetPerformance:
             {"display_alias": "High Volume Associate", "home_currency": "EUR"},
             {"total_deposits": 50000.0, "total_withdrawals": 0.0},
             {"should_hold_eur": 55000.0},
-            {"current_holding_eur": 54500.0}
+            {"current_holding_eur": 54500.0},
+            {"profit_before_payout_eur": 0.0},
         ]
         
         # Mock large transaction list
@@ -489,6 +510,66 @@ class TestLargeDatasetPerformance:
         assert result.net_deposits_eur == Decimal("50000.00")
         assert result.should_hold_eur == Decimal("55000.00")
         assert result.current_holding_eur == Decimal("54500.00")
+        assert result.profit_before_payout_eur == Decimal("0.00")
+
+
+class TestStatementCsvExport:
+    """Test CSV export contains profit before payout metric."""
+
+    def test_summary_csv_includes_profit_before_payout_row(self, tmp_path):
+        module = importlib.import_module("src.ui.pages.6_statements")
+        original_dir = module.STATEMENT_EXPORT_DIR
+        module.STATEMENT_EXPORT_DIR = tmp_path
+        try:
+            bookmakers = [
+                BookmakerStatementRow(
+                    bookmaker_name="CSV Bookie",
+                    balance_eur=Decimal("250.00"),
+                    deposits_eur=Decimal("200.00"),
+                    withdrawals_eur=Decimal("0.00"),
+                    balance_native=Decimal("250.00"),
+                    native_currency="EUR",
+                )
+            ]
+            calc = StatementCalculations(
+                associate_id=9,
+                net_deposits_eur=Decimal("200.00"),
+                should_hold_eur=Decimal("450.00"),
+                current_holding_eur=Decimal("400.00"),
+                profit_before_payout_eur=Decimal("175.00"),
+                raw_profit_eur=Decimal("250.00"),
+                delta_eur=Decimal("-50.00"),
+                total_deposits_eur=Decimal("500.00"),
+                total_withdrawals_eur=Decimal("300.00"),
+                bookmakers=bookmakers,
+                associate_name="CSV Tester",
+                home_currency="EUR",
+                cutoff_date="2025-10-31T23:59:59Z",
+                generated_at="2025-11-01T00:00:00Z",
+            )
+            partner_section = PartnerFacingSection(
+                total_deposits_eur=calc.total_deposits_eur,
+                total_withdrawals_eur=calc.total_withdrawals_eur,
+                holdings_eur=calc.current_holding_eur,
+                delta_eur=calc.delta_eur,
+                profit_before_payout_eur=calc.profit_before_payout_eur,
+                raw_profit_eur=calc.raw_profit_eur,
+                bookmakers=bookmakers,
+            )
+
+            csv_path = module.generate_statement_summary_csv(calc, partner_section)
+            with csv_path.open(newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                rows = list(reader)
+
+            profit_row = next(
+                row for row in rows if row["label"] == "ROI Before Payout"
+            )
+            assert profit_row["eur_amount"] == "175.00"
+            assert profit_row["percent_of_net_profit"] == "70.0%"
+            assert profit_row["note"].startswith("Equal-share ROI")
+        finally:
+            module.STATEMENT_EXPORT_DIR = original_dir
 
 
 

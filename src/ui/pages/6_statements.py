@@ -60,6 +60,35 @@ def _decimal_str(value: Decimal | float | str) -> str:
     return f"{Decimal(str(value)).quantize(Decimal('0.01'))}"
 
 
+def _roi_ratio_percentage(roi: Decimal, utile: Decimal) -> Optional[Decimal]:
+    """Return abs(roi) / abs(utile) * 100, or None when UTILE is zero."""
+    if utile == 0 or utile == Decimal("0"):
+        return None
+    return (abs(roi) / abs(utile)) * Decimal("100")
+
+
+def _profit_before_payout_help_text(raw_profit: Decimal | float | str) -> str:
+    """Tooltip explaining difference between ROI share and UTILE."""
+    utile_value = _format_eur(raw_profit)
+    return (
+        "Equal-share ROI still pending payout (per-surebet shares). "
+        f"Compare with Net Profit (UTILE), currently {utile_value}."
+    )
+
+
+def _roi_vs_utile_ratio_display(roi: Decimal, utile: Decimal) -> tuple[str, str]:
+    """Return ratio text + tooltip comparing ROI share against UTILE."""
+    ratio = _roi_ratio_percentage(roi, utile)
+    if ratio is None:
+        return "--", "Net profit (UTILE) is zero, so ratio cannot be calculated."
+    ratio_display = f"{ratio.quantize(Decimal('0.1'))}%"
+    help_text = (
+        "Portion of Net Profit (UTILE) represented by the ROI Before Payout amount "
+        "using absolute values."
+    )
+    return ratio_display, help_text
+
+
 def _slugify_name(value: str) -> str:
     """Return filesystem-safe slug for filenames."""
     slug = re.sub(r"[^A-Za-z0-9]+", "-", value.strip()).strip("-").lower()
@@ -189,7 +218,8 @@ def generate_statement_summary_csv(
     STATEMENT_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     cutoff_date = calc.cutoff_date.split("T")[0]
     date_str = datetime.strptime(cutoff_date, "%Y-%m-%d").strftime("%d-%m-%Y")
-    currency = (calc.home_currency or "MULTI").upper()
+    home_currency = calc.home_currency or ""
+    currency = (home_currency or "MULTI").upper()
     base_name = f"{_slugify_name(calc.associate_name)}_{currency}_{date_str}_statement"
     file_path = STATEMENT_EXPORT_DIR / f"{base_name}.csv"
     counter = 1
@@ -203,8 +233,14 @@ def generate_statement_summary_csv(
         "native_currency",
         "eur_amount",
         "eur_currency",
+        "percent_of_net_profit",
         "note",
     ]
+
+    def _percent_text(value: Optional[Decimal]) -> str:
+        if value is None:
+            return ""
+        return f"{value.quantize(Decimal('0.1'))}%"
 
     rows: List[Dict[str, str]] = []
     for bookmaker in partner_section.bookmakers:
@@ -216,50 +252,68 @@ def generate_statement_summary_csv(
                 "native_currency": bookmaker.native_currency,
                 "eur_amount": _decimal_str(bookmaker.balance_eur),
                 "eur_currency": "EUR",
+                "percent_of_net_profit": "",
                 "note": "Bookmaker balance",
             }
         )
 
     rows.append(
         {
-            "label": f"LIQUIDITA - {calc.home_currency}",
+            "label": "Liquidity (Net Deposits)",
             "native_amount": "",
-            "native_currency": calc.home_currency,
+            "native_currency": home_currency,
             "eur_amount": _decimal_str(-calc.net_deposits_eur),
             "eur_currency": "EUR",
-            "note": "Net deposits (out-of-pocket)",
+            "percent_of_net_profit": "",
+            "note": "Net deposits (out-of-pocket cash)",
         }
     )
 
     rows.append(
         {
-            "label": f"MULTIBOOK - {calc.home_currency}",
+            "label": "Multibook Delta",
             "native_amount": "",
-            "native_currency": calc.home_currency,
+            "native_currency": home_currency,
             "eur_amount": _decimal_str(calc.delta_eur),
             "eur_currency": "EUR",
+            "percent_of_net_profit": "",
             "note": "Delta (current holding - should hold)",
         }
     )
 
     rows.append(
         {
-            "label": f"BALANCE - {calc.home_currency}",
+            "label": "Bookmaker Balance",
             "native_amount": "",
-            "native_currency": calc.home_currency,
+            "native_currency": home_currency,
             "eur_amount": _decimal_str(calc.current_holding_eur),
             "eur_currency": "EUR",
+            "percent_of_net_profit": "",
             "note": "Current holdings",
+        }
+    )
+
+    roi_percent = _percent_text(_roi_ratio_percentage(calc.profit_before_payout_eur, calc.raw_profit_eur))
+    rows.append(
+        {
+            "label": "ROI Before Payout",
+            "native_amount": "",
+            "native_currency": home_currency,
+            "eur_amount": _decimal_str(calc.profit_before_payout_eur),
+            "eur_currency": "EUR",
+            "percent_of_net_profit": roi_percent,
+            "note": "Equal-share ROI still pending payout",
         }
     )
 
     rows.append(
         {
-            "label": f"UTILE - {calc.home_currency}",
+            "label": "Net Profit (UTILE)",
             "native_amount": "",
-            "native_currency": calc.home_currency,
+            "native_currency": home_currency,
             "eur_amount": _decimal_str(calc.raw_profit_eur),
             "eur_currency": "EUR",
+            "percent_of_net_profit": "100%" if calc.raw_profit_eur != 0 else "",
             "note": "Profit (Should Hold - Net Deposits)",
         }
     )
@@ -362,7 +416,7 @@ def render_statement_header(calc: StatementCalculations) -> None:
     """Render statement header with associate info and timestamps."""
     st.markdown("---")
     st.header(f":material/description: Monthly Statement for {calc.associate_name}")
-    
+
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Period Ending", format_utc_datetime(calc.cutoff_date))
@@ -370,6 +424,29 @@ def render_statement_header(calc: StatementCalculations) -> None:
         st.metric("Generated", format_utc_datetime(calc.generated_at))
     with col3:
         st.metric("Timezone", "AWST")
+
+    ratio_value, ratio_help = _roi_vs_utile_ratio_display(
+        calc.profit_before_payout_eur, calc.raw_profit_eur
+    )
+    metric_cols = st.columns(3)
+    with metric_cols[0]:
+        st.metric(
+            "ROI Before Payout",
+            _format_eur(calc.profit_before_payout_eur),
+            help=_profit_before_payout_help_text(calc.raw_profit_eur),
+        )
+    with metric_cols[1]:
+        st.metric(
+            "Net Profit (UTILE)",
+            _format_eur(calc.raw_profit_eur),
+            help="UTILE = Should Hold - Net Deposits (unchanged).",
+        )
+    with metric_cols[2]:
+        st.metric(
+            "ROI vs UTILE",
+            ratio_value,
+            help=ratio_help,
+        )
 
 
 def render_partner_facing_section(partner_section: PartnerFacingSection) -> None:
@@ -385,59 +462,37 @@ def render_partner_facing_section(partner_section: PartnerFacingSection) -> None
     with col3:
         st.metric("Associate Delta", _format_eur(partner_section.delta_eur))
 
+    ratio_value, ratio_help = _roi_vs_utile_ratio_display(
+        partner_section.profit_before_payout_eur, partner_section.raw_profit_eur
+    )
+    profit_cols = st.columns(3)
+    with profit_cols[0]:
+        st.metric(
+            "ROI Before Payout",
+            _format_eur(partner_section.profit_before_payout_eur),
+            help=_profit_before_payout_help_text(partner_section.raw_profit_eur),
+        )
+    with profit_cols[1]:
+        st.metric(
+            "Net Profit (UTILE)",
+            _format_eur(partner_section.raw_profit_eur),
+            help="UTILE = Should Hold - Net Deposits.",
+        )
+    with profit_cols[2]:
+        st.metric(
+            "ROI vs UTILE",
+            ratio_value,
+            help=ratio_help,
+        )
+
     st.info(
         f"Bookmaker balances (including stakes and payouts): { _format_eur(partner_section.holdings_eur) }"
     )
     st.caption(
-        "Delta reflects how much the associate is overholding (+) or short (−) versus entitlement."
+        "ROI Before Payout captures equal-share profits pending payout; "
+        "UTILE remains the Should Hold - Net Deposits profit. "
+        "Delta reflects how much the associate is overholding (+) or short (-) versus entitlement."
     )
-
-    st.markdown("##### Bookmaker Breakdown")
-    if partner_section.bookmakers:
-        table_rows = []
-        total_balance_native = Decimal("0")
-        total_balance_eur = Decimal("0")
-        total_deposits = Decimal("0")
-        total_withdrawals = Decimal("0")
-        native_currencies = {row.native_currency for row in partner_section.bookmakers}
-
-        for row in partner_section.bookmakers:
-            table_rows.append(
-                {
-                    "Bookmaker": row.bookmaker_name,
-                    "Balance (Native)": f"{_decimal_str(row.balance_native)} {row.native_currency}",
-                    "Balance (EUR)": _format_eur(row.balance_eur),
-                    "Deposits (EUR)": _format_eur(row.deposits_eur),
-                    "Withdrawals (EUR)": _format_eur(row.withdrawals_eur),
-                }
-            )
-            total_balance_native += row.balance_native
-            total_balance_eur += row.balance_eur
-            total_deposits += row.deposits_eur
-            total_withdrawals += row.withdrawals_eur
-
-        total_native_display = ""
-        if len(native_currencies) == 1:
-            currency = native_currencies.pop()
-            total_native_display = f"{_decimal_str(total_balance_native)} {currency}"
-
-        table_rows.append(
-            {
-                "Bookmaker": "TOTAL",
-                "Balance (Native)": total_native_display or "—",
-                "Balance (EUR)": _format_eur(total_balance_eur),
-                "Deposits (EUR)": _format_eur(total_deposits),
-                "Withdrawals (EUR)": _format_eur(total_withdrawals),
-            }
-        )
-        st.dataframe(pd.DataFrame(table_rows), hide_index=True, use_container_width=True)
-        st.caption(
-            "Balances are the running sum of all ledger entries for the bookmaker. "
-            "Profit can be derived as (bookmaker balances − deposits ± delta)."
-        )
-    else:
-        st.caption("No bookmaker activity recorded yet for this associate.")
-
 
 def render_internal_section(internal_section: InternalSection) -> None:
     """Render internal-only statement section."""
@@ -479,6 +534,9 @@ def render_export_options(calc: StatementCalculations, partner_section: PartnerF
             f"withdrawals {_format_eur(row.withdrawals_eur)}"
             for row in partner_section.bookmakers
         ) or "- No bookmaker activity recorded."
+        ratio_value, _ = _roi_vs_utile_ratio_display(
+            calc.profit_before_payout_eur, calc.raw_profit_eur
+        )
         clipboard_text = f"""
 PARTNER STATEMENT - {calc.associate_name}
 Period Ending: {calc.cutoff_date.split('T')[0]}
@@ -487,6 +545,9 @@ Total Deposits: {_format_eur(partner_section.total_deposits_eur)}
 Total Withdrawals: {_format_eur(partner_section.total_withdrawals_eur)}
 Bookmaker Balances: {_format_eur(partner_section.holdings_eur)}
 Associate Delta: {_format_eur(partner_section.delta_eur)}
+ROI Before Payout: {_format_eur(partner_section.profit_before_payout_eur)}
+Net Profit (UTILE): {_format_eur(partner_section.raw_profit_eur)}
+ROI vs UTILE: {ratio_value}
 
 Bookmaker Breakdown:
 {bookmaker_lines}
