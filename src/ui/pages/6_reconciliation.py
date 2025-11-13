@@ -151,9 +151,12 @@ def export_to_csv(balances: List[AssociateBalance]) -> str:
         {
             "Associate": b.associate_alias,
             "NET_DEPOSITS_EUR": float(b.net_deposits_eur),
-            "SHOULD_HOLD_EUR": float(b.should_hold_eur),
+            "FS_EUR": float(b.fs_eur),
+            "YF_EUR": float(b.yf_eur),
             "CURRENT_HOLDING_EUR": float(b.current_holding_eur),
-            "DELTA": float(b.delta_eur),
+            "IMBALANCE_EUR": float(b.delta_eur),
+            "YF_MINUS_ND": round(float(b.yf_eur - b.net_deposits_eur), 2),
+            "TB_EUR": float(b.tb_eur),
             "Status": b.status,
         }
         for b in balances
@@ -189,8 +192,16 @@ def _render_reconciliation_details_fragment(
             explanation: str = entry["explanation"]
 
             with st.container():
-                cols = st.columns([0.5, 2, 1.5, 1.5, 1.5, 1.5])
-                col_icon, col_alias, col_deposits, col_should, col_current, col_delta = cols
+                cols = st.columns([0.5, 2, 1.3, 1.3, 1.3, 1.3, 1.3])
+                (
+                    col_icon,
+                    col_alias,
+                    col_nd,
+                    col_fs,
+                    col_yf,
+                    col_tb,
+                    col_delta,
+                ) = cols
 
                 with col_icon:
                     st.markdown(f"<h2 style='margin:0'>{balance.status_icon}</h2>", unsafe_allow_html=True)
@@ -199,33 +210,40 @@ def _render_reconciliation_details_fragment(
                     st.markdown(f"**{balance.associate_alias}**")
                     st.caption(balance.status.capitalize())
 
-                with col_deposits:
+                with col_nd:
                     st.metric(
-                        "NET DEPOSITS",
+                        "NET DEPOSITS (ND)",
                         f"EUR {balance.net_deposits_eur:,.2f}",
                         help="Cash you put in (deposits - withdrawals)",
                     )
 
-                with col_should:
+                with col_fs:
                     st.metric(
-                        "SHOULD HOLD",
-                        f"EUR {balance.should_hold_eur:,.2f}",
-                        help="Your share of the pot (entitlement from settled bets)",
+                        "FAIR SHARE (FS)",
+                        f"EUR {balance.fs_eur:,.2f}",
+                        help="Settlement profit/loss from BET_RESULT share rows",
                     )
 
-                with col_current:
+                with col_yf:
                     st.metric(
-                        "CURRENT HOLDING",
+                        "YIELD FUNDS (YF)",
+                        f"EUR {balance.yf_eur:,.2f}",
+                        help="Identity target: ND + FS",
+                    )
+
+                with col_tb:
+                    st.metric(
+                        "TOTAL BALANCE (TB)",
                         f"EUR {balance.current_holding_eur:,.2f}",
-                        help="What you're holding in bookmaker accounts",
+                        help="Bookmaker holdings (all ledger entry types)",
                     )
 
                 with col_delta:
                     delta_formatted = format_currency_with_sign(balance.delta_eur)
                     st.metric(
-                        "DELTA",
+                        "IMBALANCE (I'')",
                         delta_formatted,
-                        help="Difference between current holdings and entitlement",
+                        help="TB - YF (should be zero when balanced)",
                     )
 
                 with st.expander(":material/info: View Details"):
@@ -244,22 +262,25 @@ def _render_reconciliation_details_fragment(
 
                 breakdown_data = {
                     "Metric": [
-                        "Personal Funding (NET_DEPOSITS_EUR)",
-                        "Entitlement from Bets (SHOULD_HOLD_EUR)",
-                        "Physical Holdings (CURRENT_HOLDING_EUR)",
-                        "Discrepancy (DELTA)",
+                        "Net Deposits (ND)",
+                        "Fair Share (FS)",
+                        "Yield Funds (YF = ND + FS)",
+                        "Total Balance (TB)",
+                        "Imbalance (I'' = TB - YF)",
                     ],
                     "Amount (EUR)": [
                         f"EUR {balance.net_deposits_eur:,.2f}",
-                        f"EUR {balance.should_hold_eur:,.2f}",
+                        f"EUR {balance.fs_eur:,.2f}",
+                        f"EUR {balance.yf_eur:,.2f}",
                         f"EUR {balance.current_holding_eur:,.2f}",
                         format_currency_with_sign(balance.delta_eur),
                     ],
                     "Description": [
-                        "Total deposits minus withdrawals",
-                        "Principal returned + profit/loss share from settled bets",
-                        "Sum of all ledger entries (BET_RESULT + DEPOSIT + WITHDRAWAL + CORRECTIONS)",
-                        "CURRENT_HOLDING - SHOULD_HOLD",
+                        "Deposits - withdrawals",
+                        "Settlement profit/loss from BET_RESULT share rows",
+                        "Identity target combining funding and share",
+                        "Bookmaker ledger holdings across entry types",
+                        "TB - YF (zero means balanced)",
                     ],
                 }
 
@@ -400,23 +421,27 @@ def _render_reconciliation_details_fragment(
             """
         ### Reconciliation Math
 
-        **NET_DEPOSITS_EUR**: Personal funding
+        **NET DEPOSITS (ND)**: Personal funding
         - Formula: `SUM(DEPOSIT.amount_eur) - SUM(WITHDRAWAL.amount_eur)`
         - Explanation: "Cash you put in"
 
-        **SHOULD_HOLD_EUR**: Entitlement from settled bets
-        - Formula: `SUM(principal_returned_eur + per_surebet_share_eur)` from all BET_RESULT rows
-        - Explanation: "Your share of the pot"
+        **FAIR SHARE (FS)**: Settlement profit/loss
+        - Formula: `SUM(per_surebet_share_eur)` from BET_RESULT rows (covers WON/LOST/VOID)
+        - Explanation: "Profit/loss allocated to the associate"
 
-        **CURRENT_HOLDING_EUR**: Physical bookmaker holdings
+        **YIELD FUNDS (YF)**: Identity target
+        - Formula: `YF = ND + FS`
+        - Explanation: "How much cash they should be holding after settlement"
+
+        **TOTAL BALANCE (TB)**: Physical bookmaker holdings
         - Formula: Sum of ALL ledger entries (BET_RESULT + DEPOSIT + WITHDRAWAL + BOOKMAKER_CORRECTION)
-        - Explanation: "What you're holding in bookmaker accounts"
+        - Explanation: "What they're actually holding in bookmaker accounts"
 
-        **DELTA**: Discrepancy
-        - Formula: `CURRENT_HOLDING_EUR - SHOULD_HOLD_EUR`
-        - **Red (Overholder)**: `DELTA > +10 EUR` - Holding group float (collect from them)
-        - **Green (Balanced)**: `-10 EUR <= DELTA <= +10 EUR` - Holdings match entitlement
-        - **Orange (Short)**: `DELTA < -10 EUR` - Someone else is holding their money
+        **IMBALANCE (I'')**: Discrepancy
+        - Formula: `TB - YF`
+        - **Red (Overholder)**: `I'' > +10 EUR` - Holding group float (collect from them)
+        - **Green (Balanced)**: `-10 EUR <= I'' <= +10 EUR` - Holdings match entitlement
+        - **Orange (Short)**: `I'' < -10 EUR` - Someone else is holding their money
 
         ### Status Threshold
         The +/- 10 EUR threshold accounts for minor rounding differences and pending transactions.

@@ -695,3 +695,13 @@ UPDATE bets SET status='settled', settlement_state='LOST', updated_at_utc='2025-
 ---
 
 **End of Settlement Math Specification**
+
+---
+
+## Change Notes — YF & Exit Settlement Alignment (2025-11-13)
+
+- Adopt identity: `Your Fair Balance (YF) = Net Deposits (ND) + Fair Shares (FS)`. FS is the sum of `per_surebet_share_eur` across an associate’s surebets (VOID participates with 0).
+- ND semantics: store `WITHDRAWAL` as negative and `DEPOSIT` as positive; compute ND by summing signed values (no double-negation in any downstream view).
+- Reconciliation identity: `Δ = TB − YF` (TB = sum of modeled bookmaker holdings). Historical references to “Should Hold” map to YF under this identity.
+- Monthly statement identity: prior `RAW_PROFIT_EUR = SHOULD_HOLD − NET_DEPOSITS` equals FS under YF, since `YF − ND = FS`.
+- Operational flow: add “Settle Associate Now” action to compute Δ at a cutoff and write a single balancing DEPOSIT/WITHDRAWAL so post‑action Δ == 0; CSV at exit includes an “Exit Payout” row (`−Δ`) and a version footnote `Model: YF‑v1`.

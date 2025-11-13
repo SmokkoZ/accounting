@@ -791,3 +791,19 @@ The following are explicitly **not required** for MVP but may be considered in f
 ---
 
 **End of Document**
+## Change Notes — YF & Exit Settlement Alignment (2025-11-13)
+
+Summary:
+- Adopt unified identity for entitlement: `Your Fair Balance (YF) = Net Deposits (ND) + Fair Shares (FS)` and use this in Reconciliation, Statements, and per‑Bookmaker views. “Should Hold” is retained as a historical term but maps to YF.
+- Standardize ND semantics: store `WITHDRAWAL` as negative and `DEPOSIT` as positive; compute ND by summing signed amounts (no double-negation in any view/service).
+- Preserve imbalance: `Δ = TB − YF` (TB = sum of modeled bookmaker holdings). The reconciliation goal remains Δ ≈ 0.
+- Introduce “Settle Associate Now”: at exit, compute Δ at a cutoff, write a single balancing ledger entry (DEPOSIT if Δ < 0; WITHDRAWAL if Δ > 0) so post‑action Δ == 0; generate a receipt; CSV exports at exit include an “Exit Payout” row equal to `−Δ`.
+
+Impacts:
+- UI labels: replace “Should Hold” with “Your Fair Balance (YF)”; show ND, FS, YF, TB, Δ in headers and statements.
+- CSVs: add YF to summaries; include version footnote `Model: YF‑v1 (YF=ND+FS; Δ=TB−YF). Values exclude operator fees/taxes.` and, for exit cutoffs, an explicit “Exit Payout” (`−Δ`) row.
+- Documentation: where prior formulas state `RAW_PROFIT_EUR = SHOULD_HOLD − NET_DEPOSITS`, under YF this equals FS since `YF − ND = FS`.
+- Compatibility: no schema changes; existing statement math reused; legacy terminology retained in historical sections with pointers to YF.
+
+Operations Policy:
+- Before deactivating an associate, operators must run “Settle Associate Now” to ensure exit with Δ = 0 (no short/overhold scenarios).

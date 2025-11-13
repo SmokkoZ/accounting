@@ -37,12 +37,8 @@ def service(monkeypatch: pytest.MonkeyPatch) -> StatementService:
         lambda self, conn, associate_id, cutoff: (
             Decimal("1000.00"),
             Decimal("0.00"),
+            Decimal("1000.00"),
         ),
-    )
-    monkeypatch.setattr(
-        StatementService,
-        "_calculate_should_hold",
-        lambda self, conn, associate_id, cutoff: Decimal("1250.00"),
     )
     monkeypatch.setattr(
         StatementService,
@@ -51,8 +47,13 @@ def service(monkeypatch: pytest.MonkeyPatch) -> StatementService:
     )
     monkeypatch.setattr(
         StatementService,
+        "_calculate_should_hold",
+        lambda self, conn, associate_id, cutoff: Decimal("1250.00"),
+    )
+    monkeypatch.setattr(
+        StatementService,
         "_calculate_profit_before_payout",
-        lambda self, conn, associate_id, cutoff: Decimal("300.00"),
+        lambda self, conn, associate_id, cutoff: Decimal("250.00"),
     )
     monkeypatch.setattr(
         StatementService,
@@ -76,9 +77,10 @@ def test_generate_statement_returns_expected_delta(service: StatementService):
     calc = service.generate_statement(associate_id=7, cutoff_date=cutoff)
 
     assert calc.associate_name == "Demo Associate"
-    assert calc.profit_before_payout_eur == Decimal("300.00")
+    assert calc.profit_before_payout_eur == Decimal("250.00")
     assert calc.raw_profit_eur == Decimal("250.00")
     assert calc.delta_eur == Decimal("-50.00")
+    assert calc.should_hold_eur == calc.net_deposits_eur + calc.fs_eur
     assert calc.total_deposits_eur == Decimal("1000.00")
     assert calc.total_withdrawals_eur == Decimal("0.00")
     assert len(calc.bookmakers) == 1
@@ -91,8 +93,9 @@ def test_partner_section_formats_summaries(service: StatementService):
         net_deposits_eur=Decimal("500.00"),
         should_hold_eur=Decimal("650.00"),
         current_holding_eur=Decimal("640.00"),
-        profit_before_payout_eur=Decimal("275.00"),
-        raw_profit_eur=Decimal("150.00"),
+        fair_share_eur=Decimal("150.00"),
+        profit_before_payout_eur=Decimal("150.00"),
+        raw_profit_eur=Decimal("-350.00"),
         delta_eur=Decimal("-10.00"),
         total_deposits_eur=Decimal("800.00"),
         total_withdrawals_eur=Decimal("300.00"),
@@ -114,8 +117,14 @@ def test_partner_section_formats_summaries(service: StatementService):
 
     partner = service.format_partner_facing_section(calc)
     assert isinstance(partner, PartnerFacingSection)
+    assert partner.net_deposits_eur == Decimal("500.00")
+    assert partner.fair_share_eur == Decimal("150.00")
+    assert partner.yield_funds_eur == Decimal("650.00")
+    assert partner.total_balance_eur == Decimal("640.00")
+    assert partner.imbalance_eur == Decimal("-10.00")
+    assert partner.exit_payout_eur == Decimal("10.00")
     assert partner.total_deposits_eur == Decimal("800.00")
-    assert partner.profit_before_payout_eur == Decimal("275.00")
+    assert partner.profit_before_payout_eur == Decimal("150.00")
     assert partner.bookmakers[0].bookmaker_name == "Bookie Test"
 
 
@@ -126,6 +135,7 @@ def test_internal_section_detects_over_and_short_states(service: StatementServic
             net_deposits_eur=Decimal("0"),
             should_hold_eur=Decimal("0"),
             current_holding_eur=Decimal("100"),
+            fair_share_eur=Decimal("25"),
             profit_before_payout_eur=Decimal("25"),
             raw_profit_eur=Decimal("0"),
             delta_eur=Decimal("100"),
@@ -140,6 +150,8 @@ def test_internal_section_detects_over_and_short_states(service: StatementServic
     )
     assert isinstance(positive, InternalSection)
     assert "more" in positive.reconciliation_delta.lower()
+    assert positive.total_balance_eur == Decimal("100")
+    assert positive.exit_payout_eur == Decimal("-75")
 
     negative = service.format_internal_section(
         StatementCalculations(
@@ -147,6 +159,7 @@ def test_internal_section_detects_over_and_short_states(service: StatementServic
             net_deposits_eur=Decimal("0"),
             should_hold_eur=Decimal("100"),
             current_holding_eur=Decimal("50"),
+            fair_share_eur=Decimal("-40"),
             profit_before_payout_eur=Decimal("-40"),
             raw_profit_eur=Decimal("-100"),
             delta_eur=Decimal("-50"),
@@ -160,6 +173,7 @@ def test_internal_section_detects_over_and_short_states(service: StatementServic
         )
     )
     assert "short" in negative.reconciliation_delta.lower()
+    assert negative.exit_payout_eur == Decimal("-90")
 
 
 def test_calculate_profit_before_payout_handles_signed_shares():
@@ -197,6 +211,78 @@ def test_calculate_profit_before_payout_handles_signed_shares():
 
     assert result == Decimal("5.50")
     conn.close()
+
+
+def test_calculate_funding_totals_preserves_signed_withdrawals():
+    service = StatementService()
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE ledger_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            associate_id INTEGER,
+            type TEXT,
+            amount_eur TEXT,
+            created_at_utc TEXT,
+            note TEXT
+        )
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO ledger_entries (associate_id, type, amount_eur, created_at_utc)
+        VALUES (?, ?, ?, ?)
+        """,
+        [
+            (1, "DEPOSIT", "1000.00", "2025-10-01T10:00:00Z"),
+            (1, "WITHDRAWAL", "-200.00", "2025-10-05T12:00:00Z"),
+            (2, "WITHDRAWAL", "-999.00", "2025-10-07T12:00:00Z"),  # different associate
+            (1, "WITHDRAWAL", "-50.00", "2025-11-15T12:00:00Z"),   # beyond cutoff
+        ],
+    )
+
+    totals = service._calculate_funding_totals(
+        conn, associate_id=1, cutoff_date="2025-10-31T23:59:59Z"
+    )
+
+    total_deposits, total_withdrawals, net_deposits = totals
+    assert total_deposits == Decimal("1000.00")
+    assert total_withdrawals == Decimal("200.00")
+    assert net_deposits == Decimal("800.00")
+    conn.close()
+
+
+def test_build_statement_csv_rows_includes_identity_rows(service: StatementService):
+    calc = StatementCalculations(
+        associate_id=2,
+        net_deposits_eur=Decimal("500.00"),
+        should_hold_eur=Decimal("600.00"),
+        current_holding_eur=Decimal("550.00"),
+        fair_share_eur=Decimal("100.00"),
+        profit_before_payout_eur=Decimal("100.00"),
+        raw_profit_eur=Decimal("100.00"),
+        delta_eur=Decimal("-50.00"),
+        total_deposits_eur=Decimal("700.00"),
+        total_withdrawals_eur=Decimal("200.00"),
+        bookmakers=[],
+        associate_name="Demo",
+        home_currency="EUR",
+        cutoff_date="2025-10-31T23:59:59Z",
+        generated_at="2025-11-01T00:00:00Z",
+    )
+
+    rows = service._build_statement_csv_rows(
+        calc,
+        export_time="2025-11-15T00:00:00Z",
+        multibook_delta=Decimal("25.00"),
+    )
+    labels = [row[0] for row in rows if row]
+    assert "Net Deposits (ND)" in labels
+    assert "Exit Payout (-I'')" in labels
+    identity_map = {row[0]: row[1] for row in rows if len(row) >= 2}
+    assert identity_map["Net Deposits (ND)"] == "500.00"
+    assert identity_map["Exit Payout (-I'')"] == "50.00"
 
 
 def test_validate_cutoff_date_future(monkeypatch: pytest.MonkeyPatch):

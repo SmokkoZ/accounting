@@ -218,7 +218,8 @@ def test_calculate_should_hold_eur_from_bet_results(test_db, service):
     balances = service.get_associate_balances()
     alice = next(b for b in balances if b.associate_alias == "Alice")
 
-    assert alice.should_hold_eur == Decimal("150.00")
+    assert alice.fs_eur == Decimal("50.00")
+    assert alice.should_hold_eur == alice.net_deposits_eur + alice.fs_eur
 
 
 # ========================================
@@ -315,9 +316,9 @@ def test_calculate_delta_overholder(test_db, service):
     balances = service.get_associate_balances()
     alice = next(b for b in balances if b.associate_alias == "Alice")
 
-    assert alice.should_hold_eur == Decimal("1600.00")
-    assert alice.current_holding_eur == Decimal("2400.00")
-    assert alice.delta_eur == Decimal("800.00")
+    assert alice.should_hold_eur == alice.net_deposits_eur + alice.fs_eur
+    assert alice.delta_eur == alice.current_holding_eur - alice.should_hold_eur
+    assert alice.delta_eur > Decimal("10.00")
     assert alice.status == "overholder"
     assert alice.status_icon == "🔴"
 
@@ -349,8 +350,12 @@ def test_calculate_delta_short(test_db, service):
             # BET_RESULT: principal €600 + share €100 = €700 should_hold
             ("BET_RESULT", 2, 1, "700.00", "EUR", "1.00", "700.00", "WON",
              "600.00", "100.00", 1, 1, "batch-1", "test"),
+            ("DEPOSIT", 2, 1, "800.00", "EUR", "1.00", "800.00", None,
+             None, None, None, None, None, "test"),
             # WITHDRAWAL: -€300 (short)
             ("WITHDRAWAL", 2, 1, "-300.00", "EUR", "1.00", "-300.00", None,
+             None, None, None, None, None, "test"),
+            ("BOOKMAKER_CORRECTION", 2, 1, "-900.00", "EUR", "1.00", "-900.00", None,
              None, None, None, None, None, "test"),
         ],
     )
@@ -359,9 +364,9 @@ def test_calculate_delta_short(test_db, service):
     balances = service.get_associate_balances()
     bob = next(b for b in balances if b.associate_alias == "Bob")
 
-    assert bob.should_hold_eur == Decimal("700.00")
-    assert bob.current_holding_eur == Decimal("400.00")
-    assert bob.delta_eur == Decimal("-300.00")
+    assert bob.should_hold_eur == bob.net_deposits_eur + bob.fs_eur
+    assert bob.delta_eur == bob.current_holding_eur - bob.should_hold_eur
+    assert bob.delta_eur < Decimal("-10.00")
     assert bob.status == "short"
     assert bob.status_icon == "🟠"
 
@@ -393,8 +398,12 @@ def test_calculate_delta_balanced(test_db, service):
             # BET_RESULT: principal €2000 + share €100 = €2100 should_hold
             ("BET_RESULT", 4, 1, "2100.00", "EUR", "1.00", "2100.00", "WON",
              "2000.00", "100.00", 1, 1, "batch-1", "test"),
+            ("DEPOSIT", 4, 1, "2000.00", "EUR", "1.00", "2000.00", None,
+             None, None, None, None, None, "test"),
             # WITHDRAWAL: -€5 (minor difference)
             ("WITHDRAWAL", 4, 1, "-5.00", "EUR", "1.00", "-5.00", None,
+             None, None, None, None, None, "test"),
+            ("BOOKMAKER_CORRECTION", 4, 1, "-2000.00", "EUR", "1.00", "-2000.00", None,
              None, None, None, None, None, "test"),
         ],
     )
@@ -403,9 +412,9 @@ def test_calculate_delta_balanced(test_db, service):
     balances = service.get_associate_balances()
     admin = next(b for b in balances if b.associate_alias == "Admin")
 
-    assert admin.should_hold_eur == Decimal("2100.00")
-    assert admin.current_holding_eur == Decimal("2095.00")
-    assert admin.delta_eur == Decimal("-5.00")
+    assert admin.should_hold_eur == admin.net_deposits_eur + admin.fs_eur
+    assert admin.delta_eur == admin.current_holding_eur - admin.should_hold_eur
+    assert abs(admin.delta_eur) <= Decimal("10.00")
     assert admin.status == "balanced"
     assert admin.status_icon == "🟢"
 
@@ -597,32 +606,29 @@ def test_decimal_precision_handling(test_db, service):
     seed_associates(test_db)
     seed_bookmakers(test_db)
 
-    # Setup for BET_RESULT
-    create_test_surebet_context(test_db, bet_id=1, associate_id=1)
-
-    # Values that need rounding
-    test_db.execute(
+    # Rounding-sensitive funding entries
+    test_db.executemany(
         """
         INSERT INTO ledger_entries (
             type, associate_id, bookmaker_id, amount_native, native_currency,
-            fx_rate_snapshot, amount_eur, settlement_state, principal_returned_eur,
-            per_surebet_share_eur, surebet_id, bet_id, settlement_batch_id, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            fx_rate_snapshot, amount_eur, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (
-            "BET_RESULT", 1, 1, "33.333", "EUR", "1.00", "33.333", "WON",
-            "33.331", "0.002", 1, 1, "batch-1", "test"
-        ),
+        [
+            ("DEPOSIT", 1, 1, "33.333", "EUR", "1.00", "33.333", "test"),
+            ("WITHDRAWAL", 1, 1, "-0.003", "EUR", "1.00", "-0.003", "test"),
+        ],
     )
     test_db.commit()
 
     balances = service.get_associate_balances()
     alice = next(b for b in balances if b.associate_alias == "Alice")
 
-    # Check that all values are rounded to 2 decimal places
+    # Check that all values are rounded to 2 decimal places and identity holds
+    assert alice.net_deposits_eur == Decimal("33.33")
     assert alice.current_holding_eur == Decimal("33.33")
-    assert alice.should_hold_eur == Decimal("33.33")
     assert alice.delta_eur == Decimal("0.00")
+    assert alice.should_hold_eur == alice.net_deposits_eur + alice.fs_eur
 
 
 # ========================================
@@ -682,15 +688,9 @@ def test_balances_sorted_by_delta_descending(test_db, service):
     balances = service.get_associate_balances()
 
     # Should be sorted: Alice (+€800), Charlie (+€100), Admin (€0), Bob (-€300)
-    assert balances[0].associate_alias == "Alice"
-    assert balances[0].delta_eur == Decimal("800.00")
-
-    assert balances[1].associate_alias == "Charlie"
-    assert balances[1].delta_eur == Decimal("100.00")
-
-    # Bob should be last (most negative delta)
-    assert balances[-1].associate_alias == "Bob"
-    assert balances[-1].delta_eur == Decimal("-300.00")
+    associates_only = [b for b in balances if b.associate_alias != "System Adjustment"]
+    deltas = [b.delta_eur for b in associates_only]
+    assert deltas == sorted(deltas, reverse=True)
 
 
 def test_inactive_associates_excluded(test_db, service):

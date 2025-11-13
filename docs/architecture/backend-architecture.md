@@ -747,3 +747,12 @@ except sqlite3.IntegrityError as e:
 ---
 
 **End of Document**
+
+---
+
+## Change Notes — YF & Exit Settlement Alignment (2025-11-13)
+
+- Reconciliation read models should expose `ND`, `FS`, `YF`, `TB`, and `Δ` and map legacy `should_hold_eur` fields to `yf_eur` in APIs/UI models.
+- Standardize ND computation across services: `WITHDRAWAL` rows are stored negative; `DEPOSIT` positive; compute ND by summing signed values (remove double-negation in per‑bookmaker logic).
+- Add an application operation: `settle_associate_now(associate_id, as_of_utc)` that computes Δ at cutoff and writes a single balancing `DEPOSIT` (if Δ < 0) or `WITHDRAWAL` (if Δ > 0) entry, returning a receipt payload for CSV/UX rendering.
+- No schema changes; reuse `ledger_entries` and existing statement math; add a version string `YF‑v1` to export helpers for footnotes.

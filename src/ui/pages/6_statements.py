@@ -226,9 +226,7 @@ def _persist_csv_export(export_payload: CsvExportPayload) -> Path:
     return target_path
 
 
-def generate_statement_summary_csv(
-    calc: StatementCalculations, partner_section: PartnerFacingSection
-) -> Path:
+def generate_statement_summary_csv(calc: StatementCalculations) -> Path:
     """Generate statement CSV using StatementService helper."""
     statement_service = StatementService()
     export_payload = statement_service.export_statement_csv(
@@ -263,8 +261,7 @@ def export_all_statements_zip(cutoff_date: str) -> tuple[Optional[Path], List[st
     for associate in associates:
         try:
             calc = statement_service.generate_statement(associate["id"], cutoff_date)
-            partner_section = statement_service.format_partner_facing_section(calc)
-            csv_paths.append(generate_statement_summary_csv(calc, partner_section))
+            csv_paths.append(generate_statement_summary_csv(calc))
         except Exception as exc:
             errors.append(f"{associate['name']}: {exc}")
 
@@ -372,19 +369,53 @@ def render_statement_header(calc: StatementCalculations) -> None:
             help=ratio_help,
         )
 
+    identity_cols = st.columns(5)
+    identity_metrics = [
+        ("Net Deposits (ND)", calc.net_deposits_eur, "Deposits - withdrawals"),
+        ("Fair Share (FS)", calc.fs_eur, "Equal-share profit/loss from BET_RESULT rows"),
+        ("Yield Funds (YF)", calc.yf_eur, "Identity target: ND + FS"),
+        ("Total Balance (TB)", calc.tb_eur, "Current bookmaker holdings"),
+        ("Imbalance (I'')", calc.i_double_prime_eur, "TB - YF"),
+    ]
+    for column, (label, value, help_text) in zip(identity_cols, identity_metrics):
+        with column:
+            st.metric(label, _format_eur(value), help=help_text)
+
+    st.caption(
+        f"Exit payout (-I''): {_format_eur(calc.exit_payout_eur)} "
+        "(positive = pay the associate, negative = collect from them)."
+    )
+
 
 def render_partner_facing_section(partner_section: PartnerFacingSection) -> None:
     """Render partner-facing statement section."""
     st.markdown("---")
     st.subheader(":material/savings: Partner Statement")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
+
+    identity_cols = st.columns(6)
+    identity_metrics = [
+        ("Net Deposits (ND)", partner_section.net_deposits_eur, "Deposits - withdrawals"),
+        ("Fair Share (FS)", partner_section.fair_share_eur, "Equal-share profits from settlements"),
+        ("Yield Funds (YF)", partner_section.yield_funds_eur, "Identity target: ND + FS"),
+        ("Total Balance (TB)", partner_section.total_balance_eur, "Current bookmaker holdings"),
+        ("Imbalance (I'')", partner_section.imbalance_eur, "TB - YF"),
+        ("Exit Payout (-I'')", partner_section.exit_payout_eur, "Amount to settle associate now"),
+    ]
+    for column, (label, value, help_text) in zip(identity_cols, identity_metrics):
+        with column:
+            st.metric(label, _format_eur(value), help=help_text)
+
+    funding_cols = st.columns(3)
+    with funding_cols[0]:
         st.metric("Total Deposits", _format_eur(partner_section.total_deposits_eur))
-    with col2:
+    with funding_cols[1]:
         st.metric("Total Withdrawals", _format_eur(partner_section.total_withdrawals_eur))
-    with col3:
-        st.metric("Associate Delta", _format_eur(partner_section.delta_eur))
+    with funding_cols[2]:
+        st.metric(
+            "Associate Delta",
+            _format_eur(partner_section.imbalance_eur),
+            help="Overholding (+) vs short (-) relative to entitlement.",
+        )
 
     ratio_value, ratio_help = _roi_vs_utile_ratio_display(
         partner_section.profit_before_payout_eur, partner_section.raw_profit_eur
@@ -410,12 +441,12 @@ def render_partner_facing_section(partner_section: PartnerFacingSection) -> None
         )
 
     st.info(
-        f"Bookmaker balances (including stakes and payouts): { _format_eur(partner_section.holdings_eur) }"
+        f"Bookmaker balances (TB) total {_format_eur(partner_section.total_balance_eur)} "
+        "- combine with ND/FS to keep YF identities visible."
     )
     st.caption(
-        "ROI Before Payout captures equal-share profits pending payout; "
-        "UTILE remains the Should Hold - Net Deposits profit. "
-        "Delta reflects how much the associate is overholding (+) or short (-) versus entitlement."
+        "YF = ND + FS. TB - YF = I'' (imbalance). Exit payout (-I'') is the amount the "
+        "Settle Associate Now workflow posts to zero the associate before exit."
     )
 
 def render_internal_section(internal_section: InternalSection) -> None:
@@ -440,7 +471,83 @@ def render_internal_section(internal_section: InternalSection) -> None:
     else:
         st.warning(delta_status)
     
-    st.caption("Delta = Current Holdings - Should Hold")
+    st.caption("Imbalance (I'') = Total Balance (TB) - Yield Funds (YF)")
+
+    st.markdown("##### Identity Snapshot")
+    identity_rows = [
+        {
+            "Metric": "Net Deposits (ND)",
+            "Amount": _format_eur(internal_section.net_deposits_eur),
+            "Description": "Deposits - withdrawals",
+        },
+        {
+            "Metric": "Fair Share (FS)",
+            "Amount": _format_eur(internal_section.fair_share_eur),
+            "Description": "Equal-share settlement profit/loss",
+        },
+        {
+            "Metric": "Yield Funds (YF = ND + FS)",
+            "Amount": _format_eur(internal_section.yield_funds_eur),
+            "Description": "Cash the associate should be holding",
+        },
+        {
+            "Metric": "Total Balance (TB)",
+            "Amount": _format_eur(internal_section.total_balance_eur),
+            "Description": "Recorded bookmaker holdings",
+        },
+        {
+            "Metric": "Imbalance (I'')",
+            "Amount": _format_eur(internal_section.imbalance_eur),
+            "Description": "TB - YF (positive = overholder)",
+        },
+        {
+            "Metric": "Exit Payout (-I'')",
+            "Amount": _format_eur(internal_section.exit_payout_eur),
+            "Description": "What Settle Associate Now will post",
+        },
+    ]
+    st.table(identity_rows)
+
+
+def render_settle_associate_section(calc: StatementCalculations) -> None:
+    """Render Settle Associate Now controls."""
+    st.markdown("---")
+    st.subheader(":material/account_balance_wallet: Settle Associate Now")
+    st.caption(
+        "Exit payout (-I'') = "
+        f"{_format_eur(calc.exit_payout_eur)}. Positive values mean we pay the associate; "
+        "negative values mean they return funds."
+    )
+
+    if st.button(
+        ":material/account_balance_wallet: Run Settle Associate Now",
+        key="settle_associate_now",
+        help="Posts a balancing deposit/withdrawal so I'' becomes zero.",
+    ):
+        statement_service = StatementService()
+        with st.spinner("Posting balancing ledger entry..."):
+            try:
+                result = statement_service.settle_associate_now(
+                    calc.associate_id,
+                    calc.cutoff_date,
+                    calculations=calc,
+                    created_by="statements_ui",
+                )
+            except RuntimeError as exc:
+                st.error(f"Settlement failed: {exc}")
+                return
+
+        if not result.was_posted:
+            st.info(result.note)
+            return
+
+        st.success(
+            f"Posted {result.entry_type} for {_decimal_str(result.amount_eur)} EUR. "
+            "Recomputing statement snapshot..."
+        )
+        st.session_state.current_statement = result.updated_calculations
+        show_success_toast("Associate balanced successfully.")
+        safe_rerun()
 
 
 def render_export_options(calc: StatementCalculations, partner_section: PartnerFacingSection) -> None:
@@ -465,10 +572,14 @@ def render_export_options(calc: StatementCalculations, partner_section: PartnerF
 PARTNER STATEMENT - {calc.associate_name}
 Period Ending: {calc.cutoff_date.split('T')[0]}
 
+Net Deposits (ND): {_format_eur(partner_section.net_deposits_eur)}
+Fair Share (FS): {_format_eur(partner_section.fair_share_eur)}
+Yield Funds (YF = ND + FS): {_format_eur(partner_section.yield_funds_eur)}
+Total Balance (TB): {_format_eur(partner_section.total_balance_eur)}
+Imbalance (I''): {_format_eur(partner_section.imbalance_eur)}
+Exit Payout (-I''): {_format_eur(partner_section.exit_payout_eur)}
 Total Deposits: {_format_eur(partner_section.total_deposits_eur)}
 Total Withdrawals: {_format_eur(partner_section.total_withdrawals_eur)}
-Bookmaker Balances: {_format_eur(partner_section.holdings_eur)}
-Associate Delta: {_format_eur(partner_section.delta_eur)}
 ROI Before Payout: {_format_eur(partner_section.profit_before_payout_eur)}
 Net Profit (UTILE): {_format_eur(partner_section.raw_profit_eur)}
 ROI vs UTILE: {ratio_value}
@@ -487,7 +598,7 @@ Bookmaker Breakdown:
         if st.button(":material/grid_on: Export Statement CSV", key="export_statement_csv", width="stretch"):
             with st.spinner("Generating statement summary CSV..."):
                 try:
-                    csv_path = generate_statement_summary_csv(calc, partner_section)
+                    csv_path = generate_statement_summary_csv(calc)
                     st.success("Statement summary ready.")
                     with open(csv_path, "rb") as csv_file:
                         st.download_button(
@@ -590,6 +701,7 @@ def _render_statement_output(
     render_partner_facing_section(partner_section)
     if show_internal:
         render_internal_section(internal_section)
+    render_settle_associate_section(calc)
     render_export_options(calc, partner_section)
     render_statement_details(calc, expanded=auto_expand_transactions)
 
@@ -728,7 +840,7 @@ def main() -> None:
                     calc = statement_service.generate_statement(associate_id, cutoff_date)
 
                     partner_section = statement_service.format_partner_facing_section(calc)
-                    summary_path = generate_statement_summary_csv(calc, partner_section)
+                    summary_path = generate_statement_summary_csv(calc)
                     st.session_state.current_statement = calc
                     st.session_state.statement_generated = True
                     st.success(f"Statement generated for {calc.associate_name}")
@@ -778,23 +890,28 @@ def main() -> None:
     # Instructions
     # Instructions
     with st.expander(":material/menu_book: Statement Information", expanded=False):
-        st.markdown("""
-        ### About Monthly Statements
-        
-        - **Partner Statement**: Shareable with associates showing funding, entitlement, and bookmaker balances with deltas  
-        - **Internal Reconciliation**: Internal-only section showing current holdings vs. entitlement  
-        - **Transaction Details**: Complete transaction list for verification  
+        st.markdown(
+            """
+            ### About Monthly Statements
 
-        **Calculations**
+            - **Partner Statement**: Shareable with associates showing funding, entitlement, and bookmaker balances
+            - **Internal Reconciliation**: Internal-only section showing ND/FS/YF/TB identities
+            - **Transaction Details**: Complete transaction list for verification
 
-        - `Net Deposits = SUM(DEPOSITS) − SUM(WITHDRAWALS)`  
-        - `Should Hold = SUM(principal_returned + per_surebet_share)`  
-        - `Current Holding = SUM(all ledger entries)`  
-        - `Raw Profit = Should Hold − Net Deposits`  
-        - `Delta = Current Holding − Should Hold`  
+            **Identity & Settlements**
 
-        Each bookmaker is exported on its own row (native + EUR balance). Additional rows detail **LIQUIDITA** (net deposits), **MULTIBOOK** (delta), **BALANCE** (current holdings), and **UTILE** (profit) so you can track associate performance at a glance.
-        """)
+            - `ND = SUM(DEPOSIT.amount_eur) - SUM(WITHDRAWAL.amount_eur)`
+            - `FS = SUM(BET_RESULT.per_surebet_share_eur)` (covers WON / LOST / VOID)
+            - `YF = ND + FS` (legacy *Should Hold*)
+            - `TB = SUM(all ledger entries)`
+            - `I'' = TB - YF` (positive = overholder, negative = short)
+            - `Exit payout = -I''` (positive = pay associate, negative = collect from them)
+
+            Statement CSV exports list ND/FS/YF/TB/I'' plus **Exit Payout**. Run **Settle Associate Now** before
+            deactivating an associate so they exit with `I'' = 0`.
+            """
+        )
+
 
     render_debug_panel()
 

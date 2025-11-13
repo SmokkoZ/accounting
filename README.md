@@ -154,6 +154,15 @@ LOG_LEVEL=INFO
 - **Monthly Statements**: Automated associate statements
 - **Statement & ROI CSVs**: `StatementService.export_statement_csv` and `export_surebet_roi_csv` generate per-bookmaker allocations plus per-surebet ROI snapshots (see `docs/examples/statement_A123_YYYY-MM-DD.csv` and `docs/examples/surebet_roi_A123_YYYY-MM-DD.csv`). These snapshots reuse the existing statement math and explicitly note that values exclude operator fees/taxes.
 
+### Change Notes — YF & Exit Settlement Alignment (2025-11-13)
+
+- Adopt unified financial identity: `Your Fair Balance (YF) = Net Deposits (ND) + Fair Shares (FS)`; replaces prior “Should Hold” label in UI/docs.
+- Standardize ND computation: store `WITHDRAWAL` as negative and `DEPOSIT` as positive; compute ND by summing signed amounts (no double-negation).
+- Keep imbalance: `Δ = TB − YF` where `TB` is total bookmaker holdings; reconciliation still targets Δ ≈ 0.
+- Add “Settle Associate Now” flow: computes Δ at a cutoff and posts a single balancing DEPOSIT/WITHDRAWAL to zero Δ; CSV exports at exit include an “Exit Payout” row (`−Δ`).
+- CSVs: include YF in summaries and a version footnote (e.g., `Model: YF-v1 — YF=ND+FS; Δ=TB−YF; values exclude operator fees/taxes`).
+- Backward compatibility: no schema changes; existing math reused; older references to “Should Hold” now map to YF. Where docs state `RAW_PROFIT_EUR = SHOULD_HOLD − NET_DEPOSITS`, this equals FS under YF (`YF − ND = FS`).
+
 ## Contributing
 
 1. Fork the repository

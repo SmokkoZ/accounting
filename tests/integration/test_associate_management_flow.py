@@ -463,10 +463,10 @@ class TestBookmakerManagementFlow(unittest.TestCase):
                     "WITHDRAWAL",
                     self.test_associate_id,
                     bookmaker_id,
-                    "50.00",
+                    "-50.00",
                     "EUR",
                     "1.000000",
-                    "50.00",
+                    "-50.00",
                     None,
                     None,
                     None,
@@ -516,8 +516,13 @@ class TestBookmakerManagementFlow(unittest.TestCase):
         self.assertEqual(
             Decimal(str(ledger_row["net_deposits_native"])), Decimal("300.00")
         )
-        self.assertEqual(Decimal(str(ledger_row["profits_eur"])), Decimal("270.00"))
-        self.assertEqual(Decimal(str(ledger_row["profits_native"])), Decimal("540.00"))
+        self.assertEqual(Decimal(str(ledger_row["profits_eur"])), Decimal("120.00"))
+        self.assertEqual(Decimal(str(ledger_row["profits_native"])), Decimal("240.00"))
+        self.assertEqual(Decimal(str(ledger_row["fs_eur"])), Decimal("120.00"))
+        self.assertEqual(
+            Decimal(str(ledger_row["yf_eur"])) - Decimal(str(ledger_row["net_deposits_eur"])),
+            Decimal(str(ledger_row["fs_eur"])),
+        )
 
     def test_add_bookmaker_unique_constraint(self):
         """Test unique constraint on (associate_id, bookmaker_name)."""

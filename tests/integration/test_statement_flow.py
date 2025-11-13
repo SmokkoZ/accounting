@@ -7,15 +7,18 @@ Tests complete flow from UI to database with realistic data scenarios.
 import csv
 import io
 import importlib
+import os
+import sqlite3
+import tempfile
 from datetime import datetime
 from decimal import Decimal
 from unittest.mock import patch, Mock
 
 import pytest
 
+from src.core.schema import create_schema
 from src.services.statement_service import (
     BookmakerStatementRow,
-    PartnerFacingSection,
     StatementCalculations,
     StatementService,
 )
@@ -25,6 +28,17 @@ from src.services.statement_service import (
 def service():
     """Create StatementService instance."""
     return StatementService()
+
+
+@pytest.fixture
+def temp_statement_db():
+    """Temporary sqlite database path for settlement workflow tests."""
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
+    tmp.close()
+    try:
+        yield tmp.name
+    finally:
+        os.unlink(tmp.name)
 
 
 @pytest.fixture
@@ -126,10 +140,10 @@ def mock_database_with_data(sample_associate_data, sample_ledger_entries):
         if "SELECT display_alias" in normalized and "FROM associates" in normalized:
             cursor.fetchone.return_value = sample_associate_data
             cursor.fetchall.return_value = []
-        elif "SUM(CASE WHEN type = 'DEPOSIT'" in normalized and "total_deposits" in normalized:
+        elif "SUM( CASE WHEN type = 'DEPOSIT'" in normalized and "total_deposits" in normalized:
             cursor.fetchone.return_value = {
                 "total_deposits": 1000.0,
-                "total_withdrawals": 200.0,
+                "signed_withdrawals": -200.0,
             }
         elif "principal_returned_eur AS REAL" in normalized:
             cursor.fetchone.return_value = {"should_hold_eur": 275.0}
@@ -192,9 +206,9 @@ class TestCompleteStatementGeneration:
         # Mock data for loss scenario
         cursor.fetchone.side_effect = [
             {"display_alias": "Loss Associate", "home_currency": "EUR"},
-            {"total_deposits": 2000.0, "total_withdrawals": 0.0},
-            {"should_hold_eur": 1200.0},
+            {"total_deposits": 2000.0, "signed_withdrawals": 0.0},
             {"current_holding_eur": 1100.0},
+            {"should_hold_eur": 1200.0},
             {"profit_before_payout_eur": 0.0},
         ]
         cursor.fetchall.return_value = []
@@ -218,9 +232,9 @@ class TestCompleteStatementGeneration:
         # Mock data for balanced scenario
         cursor.fetchone.side_effect = [
             {"display_alias": "Balanced Associate", "home_currency": "EUR"},
-            {"total_deposits": 1000.0, "total_withdrawals": 0.0},
-            {"should_hold_eur": 1000.0},
+            {"total_deposits": 1000.0, "signed_withdrawals": 0.0},
             {"current_holding_eur": 1000.0},
+            {"should_hold_eur": 1000.0},
             {"profit_before_payout_eur": 0.0},
         ]
         cursor.fetchall.return_value = []
@@ -281,6 +295,7 @@ class TestFormattingIntegration:
             net_deposits_eur=Decimal("5000.00"),
             should_hold_eur=Decimal("7500.00"),
             current_holding_eur=Decimal("7200.00"),
+            fair_share_eur=Decimal("1800.00"),
             profit_before_payout_eur=Decimal("1800.00"),
             raw_profit_eur=Decimal("2500.00"),
             delta_eur=Decimal("-300.00"),
@@ -306,7 +321,7 @@ class TestFormattingIntegration:
         
         # Verify realistic profit formatting
         assert result.total_deposits_eur == Decimal("5000.00")
-        assert result.holdings_eur == Decimal("7200.00")
+        assert result.total_balance_eur == Decimal("7200.00")
         assert result.bookmakers[0].bookmaker_name == "Profitable Bookie"
     
     def test_internal_section_realistic_scenarios(self, service):
@@ -318,6 +333,7 @@ class TestFormattingIntegration:
             net_deposits_eur=Decimal("1000.00"),
             should_hold_eur=Decimal("2000.00"),
             current_holding_eur=Decimal("2500.00"),
+            fair_share_eur=Decimal("400.00"),
             profit_before_payout_eur=Decimal("400.00"),
             raw_profit_eur=Decimal("1000.00"),
             delta_eur=Decimal("500.00"),
@@ -341,6 +357,7 @@ class TestFormattingIntegration:
             net_deposits_eur=Decimal("1000.00"),
             should_hold_eur=Decimal("2000.00"),
             current_holding_eur=Decimal("1500.00"),
+            fair_share_eur=Decimal("200.00"),
             profit_before_payout_eur=Decimal("200.00"),
             raw_profit_eur=Decimal("1000.00"),
             delta_eur=Decimal("-500.00"),
@@ -370,9 +387,9 @@ class TestCutoffDateScenarios:
         # Mock data
         cursor.fetchone.side_effect = [
             {"display_alias": "Test Associate", "home_currency": "EUR"},
-            {"total_deposits": 1000.0, "total_withdrawals": 0.0},
-            {"should_hold_eur": 1200.0},
+            {"total_deposits": 1000.0, "signed_withdrawals": 0.0},
             {"current_holding_eur": 1150.0},
+            {"should_hold_eur": 1200.0},
             {"profit_before_payout_eur": 0.0},
         ]
         cursor.fetchall.return_value = []
@@ -401,9 +418,9 @@ class TestCutoffDateScenarios:
         # Mock data
         cursor.fetchone.side_effect = [
             {"display_alias": "Test Associate", "home_currency": "EUR"},
-            {"total_deposits": 500.0, "total_withdrawals": 0.0},
-            {"should_hold_eur": 600.0},
+            {"total_deposits": 500.0, "signed_withdrawals": 0.0},
             {"current_holding_eur": 550.0},
+            {"should_hold_eur": 600.0},
             {"profit_before_payout_eur": 0.0},
         ]
         cursor.fetchall.return_value = []
@@ -444,9 +461,9 @@ class TestErrorHandlingIntegration:
         # Mock scenario where some calculations return NULL
         cursor.fetchone.side_effect = [
             {"display_alias": "Test Associate", "home_currency": "EUR"},
-            {"total_deposits": 1000.0, "total_withdrawals": 0.0},
-            {"should_hold_eur": None},    # No bet results yet
+            {"total_deposits": 1000.0, "signed_withdrawals": 0.0},
             {"current_holding_eur": 1000.0},
+            {"should_hold_eur": None},    # No bet results yet
             {"profit_before_payout_eur": None},
         ]
         cursor.fetchall.return_value = []
@@ -473,9 +490,9 @@ class TestLargeDatasetPerformance:
         # Mock calculation results
         cursor.fetchone.side_effect = [
             {"display_alias": "High Volume Associate", "home_currency": "EUR"},
-            {"total_deposits": 50000.0, "total_withdrawals": 0.0},
-            {"should_hold_eur": 55000.0},
+            {"total_deposits": 50000.0, "signed_withdrawals": 0.0},
             {"current_holding_eur": 54500.0},
+            {"should_hold_eur": 55000.0},
             {"profit_before_payout_eur": 0.0},
         ]
         
@@ -545,7 +562,8 @@ class TestStatementCsvExport:
                 net_deposits_eur=Decimal("200.00"),
                 should_hold_eur=Decimal("450.00"),
                 current_holding_eur=Decimal("400.00"),
-                profit_before_payout_eur=Decimal("175.00"),
+                fair_share_eur=Decimal("250.00"),
+                profit_before_payout_eur=Decimal("250.00"),
                 raw_profit_eur=Decimal("250.00"),
                 delta_eur=Decimal("-50.00"),
                 total_deposits_eur=Decimal("500.00"),
@@ -556,20 +574,10 @@ class TestStatementCsvExport:
                 cutoff_date="2025-10-31T23:59:59Z",
                 generated_at="2025-11-01T00:00:00Z",
             )
-            partner_section = PartnerFacingSection(
-                total_deposits_eur=calc.total_deposits_eur,
-                total_withdrawals_eur=calc.total_withdrawals_eur,
-                holdings_eur=calc.current_holding_eur,
-                delta_eur=calc.delta_eur,
-                profit_before_payout_eur=calc.profit_before_payout_eur,
-                raw_profit_eur=calc.raw_profit_eur,
-                bookmakers=bookmakers,
-            )
-
             with patch.object(
                 module.StatementService, "_calculate_multibook_delta", return_value=Decimal("0")
             ):
-                csv_path = module.generate_statement_summary_csv(calc, partner_section)
+                csv_path = module.generate_statement_summary_csv(calc)
                 with csv_path.open(newline="", encoding="utf-8") as handle:
                     rows = list(csv.reader(handle))
 
@@ -603,14 +611,15 @@ class TestStatementCsvExport:
             assert table_rows[0][5] == "EURO"
 
             summary_start = rows.index([], header_index)
-            summary_rows = rows[summary_start + 1 :]
-            assert summary_rows[0][0].startswith("LIQUIDITA - EUR")
+            summary_rows = [row for row in rows[summary_start + 1 :] if row]
             summary_map = {row[0]: to_decimal(row[1]) for row in summary_rows}
 
-            assert summary_map["LIQUIDITA - EUR"] == Decimal("200.00")
-            assert summary_map["MULTIBOOK - EUR"] == Decimal("0.00")
-            assert summary_map["BALANCE  - EUR"] == Decimal("-50.00")
-            assert summary_map["UTILE A TESTA"] == Decimal("250.00")
+            assert summary_map["Net Deposits (ND)"] == Decimal("200.00")
+            assert summary_map["Fair Share (FS)"] == Decimal("250.00")
+            assert summary_map["Imbalance (I'' = TB - YF)"] == Decimal("-50.00")
+            assert summary_map["Exit Payout (-I'')"] == Decimal("50.00")
+            assert summary_map["Multibook Delta"] == Decimal("0.00")
+            assert summary_map["UTILE (YF - ND)"] == Decimal("250.00")
         finally:
             module.STATEMENT_EXPORT_DIR = original_dir
 
@@ -620,6 +629,7 @@ class TestStatementCsvExport:
             net_deposits_eur=Decimal("100.00"),
             should_hold_eur=Decimal("150.00"),
             current_holding_eur=Decimal("160.00"),
+            fair_share_eur=Decimal("40.00"),
             profit_before_payout_eur=Decimal("40.00"),
             raw_profit_eur=Decimal("50.00"),
             delta_eur=Decimal("10.00"),
@@ -684,6 +694,88 @@ class TestStatementCsvExport:
         assert second_row[2] == "0.00"
         assert second_row[4] == ""
         assert second_row[7] == "5.00%"
+
+
+class TestSettlementWorkflow:
+    """Integration coverage for the Settle Associate Now workflow."""
+
+    def test_settle_associate_now_zeroes_delta(self, temp_statement_db, monkeypatch):
+        conn = sqlite3.connect(temp_statement_db)
+        conn.row_factory = sqlite3.Row
+        create_schema(conn)
+        conn.execute(
+            "INSERT INTO associates (id, display_alias, home_currency) VALUES (?, ?, ?)",
+            (1, "Exit Tester", "EUR"),
+        )
+        conn.execute(
+            """
+            INSERT INTO ledger_entries (
+                type, associate_id, bookmaker_id, amount_native, native_currency,
+                fx_rate_snapshot, amount_eur, created_at_utc, created_by, note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "DEPOSIT",
+                1,
+                None,
+                "500.00",
+                "EUR",
+                "1.00",
+                "500.00",
+                "2025-10-01T00:00:00Z",
+                "pytest",
+                "initial funding",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO ledger_entries (
+                type, associate_id, bookmaker_id, amount_native, native_currency,
+                fx_rate_snapshot, amount_eur, created_at_utc, created_by, note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "BOOKMAKER_CORRECTION",
+                1,
+                None,
+                "100.00",
+                "EUR",
+                "1.00",
+                "100.00",
+                "2025-10-15T00:00:00Z",
+                "pytest",
+                "manual adjustment",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        def _connect():
+            connection = sqlite3.connect(temp_statement_db)
+            connection.row_factory = sqlite3.Row
+            return connection
+
+        monkeypatch.setattr("src.services.statement_service.get_db_connection", _connect)
+        monkeypatch.setattr(
+            "src.services.funding_transaction_service.get_db_connection", _connect
+        )
+
+        service = StatementService()
+        cutoff = "2025-10-31T23:59:59Z"
+
+        calc_before = service.generate_statement(1, cutoff)
+        assert calc_before.i_double_prime_eur == Decimal("100.00")
+
+        result = service.settle_associate_now(
+            1, cutoff, calculations=calc_before, created_by="pytest"
+        )
+        assert result.was_posted is True
+        assert result.entry_type == "WITHDRAWAL"
+        assert result.amount_eur == Decimal("100.00")
+        assert result.delta_after == Decimal("0.00")
+
+        calc_after = service.generate_statement(1, cutoff)
+        assert calc_after.i_double_prime_eur == Decimal("0.00")
 
 
 

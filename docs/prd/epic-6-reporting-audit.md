@@ -489,3 +489,12 @@ Epic 6 is the **final epic** for MVP. When this epic is done:
 ---
 
 **End of Epic**
+
+---
+
+## Change Notes — YF & Exit Settlement Alignment (2025-11-13)
+
+- Statements adopt `Your Fair Balance (YF) = ND + FS`; replace “Should Hold” labels in summaries while keeping historical references mapped.
+- CSV exports add YF and an “Exit Payout” (`−Δ`) row for exit cutoffs with footer `Model: YF‑v1 (YF=ND+FS; Δ=TB−YF)`; values exclude operator fees/taxes.
+- Standardize ND sign handling: withdrawals negative, deposits positive; test identities `YF − ND == FS` and `Δ = TB − YF`.
+- No schema changes; existing calculators reused; changes are labels, notes, and one additional export row at exit.

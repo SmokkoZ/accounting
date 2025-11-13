@@ -131,3 +131,11 @@ See `docs/stories/9.1.telegram-funding-commands.md` through `docs/stories/9.7.te
 ---
 
 **End of Epic 9**
+
+---
+
+## Change Notes — YF & Exit Settlement Alignment (2025-11-13)
+
+- Balance/statement messages align with the YF identity: show ND, FS, YF, and Δ definitions in operator‑facing UIs; partner‑facing copies may abbreviate but should reflect YF as the entitlement model.
+- ND sign semantics clarified for funding entries created from Telegram: `DEPOSIT > 0`, `WITHDRAWAL < 0` (stored as such), ensuring consistent ND across views.
+- Operational policy: prior to associate deactivation, operators must run “Settle Associate Now” in the app to zero Δ; Telegram flows should not deactivate without that confirmation.

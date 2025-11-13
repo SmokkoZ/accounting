@@ -601,6 +601,19 @@ These features are explicitly **deferred** to future iterations:
 - Mobile app for associates
 - Web API for external integrations
 
+### Phase 10: Brownfield – Epic 12 (Future)
+- Reference: [Epic 12: Signal Broadcaster & Styled Excel Exports](epic-12-signal-broadcaster-and-styled-excel-exports.md)
+- Objectives:
+  - Add a “Signal Broadcaster” page to paste raw surebet text and send it unchanged to selected Telegram chats with optional presets and exact preview.
+  - Replace CSV downloads with styled Excel (.xlsx) exports: bold shaded headers, readable column widths, color cues for deposits/withdrawals, numeric typing for number columns.
+- Dependencies:
+  - Existing Telegram bot and chat ID mapping in DB/config
+  - Existing export data pipelines (swap writer to XLSX with styling)
+- Success Criteria:
+  - Broadcast sends exact raw text to intended chats and surfaces per-chat success/failure
+  - Excel files open cleanly with styling applied; data/ordering match prior CSV, numeric columns behave as numbers
+- Estimated Duration: 2–4 days
+
 ---
 
 ## Risk Mitigation
@@ -674,6 +687,7 @@ Each phase is independently rollback-able:
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2025-10-29 | John (PM Agent) | Initial greenfield roadmap created from PRD v4 |
+| 1.1 | 2025-11-13 | Sarah (PO Agent) | Added Post-MVP Phase 10 referencing Epic 12 (Signal Broadcaster & Styled Excel exports) |
 
 **Approvals:**
 

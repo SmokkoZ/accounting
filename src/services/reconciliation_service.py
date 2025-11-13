@@ -13,6 +13,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional
 
 from src.core.database import get_db_connection
+from src.services.settlement_constants import SETTLEMENT_NOTE_PREFIX
 from src.utils.logging_config import get_logger
 
 
@@ -30,7 +31,28 @@ class AssociateBalance:
     current_holding_eur: Decimal
     delta_eur: Decimal
     status: str  # "overholder", "balanced", "short"
-    status_icon: str  # 🔴, 🟢, 🟠
+    status_icon: str  # dY"', dYY?, dYY?
+    fair_share_eur: Decimal = Decimal("0.00")
+
+    @property
+    def fs_eur(self) -> Decimal:
+        """Expose Fair Share (FS) to satisfy Story 11.1 identities."""
+        return self.fair_share_eur
+
+    @property
+    def yf_eur(self) -> Decimal:
+        """Expose Yield Funds (YF) alias for legacy should_hold field."""
+        return self.should_hold_eur
+
+    @property
+    def tb_eur(self) -> Decimal:
+        """Expose Total Balance (TB) alias for current holdings."""
+        return self.current_holding_eur
+
+    @property
+    def i_double_prime_eur(self) -> Decimal:
+        """Expose imbalance (I'') alias for DELTA."""
+        return self.delta_eur
 
 
 class BalanceList(list):
@@ -74,6 +96,7 @@ class ReconciliationService:
         """
         logger.info("calculating_associate_balances")
 
+        settlement_filter = f"{SETTLEMENT_NOTE_PREFIX}%"
         cursor = self.db.execute(
             """
             SELECT
@@ -83,21 +106,22 @@ class ReconciliationService:
                 -- NET_DEPOSITS_EUR: Personal funding (deposits - withdrawals)
                 COALESCE(SUM(
                     CASE
-                        WHEN le.type = 'DEPOSIT' THEN CAST(le.amount_eur AS REAL)
-                        WHEN le.type = 'WITHDRAWAL' THEN CAST(le.amount_eur AS REAL)
+                        WHEN le.type = 'DEPOSIT' AND (le.note IS NULL OR le.note NOT LIKE ?)
+                            THEN CAST(le.amount_eur AS REAL)
+                        WHEN le.type = 'WITHDRAWAL' AND (le.note IS NULL OR le.note NOT LIKE ?)
+                            THEN CAST(le.amount_eur AS REAL)
                         ELSE 0
                     END
                 ), 0) AS net_deposits_eur,
 
-                -- SHOULD_HOLD_EUR: Entitlement from settled bets
+                -- FAIR_SHARE_EUR: Profit/loss from BET_RESULT share rows
                 COALESCE(SUM(
                     CASE
                         WHEN le.type = 'BET_RESULT' THEN
-                            CAST(le.principal_returned_eur AS REAL)
-                             + CAST(le.per_surebet_share_eur AS REAL)
+                            COALESCE(CAST(le.per_surebet_share_eur AS REAL), 0)
                         ELSE 0
                     END
-                ), 0) AS should_hold_eur,
+                ), 0) AS fair_share_eur,
 
                 -- CURRENT_HOLDING_EUR: Physical bookmaker holdings (all entry types)
                 COALESCE(SUM(CAST(le.amount_eur AS REAL)), 0) AS current_holding_eur
@@ -107,13 +131,15 @@ class ReconciliationService:
             WHERE a.is_active = 1
             GROUP BY a.id, a.display_alias
             ORDER BY a.display_alias
-        """
+        """,
+            (settlement_filter, settlement_filter),
         )
 
         balances: List[AssociateBalance] = []
         for row in cursor.fetchall():
             net_deposits = self._quantize_currency(Decimal(str(row["net_deposits_eur"])))
-            should_hold = self._quantize_currency(Decimal(str(row["should_hold_eur"])))
+            fair_share = self._quantize_currency(Decimal(str(row["fair_share_eur"])))
+            should_hold = self._quantize_currency(net_deposits + fair_share)
             current_holding = self._quantize_currency(
                 Decimal(str(row["current_holding_eur"]))
             )
@@ -130,6 +156,7 @@ class ReconciliationService:
                 delta_eur=delta,
                 status=status,
                 status_icon=status_icon,
+                fair_share_eur=fair_share,
             )
             balances.append(balance)
 
@@ -150,6 +177,7 @@ class ReconciliationService:
                 delta_eur=adjustment_delta,
                 status=status,
                 status_icon=status_icon,
+                fair_share_eur=Decimal("0.00"),
             )
 
         logger.info(

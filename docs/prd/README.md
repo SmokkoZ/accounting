@@ -66,11 +66,11 @@ This PRD is organized as a sharded document collection for easier navigation and
 | **Associate** | Trusted partner who places bets |
 | **Surebet** | Arbitrage opportunity with guaranteed profit on two-way market |
 | **Two-Way Market** | Over/Under, Yes/No, Team A/Team B |
-| **NET_DEPOSITS_EUR** | Cash personally funded by associate |
-| **SHOULD_HOLD_EUR** | Entitlement after equal-split settlement |
+| **NET_DEPOSITS_EUR (ND)** | Cash personally funded by associate (sum of signed DEPOSIT/WITHDRAWAL; withdrawals stored negative) |
+| **YOUR FAIR BALANCE (YF)** | Entitlement identity used across views: YF = ND + FS (replaces prior “Should Hold”) |
 | **CURRENT_HOLDING_EUR** | Modeled physical holdings |
-| **DELTA** | CURRENT_HOLDING - SHOULD_HOLD (over/under holding) |
-| **RAW_PROFIT_EUR** | SHOULD_HOLD - NET_DEPOSITS (for monthly statements) |
+| **DELTA (Δ)** | TB − YF (imbalance); for legacy contexts CURRENT_HOLDING − SHOULD_HOLD maps to the same target of ≈ 0 |
+| **RAW_PROFIT_EUR** | Under YF, RAW_PROFIT_EUR equals FS because YF − ND = FS |
 | **Admin Seat** | Extra equal-split seat for coordinator if they didn't stake |
 | **Principal Returned** | Stake returned via WON/VOID bets |
 | **Per-Surebet Share** | Equal-split profit/loss per participant |
@@ -84,6 +84,7 @@ This PRD is organized as a sharded document collection for easier navigation and
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | v4 | 2025-10-29 | John (PM Agent) | Initial PRD creation from final-project.md |
+| v4.1 | 2025-11-13 | Sarah (PO) | Added YF (Your Fair Balance) alignment notes: YF=ND+FS, Δ=TB−YF, ND sign standardization, Exit Settlement flow and CSV footnotes. |
 
 ---
 

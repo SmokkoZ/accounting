@@ -16,6 +16,7 @@ import structlog
 
 from src.core.database import get_db_connection
 from src.services.fx_manager import get_fx_rate
+from src.services.settlement_constants import SETTLEMENT_NOTE_PREFIX
 from src.utils.database_utils import TransactionError, transactional
 from src.utils.datetime_helpers import utc_now_iso
 
@@ -68,7 +69,12 @@ class FundingTransactionService:
         except Exception:  # pragma: no cover - defensive close
             pass
 
-    def record_transaction(self, transaction: FundingTransaction) -> str:
+    def record_transaction(
+        self,
+        transaction: FundingTransaction,
+        *,
+        created_at_override: Optional[str] = None,
+    ) -> str:
         """
         Record a funding transaction and create ledger entry.
         
@@ -99,7 +105,8 @@ class FundingTransactionService:
                     conn=conn,
                     transaction=transaction,
                     amount_native=amount_native,
-                    fx_rate_snapshot=fx_rate
+                    fx_rate_snapshot=fx_rate,
+                    created_at_override=created_at_override,
                 )
                 
                 logger.info(
@@ -241,9 +248,10 @@ class FundingTransactionService:
                     SUM(CAST(amount_eur AS REAL)) AS net_deposits_eur
                 FROM ledger_entries 
                 WHERE associate_id = ?
-                AND type IN ('DEPOSIT', 'WITHDRAWAL')
+                  AND type IN ('DEPOSIT', 'WITHDRAWAL')
+                  AND (note IS NULL OR note NOT LIKE ?)
                 """,
-                (associate_id,)
+                (associate_id, f"{SETTLEMENT_NOTE_PREFIX}%")
             )
             net_deposits_row = cursor.fetchone()
             net_deposits_eur = Decimal(str(net_deposits_row['net_deposits_eur'] or 0)).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
@@ -340,48 +348,56 @@ class FundingTransactionService:
         conn: sqlite3.Connection,
         transaction: FundingTransaction,
         amount_native: Decimal,
-        fx_rate_snapshot: Decimal
+        fx_rate_snapshot: Decimal,
+        created_at_override: Optional[str] = None,
     ) -> int:
         """Create a ledger entry for the funding transaction."""
         amount_eur = self._quantize_currency(amount_native * fx_rate_snapshot)
         
+        columns = [
+            "type",
+            "associate_id",
+            "bookmaker_id",
+            "surebet_id",
+            "bet_id",
+            "settlement_state",
+            "amount_native",
+            "native_currency",
+            "fx_rate_snapshot",
+            "amount_eur",
+            "principal_returned_eur",
+            "per_surebet_share_eur",
+            "settlement_batch_id",
+            "created_by",
+            "note",
+        ]
+        values = [
+            transaction.transaction_type,
+            transaction.associate_id,
+            transaction.bookmaker_id,
+            None,  # surebet_id
+            None,  # bet_id
+            None,  # settlement_state
+            str(amount_native),
+            transaction.native_currency,
+            str(fx_rate_snapshot),
+            str(amount_eur),
+            None,  # principal_returned_eur
+            None,  # per_surebet_share_eur
+            None,  # settlement_batch_id
+            transaction.created_by,
+            transaction.note,
+        ]
+
+        if created_at_override:
+            columns.append("created_at_utc")
+            values.append(created_at_override)
+
+        placeholders = ", ".join("?" for _ in columns)
+        column_list = ", ".join(columns)
         cursor = conn.execute(
-            """
-            INSERT INTO ledger_entries (
-                type,
-                associate_id,
-                bookmaker_id,
-                surebet_id,
-                bet_id,
-                settlement_state,
-                amount_native,
-                native_currency,
-                fx_rate_snapshot,
-                amount_eur,
-                principal_returned_eur,
-                per_surebet_share_eur,
-                settlement_batch_id,
-                created_by,
-                note
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                transaction.transaction_type,
-                transaction.associate_id,
-                transaction.bookmaker_id,
-                None,  # surebet_id
-                None,  # bet_id
-                None,  # settlement_state
-                str(amount_native),
-                transaction.native_currency,
-                str(fx_rate_snapshot),
-                str(amount_eur),
-                None,  # principal_returned_eur
-                None,  # per_surebet_share_eur
-                None,  # settlement_batch_id
-                transaction.created_by,
-                transaction.note
-            )
+            f"INSERT INTO ledger_entries ({column_list}) VALUES ({placeholders})",
+            values,
         )
         
         return cursor.lastrowid

@@ -650,3 +650,9 @@ GROUP BY associate_id;
 ---
 
 **End of Document**
+## Change Notes — YF & Exit Settlement Alignment (2025-11-13)
+
+- Standardize Net Deposits (ND) semantics: store `WITHDRAWAL` as negative and `DEPOSIT` as positive; compute ND by summing signed values across all services and views (avoid double-negation in per‑bookmaker computations).
+- Rename “Should Hold” to `Your Fair Balance (YF)` and define `YF = ND + FS`, where `FS` is the sum of `per_surebet_share_eur` from `BET_RESULT` rows for the associate (VOID contributes 0 but participates).
+- Keep imbalance calculation as `Δ = TB − YF` where `TB` is total modeled bookmaker holdings; legacy formulas referencing `CURRENT_HOLDING − SHOULD_HOLD` map to this identity.
+- No schema changes required; this is a terminology and identity alignment. Historical diagrams and SQL snippets remain valid with the mapping above.

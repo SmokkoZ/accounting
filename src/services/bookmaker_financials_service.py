@@ -8,12 +8,13 @@ with dual-currency representations (native + EUR).
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 
 from src.core.database import get_db_connection
 from src.services.fx_manager import get_latest_fx_rate
+from src.services.settlement_constants import SETTLEMENT_NOTE_PREFIX
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -43,6 +44,26 @@ class BookmakerFinancialSnapshot:
     profits_eur: Decimal
     profits_native: Optional[Decimal]
     latest_balance_check_date: Optional[str]
+    fs_eur: Decimal = field(init=False)
+    yf_eur: Decimal = field(init=False)
+    i_double_prime_eur: Optional[Decimal] = field(init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "fs_eur", self.profits_eur)
+        object.__setattr__(
+            self,
+            "yf_eur",
+            (self.net_deposits_eur + self.profits_eur).quantize(
+                TWO_PLACES, rounding=ROUND_HALF_UP
+            ),
+        )
+        if self.balance_eur is None:
+            imbalance = None
+        else:
+            imbalance = (self.balance_eur - self.yf_eur).quantize(
+                TWO_PLACES, rounding=ROUND_HALF_UP
+            )
+        object.__setattr__(self, "i_double_prime_eur", imbalance)
 
 
 class BookmakerFinancialsService:
@@ -86,7 +107,6 @@ class BookmakerFinancialsService:
                 {balance_select},
                 COALESCE(pending.pending_eur, 0) AS pending_balance_eur,
                 COALESCE(funding.net_deposits_eur, 0) AS net_deposits_eur,
-                COALESCE(entitlements.should_hold_eur, 0) AS should_hold_eur,
                 COALESCE(entitlements.surebet_profit_eur, 0) AS surebet_profit_eur,
                 a.home_currency AS home_currency
             FROM bookmakers b
@@ -115,23 +135,20 @@ class BookmakerFinancialsService:
                     SUM(
                         CASE
                             WHEN type = 'DEPOSIT' THEN CAST(amount_eur AS REAL)
-                            WHEN type = 'WITHDRAWAL' THEN -CAST(amount_eur AS REAL)
+                            WHEN type = 'WITHDRAWAL' THEN CAST(amount_eur AS REAL)
                             ELSE 0
                         END
                     ) AS net_deposits_eur
                 FROM ledger_entries
                 WHERE bookmaker_id IS NOT NULL
                   AND type IN ('DEPOSIT', 'WITHDRAWAL')
+                  AND (note IS NULL OR note NOT LIKE ?)
                 GROUP BY associate_id, bookmaker_id
             ) funding ON funding.bookmaker_id = b.id AND funding.associate_id = b.associate_id
             LEFT JOIN (
                 SELECT
                     associate_id,
                     bookmaker_id,
-                    SUM(
-                        COALESCE(CAST(principal_returned_eur AS REAL), 0)
-                        + COALESCE(CAST(per_surebet_share_eur AS REAL), 0)
-                    ) AS should_hold_eur,
                     SUM(
                         COALESCE(CAST(per_surebet_share_eur AS REAL), 0)
                     ) AS surebet_profit_eur
@@ -144,7 +161,8 @@ class BookmakerFinancialsService:
             ORDER BY b.bookmaker_name ASC
         """
 
-        cursor = self.db.execute(query, (associate_id,))
+        settlement_filter = f"{SETTLEMENT_NOTE_PREFIX}%"
+        cursor = self.db.execute(query, (settlement_filter, associate_id))
         rows = cursor.fetchall()
 
         fx_cache: Dict[str, Optional[Decimal]] = {}
@@ -160,11 +178,9 @@ class BookmakerFinancialsService:
             pending_eur = self._to_decimal(row["pending_balance_eur"]) or Decimal("0.00")
             net_deposits_eur = self._to_decimal(row["net_deposits_eur"]) or Decimal("0.00")
 
-            # Profit = entitlement (principal + share) - net deposits
-            should_hold_eur = self._to_decimal(row["should_hold_eur"]) or Decimal("0.00")
-            profits_eur = (should_hold_eur - net_deposits_eur).quantize(
-                TWO_PLACES, rounding=ROUND_HALF_UP
-            )
+            # Fair Share = settlement share sums; profits alias for backward compatibility
+            fair_share_eur = self._to_decimal(row["surebet_profit_eur"]) or Decimal("0.00")
+            profits_eur = fair_share_eur.quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
 
             pending_native, deposits_native, profits_native = self._convert_group_to_native(
                 native_currency,

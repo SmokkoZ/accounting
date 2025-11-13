@@ -18,9 +18,16 @@ import structlog
 from datetime import datetime
 
 from src.core.database import get_db_connection
+from src.services.funding_transaction_service import (
+    FundingTransaction,
+    FundingTransactionError,
+    FundingTransactionService,
+)
+from src.services.settlement_constants import SETTLEMENT_NOTE_PREFIX
 from src.utils.datetime_helpers import utc_now_iso
 
 logger = structlog.get_logger()
+SETTLEMENT_TOLERANCE = Decimal("0.01")
 
 
 @dataclass
@@ -43,6 +50,7 @@ class StatementCalculations:
     net_deposits_eur: Decimal
     should_hold_eur: Decimal
     current_holding_eur: Decimal
+    fair_share_eur: Decimal
     profit_before_payout_eur: Decimal
     raw_profit_eur: Decimal
     delta_eur: Decimal
@@ -54,14 +62,43 @@ class StatementCalculations:
     cutoff_date: str
     generated_at: str
 
+    @property
+    def fs_eur(self) -> Decimal:
+        """Expose Fair Share (FS) derived from BET_RESULT share rows."""
+        return self.fair_share_eur
+
+    @property
+    def yf_eur(self) -> Decimal:
+        """Expose Yield Funds (YF) alias for should hold."""
+        return self.net_deposits_eur + self.fair_share_eur
+
+    @property
+    def tb_eur(self) -> Decimal:
+        """Expose Total Balance (TB) alias for current holding."""
+        return self.current_holding_eur
+
+    @property
+    def i_double_prime_eur(self) -> Decimal:
+        """Expose imbalance (I'') alias for delta."""
+        return self.current_holding_eur - self.yf_eur
+
+    @property
+    def exit_payout_eur(self) -> Decimal:
+        """Amount that must be paid out during exit to zero the imbalance."""
+        return -self.i_double_prime_eur
+
 
 @dataclass
 class PartnerFacingSection:
     """Data for partner-facing statement section."""
+    net_deposits_eur: Decimal
+    fair_share_eur: Decimal
+    yield_funds_eur: Decimal
+    total_balance_eur: Decimal
+    imbalance_eur: Decimal
+    exit_payout_eur: Decimal
     total_deposits_eur: Decimal
     total_withdrawals_eur: Decimal
-    holdings_eur: Decimal
-    delta_eur: Decimal
     profit_before_payout_eur: Decimal
     raw_profit_eur: Decimal
     bookmakers: List[BookmakerStatementRow]
@@ -72,8 +109,13 @@ class InternalSection:
     """Data for internal-only statement section."""
     current_holdings: str
     reconciliation_delta: str
-    delta_status: str
     delta_indicator: str
+    net_deposits_eur: Decimal
+    fair_share_eur: Decimal
+    yield_funds_eur: Decimal
+    total_balance_eur: Decimal
+    imbalance_eur: Decimal
+    exit_payout_eur: Decimal
 
 
 @dataclass
@@ -83,6 +125,20 @@ class CsvExportPayload:
     filename: str
     content: bytes
     generated_at: str
+
+
+@dataclass
+class SettleAssociateResult:
+    """Result metadata returned after executing Settle Associate Now."""
+
+    entry_id: Optional[int]
+    entry_type: Optional[str]
+    amount_eur: Decimal
+    delta_before: Decimal
+    delta_after: Decimal
+    note: str
+    was_posted: bool
+    updated_calculations: StatementCalculations
 
 
 class StatementService:
@@ -115,13 +171,14 @@ class StatementService:
                 raise ValueError(f"Associate ID {associate_id} not found")
             
             # Perform all calculations
-            total_deposits, total_withdrawals = self._calculate_funding_totals(
-                conn, associate_id, cutoff_date
-            )
-            net_deposits = total_deposits - total_withdrawals
-            should_hold = self._calculate_should_hold(conn, associate_id, cutoff_date)
+            (
+                total_deposits,
+                total_withdrawals,
+                net_deposits,
+            ) = self._calculate_funding_totals(conn, associate_id, cutoff_date)
             current_holding = self._calculate_current_holding(conn, associate_id, cutoff_date)
-            profit_before_payout = self._calculate_profit_before_payout(
+            should_hold = self._calculate_should_hold(conn, associate_id, cutoff_date)
+            fair_share = self._calculate_profit_before_payout(
                 conn, associate_id, cutoff_date
             )
             bookmakers = self._calculate_bookmaker_breakdown(
@@ -137,7 +194,8 @@ class StatementService:
                 net_deposits_eur=net_deposits,
                 should_hold_eur=should_hold,
                 current_holding_eur=current_holding,
-                profit_before_payout_eur=profit_before_payout,
+                fair_share_eur=fair_share,
+                profit_before_payout_eur=fair_share,
                 raw_profit_eur=raw_profit,
                 delta_eur=delta,
                 total_deposits_eur=total_deposits,
@@ -178,33 +236,44 @@ class StatementService:
     
     def _calculate_funding_totals(
         self, conn, associate_id: int, cutoff_date: str
-    ) -> Tuple[Decimal, Decimal]:
+    ) -> Tuple[Decimal, Decimal, Decimal]:
         """
-        Calculate total deposits and withdrawals up to the cutoff date.
+        Calculate total deposits, withdrawals, and net deposits up to the cutoff date.
         """
         cursor = conn.cursor()
         cursor.execute(
             """
             SELECT
-                SUM(CASE WHEN type = 'DEPOSIT' THEN CAST(amount_eur AS REAL) ELSE 0 END) AS total_deposits,
-                SUM(CASE WHEN type = 'WITHDRAWAL' THEN ABS(CAST(amount_eur AS REAL)) ELSE 0 END) AS total_withdrawals
+                SUM(
+                    CASE
+                        WHEN type = 'DEPOSIT' THEN CAST(amount_eur AS REAL)
+                        ELSE 0
+                    END
+                ) AS total_deposits,
+                SUM(
+                    CASE
+                        WHEN type = 'WITHDRAWAL' THEN CAST(amount_eur AS REAL)
+                        ELSE 0
+                    END
+                ) AS signed_withdrawals
             FROM ledger_entries
             WHERE associate_id = ?
               AND type IN ('DEPOSIT', 'WITHDRAWAL')
               AND created_at_utc <= ?
+              AND (note IS NULL OR note NOT LIKE ?)
             """,
-            (associate_id, cutoff_date),
+            (associate_id, cutoff_date, f"{SETTLEMENT_NOTE_PREFIX}%"),
         )
         row = cursor.fetchone()
         if not row:
-            return Decimal("0.00"), Decimal("0.00")
+            return Decimal("0.00"), Decimal("0.00"), Decimal("0.00")
 
         def _extract(value: object) -> Decimal:
             return Decimal(str(value or 0.0))
 
         try:
             deposits_value = row["total_deposits"]  # type: ignore[index]
-            withdrawals_value = row["total_withdrawals"]  # type: ignore[index]
+            withdrawals_value = row["signed_withdrawals"]  # type: ignore[index]
         except (TypeError, KeyError, IndexError):
             deposits_value = row[0] if isinstance(row, (list, tuple)) else 0.0  # type: ignore[index]
             withdrawals_value = (
@@ -212,23 +281,19 @@ class StatementService:
             )
 
         total_deposits = _extract(deposits_value)
-        total_withdrawals = _extract(withdrawals_value)
-        return total_deposits, total_withdrawals
-    
+        signed_withdrawals = _extract(withdrawals_value)
+        total_withdrawals = abs(signed_withdrawals)
+        net_deposits = total_deposits + signed_withdrawals
+        return total_deposits, total_withdrawals, net_deposits
+
     def _calculate_should_hold(self, conn, associate_id: int, cutoff_date: str) -> Decimal:
         """
         Calculate SHOULD_HOLD_EUR = SUM(principal_returned_eur + per_surebet_share_eur)
-        
-        Args:
-            conn: Database connection
-            associate_id: Associate ID
-            cutoff_date: Cutoff date (inclusive)
-            
-        Returns:
-            Should hold amount as Decimal
+        prior to the cutoff.
         """
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT
                 SUM(
                     CAST(principal_returned_eur AS REAL) +
@@ -236,12 +301,14 @@ class StatementService:
                 ) AS should_hold_eur
             FROM ledger_entries
             WHERE associate_id = ?
-            AND type = 'BET_RESULT'
-            AND created_at_utc <= ?
-            AND principal_returned_eur IS NOT NULL
-            AND per_surebet_share_eur IS NOT NULL
-        """, (associate_id, cutoff_date))
-        
+              AND type = 'BET_RESULT'
+              AND created_at_utc <= ?
+              AND principal_returned_eur IS NOT NULL
+              AND per_surebet_share_eur IS NOT NULL
+            """,
+            (associate_id, cutoff_date),
+        )
+
         row = cursor.fetchone()
         result = row["should_hold_eur"] or 0.0
         return Decimal(str(result))
@@ -371,10 +438,14 @@ class StatementService:
             Formatted partner-facing section
         """
         return PartnerFacingSection(
+            net_deposits_eur=calc.net_deposits_eur,
+            fair_share_eur=calc.fs_eur,
+            yield_funds_eur=calc.yf_eur,
+            total_balance_eur=calc.tb_eur,
+            imbalance_eur=calc.i_double_prime_eur,
+            exit_payout_eur=calc.exit_payout_eur,
             total_deposits_eur=calc.total_deposits_eur,
             total_withdrawals_eur=calc.total_withdrawals_eur,
-            holdings_eur=calc.current_holding_eur,
-            delta_eur=calc.delta_eur,
             profit_before_payout_eur=calc.profit_before_payout_eur,
             raw_profit_eur=calc.raw_profit_eur,
             bookmakers=calc.bookmakers,
@@ -407,8 +478,13 @@ class StatementService:
         return InternalSection(
             current_holdings=f"Currently holding: {current_holdings}",
             reconciliation_delta=delta_status,
-            delta_status=delta_status,
-            delta_indicator=delta_indicator
+            delta_indicator=delta_indicator,
+            net_deposits_eur=calc.net_deposits_eur,
+            fair_share_eur=calc.fs_eur,
+            yield_funds_eur=calc.yf_eur,
+            total_balance_eur=calc.tb_eur,
+            imbalance_eur=calc.i_double_prime_eur,
+            exit_payout_eur=calc.exit_payout_eur,
         )
     
     def _format_currency(self, amount: Decimal) -> str:
@@ -537,6 +613,73 @@ class StatementService:
         )
         return CsvExportPayload(filename=filename, content=csv_bytes, generated_at=export_time)
 
+    def settle_associate_now(
+        self,
+        associate_id: int,
+        cutoff_date: str,
+        *,
+        calculations: Optional[StatementCalculations] = None,
+        created_by: str = "system",
+    ) -> SettleAssociateResult:
+        """
+        Execute the Settle Associate Now workflow.
+
+        Computes the imbalance at the provided cutoff, writes a single balancing
+        DEPOSIT/WITHDRAWAL entry, and returns an updated statement snapshot.
+        """
+        calc = calculations or self.generate_statement(associate_id, cutoff_date)
+        delta_before = calc.i_double_prime_eur.quantize(Decimal("0.01"))
+        amount_eur = abs(delta_before)
+
+        if amount_eur <= SETTLEMENT_TOLERANCE:
+            note = "Associate already balanced - no ledger entry created."
+            return SettleAssociateResult(
+                entry_id=None,
+                entry_type=None,
+                amount_eur=Decimal("0.00"),
+                delta_before=delta_before,
+                delta_after=delta_before,
+                note=note,
+                was_posted=False,
+                updated_calculations=calc,
+            )
+
+        entry_type = "WITHDRAWAL" if delta_before > 0 else "DEPOSIT"
+        settlement_note = f"{SETTLEMENT_NOTE_PREFIX} ({cutoff_date})"
+
+        funding_service = FundingTransactionService()
+        try:
+            transaction = FundingTransaction(
+                associate_id=associate_id,
+                bookmaker_id=None,
+                transaction_type=entry_type,
+                amount_native=amount_eur,
+                native_currency="EUR",
+                note=settlement_note,
+                created_by=created_by,
+            )
+            entry_id = funding_service.record_transaction(
+                transaction, created_at_override=cutoff_date
+            )
+        except (FundingTransactionError, ValueError) as exc:
+            raise RuntimeError(f"Failed to post settlement entry: {exc}") from exc
+        finally:
+            funding_service.close()
+
+        updated_calc = self.generate_statement(associate_id, cutoff_date)
+        delta_after = updated_calc.i_double_prime_eur.quantize(Decimal("0.01"))
+
+        return SettleAssociateResult(
+            entry_id=entry_id,
+            entry_type=entry_type,
+            amount_eur=amount_eur,
+            delta_before=delta_before,
+            delta_after=delta_after,
+            note=settlement_note,
+            was_posted=True,
+            updated_calculations=updated_calc,
+        )
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -599,12 +742,22 @@ class StatementService:
             )
 
         rows.append([])
-        region = (calc.home_currency or "EUR").upper()
-        delta_now = calc.current_holding_eur - calc.should_hold_eur
-        rows.append([f"LIQUIDITA - {region}", self._format_decimal(calc.net_deposits_eur), "EURO"])
-        rows.append([f"MULTIBOOK - {region}", self._format_decimal(multibook_delta), "EURO"])
-        rows.append([f"BALANCE  - {region}", self._format_decimal(delta_now), "EURO"])
-        rows.append(["UTILE A TESTA", self._format_decimal(calc.raw_profit_eur), "EURO"])
+        rows.extend(
+            [
+                ["Net Deposits (ND)", self._format_decimal(calc.net_deposits_eur), "EURO"],
+                ["Fair Share (FS)", self._format_decimal(calc.fs_eur), "EURO"],
+                [
+                    "Yield Funds (YF = ND + FS)",
+                    self._format_decimal(calc.yf_eur),
+                    "EURO",
+                ],
+                ["Total Balance (TB)", self._format_decimal(calc.tb_eur), "EURO"],
+                ["Imbalance (I'' = TB - YF)", self._format_decimal(calc.i_double_prime_eur), "EURO"],
+                ["Exit Payout (-I'')", self._format_decimal(calc.exit_payout_eur), "EURO"],
+                ["Multibook Delta", self._format_decimal(multibook_delta), "EURO"],
+                ["UTILE (YF - ND)", self._format_decimal(calc.raw_profit_eur), "EURO"],
+            ]
+        )
         return rows
 
     def _build_roi_csv_rows(

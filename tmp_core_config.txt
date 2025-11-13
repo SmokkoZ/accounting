@@ -1,0 +1,54 @@
+﻿# BMAD Core Configuration
+# Main project configuration for BMAD system
+
+project:
+  name: Final_App
+  version: "1.0.0"
+  description: Betting and Surebet Management System
+
+qa:
+  qaLocation: "docs/qa"
+  
+agent:
+  permissions:
+    story_file_update_restriction: true
+    allowed_sections: ["QA Results"]
+    forbidden_sections: ["Status", "Story", "Acceptance Criteria", "Tasks/Subtasks", "Dev Notes", "Testing", "Dev Agent Record", "Change Log"]
+  
+commands:
+  prefix: "*"
+  help_display: "numbered_list"
+
+dependencies:
+  structure:
+    agents: "agents"
+    tasks: "tasks" 
+    templates: "templates"
+    data: "data"
+  
+file_resolution:
+  pattern: ".bmad-core/{type}/{name}"
+  examples:
+    - create-doc.md â†’ .bmad-core/tasks/create-doc.md
+    - prd-tmpl.md â†’ .bmad-core/templates/prd-tmpl.md
+
+activation:
+  workflow:
+    - "Read THIS ENTIRE FILE"
+    - "Adopt persona from agent and persona sections"
+    - "Load and read core-config.yaml"
+    - "Greet user with name/role"
+    - "Run help command"
+    - "HALT to await user assistance"
+
+risk_matrix:
+  scale: "1-5"
+  factors: ["probability", "impact"]
+  thresholds:
+    low: 4
+    medium: 12
+    high: 25
+
+quality_gates:
+  decisions: ["PASS", "CONCERNS", "FAIL", "WAIVED"]
+  file_location: "docs/qa/gates"

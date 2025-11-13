@@ -622,3 +622,13 @@ INSERT INTO canonical_markets (market_code, description, created_at_utc) VALUES
 ---
 
 **End of Data Model Specification**
+
+---
+
+## Change Notes — YF & Exit Settlement Alignment (2025-11-13)
+
+- Net Deposits (ND) semantics are standardized at the data layer: `DEPOSIT` amounts are stored positive; `WITHDRAWAL` amounts are stored negative. ND is computed by summing signed entries (avoid double-negation in any consumer).
+- “Should Hold” is renamed to `Your Fair Balance (YF)`, defined as `YF = ND + FS`, where `FS` is the sum of `per_surebet_share_eur` from `BET_RESULT` rows. VOID contributes 0 but participates to preserve history.
+- DELTA is expressed operationally as `Δ = TB − YF` (TB = modeled total bookmaker holdings). Legacy formulas using `CURRENT_HOLDING − SHOULD_HOLD` map onto this identity.
+- Where prior sections define `RAW_PROFIT_EUR = SHOULD_HOLD − NET_DEPOSITS`, under YF this equals FS (`YF − ND = FS`).
+- No schema changes are required; these are definition and label updates. Historical tables/ER diagrams remain accurate with the mapping above.

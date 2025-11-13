@@ -573,6 +573,15 @@ DELTA = CURRENT_HOLDING_EUR - SHOULD_HOLD_EUR
 
 ---
 
+### Change Notes — YF & Exit Settlement Alignment (2025-11-13)
+
+- Reconciliation metrics align to the YF identity: replace “Should Hold” with `Your Fair Balance (YF) = ND + FS` in dashboards and copy; continue to compute `Δ = TB − YF` targeting Δ ≈ 0.
+- ND is computed by summing signed amounts with `WITHDRAWAL < 0`, `DEPOSIT > 0` consistently across associate and per‑bookmaker slices (removes prior sign divergence risk).
+- Add an operational policy and control: “Settle Associate Now” must be run prior to deactivation to ensure exit with Δ = 0. This writes a single balancing DEPOSIT/WITHDRAWAL and produces a receipt.
+- No schema changes; forward-only corrections remain the mechanism for adjustments. Historical references to SHOULD_HOLD remain, with an explicit mapping to YF in the glossary.
+
+---
+
 ## Definition of Done
 
 Epic 5 is complete when ALL of the following are verified:

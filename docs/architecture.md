@@ -1411,3 +1411,20 @@ graph LR
 ---
 
 **End of Document**
+
+## Change Notes — YF & Exit Settlement Alignment (2025-11-13)
+
+- Identity and labels:
+  - Replace “Should Hold” with `Your Fair Balance (YF)` everywhere; define `YF = ND + FS`.
+  - Maintain imbalance: `Δ = TB − YF` where `TB` is the sum of modeled bookmaker holdings.
+- Net Deposits (ND) semantics:
+  - Store `WITHDRAWAL` as negative and `DEPOSIT` as positive across all services.
+  - Compute ND by summing signed amounts; remove any double-negation patterns in per‑bookmaker slices.
+- Fair Shares (FS):
+  - FS is the sum of `per_surebet_share_eur` from `BET_RESULT` ledger rows; VOID contributes 0 but still participates as per System Law #4.
+- Exit Settlement flow:
+  - Add “Settle Associate Now” operation that computes Δ at a cutoff and posts a single balancing ledger entry so post‑action Δ == 0; emit a receipt.
+- CSV/versioning:
+  - Statements/exports include YF and an “Exit Payout” (−Δ) at exit cutoff; add a footnote `Model: YF‑v1 (YF=ND+FS; Δ=TB−YF). Values exclude operator fees/taxes.`
+- Backward compatibility:
+  - No schema changes; historical docs remain; where formulas used `SHOULD_HOLD`, map to YF; `RAW_PROFIT_EUR = YF − ND = FS` under the new identity.

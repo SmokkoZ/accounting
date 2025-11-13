@@ -741,3 +741,13 @@ Show modal with error details:
 ---
 
 **End of UI Specification**
+ 
+---
+
+## Change Notes — YF & Exit Settlement Alignment (2025-11-13)
+
+- Replace “Should Hold” labels with “Your Fair Balance (YF)” and surface `ND`, `FS`, `YF`, `TB`, `Δ` in Reconciliation and Statements headers.
+- Update tooltips to define: `YF = ND + FS`; `Δ = TB − YF`; withdrawals are stored negative, deposits positive; CSV values exclude operator fees/taxes.
+- Add a “Settle Associate Now” action to Statements/Operations with cutoff selector; posts one balancing DEPOSIT/WITHDRAWAL to zero Δ and generates a receipt. After action, `Δ == 0` should display.
+- CSV exports at exit cutoff include an “Exit Payout” row (`−Δ`) and a footer footnote `Model: YF‑v1 (YF=ND+FS; Δ=TB−YF).`
+- No schema changes; these are label and flow additions. Historical terminology remains visible with pointers to the new YF identity.

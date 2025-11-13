@@ -51,7 +51,8 @@ class TestBookmakerFinancialsService:
                 bookmaker_id INTEGER,
                 amount_eur TEXT,
                 principal_returned_eur TEXT,
-                per_surebet_share_eur TEXT
+                per_surebet_share_eur TEXT,
+                note TEXT
             );
             CREATE TABLE fx_rates_daily (
                 id INTEGER PRIMARY KEY,
@@ -124,7 +125,7 @@ class TestBookmakerFinancialsService:
             """,
             [
                 ("DEPOSIT", 1, 10, "200.00", None, None),
-                ("WITHDRAWAL", 1, 10, "50.00", None, None),
+                ("WITHDRAWAL", 1, 10, "-50.00", None, None),
                 ("BET_RESULT", 1, 10, "0.00", "300.00", "120.00"),
             ],
         )
@@ -140,8 +141,11 @@ class TestBookmakerFinancialsService:
         assert snap.pending_balance_native == Decimal("300.00")
         assert snap.net_deposits_eur == Decimal("150.00")
         assert snap.net_deposits_native == Decimal("300.00")
-        assert snap.profits_eur == Decimal("270.00")
-        assert snap.profits_native == Decimal("540.00")
+        assert snap.profits_eur == Decimal("120.00")
+        assert snap.profits_native == Decimal("240.00")
+        assert snap.yf_eur == Decimal("270.00")
+        assert snap.fs_eur == snap.profits_eur
+        assert snap.yf_eur - snap.net_deposits_eur == snap.fs_eur
         assert snap.native_currency == "USD"
         assert snap.latest_balance_check_date == "2025-01-09T12:00:00Z"
 
@@ -185,7 +189,41 @@ class TestBookmakerFinancialsService:
         assert snap.pending_balance_native == Decimal("16.00")  # 20 / 1.25
         assert snap.net_deposits_eur == Decimal("100.00")
         assert snap.net_deposits_native == Decimal("80.00")
-        assert snap.profits_eur == Decimal("50.00")
-        assert snap.profits_native == Decimal("40.00")
+        assert snap.profits_eur == Decimal("30.00")
+        assert snap.profits_native == Decimal("24.00")
+        assert snap.yf_eur == Decimal("130.00")
+        assert snap.fs_eur == snap.profits_eur
+        assert snap.yf_eur - snap.net_deposits_eur == snap.fs_eur
         assert snap.native_currency == "GBP"
+
+    def test_financial_snapshot_identity_handles_void_won_lost(self) -> None:
+        """FS should include WON/LOST shares while VOID contributes zero."""
+        # Deposit baseline
+        self.conn.execute(
+            "INSERT INTO ledger_entries (type, associate_id, bookmaker_id, amount_eur, principal_returned_eur, per_surebet_share_eur) VALUES (?, ?, ?, ?, ?, ?)",
+            ("DEPOSIT", 1, 10, "500.00", None, None),
+        )
+        # WON share +50
+        self.conn.execute(
+            "INSERT INTO ledger_entries (type, associate_id, bookmaker_id, amount_eur, principal_returned_eur, per_surebet_share_eur) VALUES (?, ?, ?, ?, ?, ?)",
+            ("BET_RESULT", 1, 10, "0.00", "250.00", "50.00"),
+        )
+        # LOST share -30
+        self.conn.execute(
+            "INSERT INTO ledger_entries (type, associate_id, bookmaker_id, amount_eur, principal_returned_eur, per_surebet_share_eur) VALUES (?, ?, ?, ?, ?, ?)",
+            ("BET_RESULT", 1, 10, "0.00", "0.00", "-30.00"),
+        )
+        # VOID contributes zero
+        self.conn.execute(
+            "INSERT INTO ledger_entries (type, associate_id, bookmaker_id, amount_eur, principal_returned_eur, per_surebet_share_eur) VALUES (?, ?, ?, ?, ?, ?)",
+            ("BET_RESULT", 1, 10, "0.00", "50.00", "0.00"),
+        )
+
+        service = BookmakerFinancialsService(self.conn)
+        snapshots = service.get_financials_for_associate(1)
+        snap = next(s for s in snapshots if s.bookmaker_name == "BetMax")
+
+        assert snap.fs_eur == Decimal("20.00")
+        assert snap.yf_eur - snap.net_deposits_eur == snap.fs_eur
+        assert snap.i_double_prime_eur is None
         assert snap.latest_balance_check_date is None
