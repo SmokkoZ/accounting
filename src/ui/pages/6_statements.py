@@ -34,6 +34,7 @@ from src.services.statement_service import (
     StatementCalculations,
     PartnerFacingSection,
     InternalSection,
+    CsvExportPayload,
 )
 from src.ui.helpers.fragments import (
     call_fragment,
@@ -211,119 +212,42 @@ def _modal_context(title: str):
             yield
 
 
+def _persist_csv_export(export_payload: CsvExportPayload) -> Path:
+    """Write an in-memory CSV export to disk ensuring unique naming."""
+    STATEMENT_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    target_path = STATEMENT_EXPORT_DIR / export_payload.filename
+    counter = 1
+    while target_path.exists():
+        target_path = STATEMENT_EXPORT_DIR / (
+            f"{target_path.stem}_{counter}{target_path.suffix}"
+        )
+        counter += 1
+    target_path.write_bytes(export_payload.content)
+    return target_path
+
+
 def generate_statement_summary_csv(
     calc: StatementCalculations, partner_section: PartnerFacingSection
 ) -> Path:
-    """Generate per-bookmaker CSV summary for the statement."""
-    STATEMENT_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-    cutoff_date = calc.cutoff_date.split("T")[0]
-    date_str = datetime.strptime(cutoff_date, "%Y-%m-%d").strftime("%d-%m-%Y")
-    home_currency = calc.home_currency or ""
-    currency = (home_currency or "MULTI").upper()
-    base_name = f"{_slugify_name(calc.associate_name)}_{currency}_{date_str}_statement"
-    file_path = STATEMENT_EXPORT_DIR / f"{base_name}.csv"
-    counter = 1
-    while file_path.exists():
-        file_path = STATEMENT_EXPORT_DIR / f"{base_name}_{counter}.csv"
-        counter += 1
-
-    columns = [
-        "label",
-        "native_amount",
-        "native_currency",
-        "eur_amount",
-        "eur_currency",
-        "percent_of_net_profit",
-        "note",
-    ]
-
-    def _percent_text(value: Optional[Decimal]) -> str:
-        if value is None:
-            return ""
-        return f"{value.quantize(Decimal('0.1'))}%"
-
-    rows: List[Dict[str, str]] = []
-    for bookmaker in partner_section.bookmakers:
-        label = f"{bookmaker.bookmaker_name} - {bookmaker.native_currency}"
-        rows.append(
-            {
-                "label": label,
-                "native_amount": _decimal_str(bookmaker.balance_native),
-                "native_currency": bookmaker.native_currency,
-                "eur_amount": _decimal_str(bookmaker.balance_eur),
-                "eur_currency": "EUR",
-                "percent_of_net_profit": "",
-                "note": "Bookmaker balance",
-            }
-        )
-
-    rows.append(
-        {
-            "label": "Liquidity (Net Deposits)",
-            "native_amount": "",
-            "native_currency": home_currency,
-            "eur_amount": _decimal_str(-calc.net_deposits_eur),
-            "eur_currency": "EUR",
-            "percent_of_net_profit": "",
-            "note": "Net deposits (out-of-pocket cash)",
-        }
+    """Generate statement CSV using StatementService helper."""
+    statement_service = StatementService()
+    export_payload = statement_service.export_statement_csv(
+        calc.associate_id,
+        calc.cutoff_date,
+        calculations=calc,
     )
+    return _persist_csv_export(export_payload)
 
-    rows.append(
-        {
-            "label": "Multibook Delta",
-            "native_amount": "",
-            "native_currency": home_currency,
-            "eur_amount": _decimal_str(calc.delta_eur),
-            "eur_currency": "EUR",
-            "percent_of_net_profit": "",
-            "note": "Delta (current holding - should hold)",
-        }
+
+def generate_surebet_roi_csv(calc: StatementCalculations) -> Path:
+    """Generate Surebet ROI CSV for the given calculations snapshot."""
+    statement_service = StatementService()
+    export_payload = statement_service.export_surebet_roi_csv(
+        calc.associate_id,
+        calc.cutoff_date,
+        calculations=calc,
     )
-
-    rows.append(
-        {
-            "label": "Bookmaker Balance",
-            "native_amount": "",
-            "native_currency": home_currency,
-            "eur_amount": _decimal_str(calc.current_holding_eur),
-            "eur_currency": "EUR",
-            "percent_of_net_profit": "",
-            "note": "Current holdings",
-        }
-    )
-
-    roi_percent = _percent_text(_roi_ratio_percentage(calc.profit_before_payout_eur, calc.raw_profit_eur))
-    rows.append(
-        {
-            "label": "ROI Before Payout",
-            "native_amount": "",
-            "native_currency": home_currency,
-            "eur_amount": _decimal_str(calc.profit_before_payout_eur),
-            "eur_currency": "EUR",
-            "percent_of_net_profit": roi_percent,
-            "note": "Equal-share ROI still pending payout",
-        }
-    )
-
-    rows.append(
-        {
-            "label": "Net Profit (UTILE)",
-            "native_amount": "",
-            "native_currency": home_currency,
-            "eur_amount": _decimal_str(calc.raw_profit_eur),
-            "eur_currency": "EUR",
-            "percent_of_net_profit": "100%" if calc.raw_profit_eur != 0 else "",
-            "note": "Profit (Should Hold - Net Deposits)",
-        }
-    )
-
-    with file_path.open("w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=columns)
-        writer.writeheader()
-        writer.writerows(rows)
-
-    return file_path
+    return _persist_csv_export(export_payload)
 
 
 def export_all_statements_zip(cutoff_date: str) -> tuple[Optional[Path], List[str]]:
@@ -559,7 +483,7 @@ Bookmaker Breakdown:
             st.code(clipboard_text)
     
     with col2:
-        # Export summary CSV
+        # Export statement CSV via service helper
         if st.button(":material/grid_on: Export Statement CSV", key="export_statement_csv", width="stretch"):
             with st.spinner("Generating statement summary CSV..."):
                 try:
@@ -575,6 +499,23 @@ Bookmaker Breakdown:
                         )
                 except Exception as e:
                     st.error(f"CSV export failed: {str(e)}")
+
+    with col3:
+        if st.button(":material/table_view: Export Surebet ROI CSV", key="export_roi_csv", width="stretch"):
+            with st.spinner("Generating ROI CSV..."):
+                try:
+                    roi_path = generate_surebet_roi_csv(calc)
+                    st.success("Surebet ROI export ready.")
+                    with open(roi_path, "rb") as roi_file:
+                        st.download_button(
+                            label="Download Surebet ROI CSV",
+                            data=roi_file.read(),
+                            file_name=roi_path.name,
+                            mime="text/csv",
+                            key=f"download_roi_csv_{roi_path.name}",
+                        )
+                except Exception as e:
+                    st.error(f"ROI CSV export failed: {str(e)}")
 
 
 def render_generate_button(associate_id: int, cutoff_date: str) -> bool:

@@ -5,6 +5,7 @@ Tests complete flow from UI to database with realistic data scenarios.
 """
 
 import csv
+import io
 import importlib
 from datetime import datetime
 from decimal import Decimal
@@ -516,7 +517,7 @@ class TestLargeDatasetPerformance:
 class TestStatementCsvExport:
     """Test CSV export contains profit before payout metric."""
 
-    def test_summary_csv_includes_profit_before_payout_row(self, tmp_path):
+    def test_statement_csv_exports_allocations_and_totals(self, tmp_path):
         module = importlib.import_module("src.ui.pages.6_statements")
         original_dir = module.STATEMENT_EXPORT_DIR
         module.STATEMENT_EXPORT_DIR = tmp_path
@@ -529,7 +530,15 @@ class TestStatementCsvExport:
                     withdrawals_eur=Decimal("0.00"),
                     balance_native=Decimal("250.00"),
                     native_currency="EUR",
-                )
+                ),
+                BookmakerStatementRow(
+                    bookmaker_name="Second Bookie",
+                    balance_eur=Decimal("150.00"),
+                    deposits_eur=Decimal("175.00"),
+                    withdrawals_eur=Decimal("25.00"),
+                    balance_native=Decimal("150.00"),
+                    native_currency="EUR",
+                ),
             ]
             calc = StatementCalculations(
                 associate_id=9,
@@ -557,19 +566,124 @@ class TestStatementCsvExport:
                 bookmakers=bookmakers,
             )
 
-            csv_path = module.generate_statement_summary_csv(calc, partner_section)
-            with csv_path.open(newline="", encoding="utf-8") as handle:
-                reader = csv.DictReader(handle)
-                rows = list(reader)
+            with patch.object(
+                module.StatementService, "_calculate_multibook_delta", return_value=Decimal("0")
+            ):
+                csv_path = module.generate_statement_summary_csv(calc, partner_section)
+                with csv_path.open(newline="", encoding="utf-8") as handle:
+                    rows = list(csv.reader(handle))
 
-            profit_row = next(
-                row for row in rows if row["label"] == "ROI Before Payout"
-            )
-            assert profit_row["eur_amount"] == "175.00"
-            assert profit_row["percent_of_net_profit"] == "70.0%"
-            assert profit_row["note"].startswith("Equal-share ROI")
+            assert rows[0] == ["Associate", "CSV Tester"]
+            assert rows[1][0] == "As of (UTC)"
+            assert rows[3][1].startswith("Totals in EUR.")
+
+            header = [
+                "Bookmaker",
+                "Balance Native",
+                "",
+                "CCY",
+                "Balance EUR",
+                "CCY_EUR",
+            ]
+            header_index = rows.index(header)
+
+            def to_decimal(value: str) -> Decimal:
+                return Decimal(value.replace(",", "")) if value else Decimal("0")
+
+            table_rows: List[List[str]] = []
+            for row in rows[header_index + 1 :]:
+                if not row:
+                    break
+                table_rows.append(row)
+
+            assert len(table_rows) == 2
+            assert table_rows[0][0] == "CSV Bookie"
+            assert table_rows[0][2] == ""
+            assert table_rows[0][3] == "EUR"
+            assert table_rows[0][5] == "EURO"
+
+            summary_start = rows.index([], header_index)
+            summary_rows = rows[summary_start + 1 :]
+            assert summary_rows[0][0].startswith("LIQUIDITA - EUR")
+            summary_map = {row[0]: to_decimal(row[1]) for row in summary_rows}
+
+            assert summary_map["LIQUIDITA - EUR"] == Decimal("200.00")
+            assert summary_map["MULTIBOOK - EUR"] == Decimal("0.00")
+            assert summary_map["BALANCE  - EUR"] == Decimal("-50.00")
+            assert summary_map["UTILE A TESTA"] == Decimal("250.00")
         finally:
             module.STATEMENT_EXPORT_DIR = original_dir
+
+    def test_surebet_roi_export_handles_zero_stake(self, service, monkeypatch):
+        calc = StatementCalculations(
+            associate_id=3,
+            net_deposits_eur=Decimal("100.00"),
+            should_hold_eur=Decimal("150.00"),
+            current_holding_eur=Decimal("160.00"),
+            profit_before_payout_eur=Decimal("40.00"),
+            raw_profit_eur=Decimal("50.00"),
+            delta_eur=Decimal("10.00"),
+            total_deposits_eur=Decimal("300.00"),
+            total_withdrawals_eur=Decimal("200.00"),
+            bookmakers=[],
+            associate_name="ROI Tester",
+            home_currency="EUR",
+            cutoff_date="2025-11-30T23:59:59Z",
+            generated_at="2025-12-01T00:00:00Z",
+        )
+
+        mock_cursor = Mock()
+        mock_cursor.execute.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = [
+            {
+                "surebet_id": 101,
+                "settled_at_utc": "2025-11-01T10:00:00Z",
+                "associate_stake_eur": 300.0,
+                "associate_profit_eur": 45.0,
+                "group_stake_eur": 1200.0,
+                "group_profit_eur": 120.0,
+            },
+            {
+                "surebet_id": 102,
+                "settled_at_utc": "2025-11-05T12:00:00Z",
+                "associate_stake_eur": 0.0,
+                "associate_profit_eur": 0.0,
+                "group_stake_eur": 800.0,
+                "group_profit_eur": 40.0,
+            },
+        ]
+
+        mock_conn = Mock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_conn.close = Mock()
+        monkeypatch.setattr(
+            "src.services.statement_service.get_db_connection", lambda: mock_conn
+        )
+
+        export = service.export_surebet_roi_csv(
+            associate_id=calc.associate_id,
+            cutoff_date=calc.cutoff_date,
+            calculations=calc,
+        )
+
+        reader = list(csv.reader(io.StringIO(export.content.decode("utf-8"))))
+        table_index = next(idx for idx, row in enumerate(reader) if row and row[0] == "Surebet ID")
+        roi_rows = [row for row in reader[table_index + 1 :] if row and row[0].isdigit()]
+
+        assert len(roi_rows) == 2
+        first_row = roi_rows[0]
+        assert first_row[0] == "101"
+        assert first_row[2] == "300.00"
+        assert first_row[3] == "45.00"
+        assert first_row[4] == "15.00%"
+        assert first_row[6] == "120.00"
+        assert first_row[7] == "10.00%"
+
+        second_row = roi_rows[1]
+        assert second_row[0] == "102"
+        assert second_row[2] == "0.00"
+        assert second_row[4] == ""
+        assert second_row[7] == "5.00%"
 
 
 

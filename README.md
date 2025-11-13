@@ -152,6 +152,7 @@ LOG_LEVEL=INFO
 - **FX Conversion**: Multi-currency support with daily rate updates
 - **Export Functionality**: CSV exports for accounting purposes
 - **Monthly Statements**: Automated associate statements
+- **Statement & ROI CSVs**: `StatementService.export_statement_csv` and `export_surebet_roi_csv` generate per-bookmaker allocations plus per-surebet ROI snapshots (see `docs/examples/statement_A123_YYYY-MM-DD.csv` and `docs/examples/surebet_roi_A123_YYYY-MM-DD.csv`). These snapshots reuse the existing statement math and explicitly note that values exclude operator fees/taxes.
 
 ## Contributing
 

@@ -7,6 +7,9 @@ All calculations are read-only and use cutoff date filtering.
 
 from __future__ import annotations
 
+import csv
+import io
+import re
 from decimal import Decimal
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
@@ -71,6 +74,15 @@ class InternalSection:
     reconciliation_delta: str
     delta_status: str
     delta_indicator: str
+
+
+@dataclass
+class CsvExportPayload:
+    """Container describing an in-memory CSV export."""
+
+    filename: str
+    content: bytes
+    generated_at: str
 
 
 class StatementService:
@@ -460,3 +472,372 @@ class StatementService:
             return cutoff_dt.date() <= now_dt.date()
         except ValueError:
             return False
+
+    # ------------------------------------------------------------------
+    # CSV Export helpers
+    # ------------------------------------------------------------------
+
+    def export_statement_csv(
+        self,
+        associate_id: int,
+        cutoff_date: str,
+        *,
+        calculations: Optional[StatementCalculations] = None,
+    ) -> CsvExportPayload:
+        """
+        Export statement CSV with per-bookmaker allocations and totals.
+
+        Args:
+            associate_id: Target associate
+            cutoff_date: Cutoff date (inclusive)
+            calculations: Optional precomputed calculations to avoid recompute
+        """
+        calc = calculations or self.generate_statement(associate_id, cutoff_date)
+        export_time = utc_now_iso()
+        multibook_delta = self._calculate_multibook_delta(associate_id, cutoff_date)
+        rows = self._build_statement_csv_rows(calc, export_time, multibook_delta)
+        csv_bytes = self._rows_to_csv(rows)
+        filename = self._build_filename(
+            prefix="legacy_statement",
+            associate_alias=calc.associate_name,
+            cutoff_date=cutoff_date,
+        )
+        return CsvExportPayload(filename=filename, content=csv_bytes, generated_at=export_time)
+
+    def export_surebet_roi_csv(
+        self,
+        associate_id: int,
+        cutoff_date: str,
+        *,
+        calculations: Optional[StatementCalculations] = None,
+    ) -> CsvExportPayload:
+        """
+        Export per-surebet ROI CSV for a given associate.
+
+        Args:
+            associate_id: Target associate
+            cutoff_date: Cutoff date (inclusive)
+            calculations: Optional precomputed calculations
+        """
+        calc = calculations or self.generate_statement(associate_id, cutoff_date)
+        export_time = utc_now_iso()
+
+        conn = get_db_connection()
+        try:
+            roi_rows = self._fetch_roi_rows(conn, associate_id, cutoff_date)
+        finally:
+            conn.close()
+
+        rows = self._build_roi_csv_rows(calc, export_time, roi_rows)
+        csv_bytes = self._rows_to_csv(rows)
+        filename = self._build_filename(
+            prefix="surebet_roi",
+            associate_alias=calc.associate_name,
+            cutoff_date=cutoff_date,
+        )
+        return CsvExportPayload(filename=filename, content=csv_bytes, generated_at=export_time)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _rows_to_csv(self, rows: List[List[str]]) -> bytes:
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerows(rows)
+        return buffer.getvalue().encode("utf-8")
+
+    def _build_statement_csv_rows(
+        self,
+        calc: StatementCalculations,
+        export_time: str,
+        multibook_delta: Decimal,
+    ) -> List[List[str]]:
+        rows: List[List[str]] = [
+            ["Associate", calc.associate_name],
+            ["As of (UTC)", calc.cutoff_date],
+            ["Generated", export_time],
+            [
+                "Note",
+                "Totals in EUR. Native shown for reference. FX frozen at posting time.",
+            ],
+            [],
+        ]
+
+        header = [
+            "Bookmaker",
+            "Balance Native",
+            "",
+            "CCY",
+            "Balance EUR",
+            "CCY_EUR",
+        ]
+        rows.append(header)
+
+        if calc.bookmakers:
+            for bookmaker in calc.bookmakers:
+                rows.append(
+                    [
+                        self._normalize_bookmaker_name(bookmaker.bookmaker_name),
+                        self._format_decimal(bookmaker.balance_native),
+                        "",
+                        bookmaker.native_currency or "",
+                        self._format_decimal(bookmaker.balance_eur),
+                        "EURO",
+                    ]
+                )
+        else:
+            rows.append(
+                [
+                    "No bookmaker balances available",
+                    "",
+                    "",
+                    "",
+                    self._format_decimal(Decimal("0")),
+                    "EURO",
+                ]
+            )
+
+        rows.append([])
+        region = (calc.home_currency or "EUR").upper()
+        delta_now = calc.current_holding_eur - calc.should_hold_eur
+        rows.append([f"LIQUIDITA - {region}", self._format_decimal(calc.net_deposits_eur), "EURO"])
+        rows.append([f"MULTIBOOK - {region}", self._format_decimal(multibook_delta), "EURO"])
+        rows.append([f"BALANCE  - {region}", self._format_decimal(delta_now), "EURO"])
+        rows.append(["UTILE A TESTA", self._format_decimal(calc.raw_profit_eur), "EURO"])
+        return rows
+
+    def _build_roi_csv_rows(
+        self,
+        calc: StatementCalculations,
+        export_time: str,
+        roi_rows: List[Dict[str, Optional[Decimal]]],
+    ) -> List[List[str]]:
+        rows: List[List[str]] = [
+            ["Associate", calc.associate_name],
+            ["As of UTC", calc.cutoff_date],
+            ["Generated", export_time],
+            [
+                "Note",
+                "ROI rows only include fully settled surebets up to the cutoff.",
+            ],
+            [],
+        ]
+
+        rows.append(
+            [
+                "Surebet ID",
+                "Settled At UTC",
+                "Associate Stake (EUR)",
+                "Associate Profit (EUR)",
+                "Associate ROI %",
+                "Group Stake (EUR)",
+                "Group Profit (EUR)",
+                "Group ROI %",
+            ]
+        )
+
+        for entry in roi_rows:
+            stake = entry.get("associate_stake")
+            profit = entry.get("associate_profit")
+            group_stake = entry.get("group_stake") or Decimal("0")
+            group_profit = entry.get("group_profit") or Decimal("0")
+
+            rows.append(
+                [
+                    str(entry["surebet_id"]),
+                    entry["settled_at_utc"] or "",
+                    self._format_decimal(stake or Decimal("0")),
+                    self._format_decimal(profit or Decimal("0")),
+                    self._format_percentage(self._calculate_roi(profit, stake)),
+                    self._format_decimal(group_stake),
+                    self._format_decimal(group_profit),
+                    self._format_percentage(self._calculate_roi(group_profit, group_stake)),
+                ]
+            )
+
+        if len(roi_rows) == 0:
+            rows.append(["No settled surebets found"] + [""] * 7)
+
+        return rows
+
+    def _fetch_roi_rows(
+        self, conn, associate_id: int, cutoff_date: str
+    ) -> List[Dict[str, Optional[Decimal]]]:
+        """
+        Query ledger to build per-surebet ROI aggregates.
+        """
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            WITH stake_data AS (
+                SELECT
+                    sb.surebet_id,
+                    le.associate_id,
+                    SUM(-CAST(le.amount_eur AS REAL)) AS stake_eur
+                FROM ledger_entries le
+                JOIN surebet_bets sb ON sb.bet_id = le.bet_id
+                WHERE le.type = 'BET_STAKE'
+                  AND le.bet_id IS NOT NULL
+                  AND le.created_at_utc <= ?
+                GROUP BY sb.surebet_id, le.associate_id
+            ),
+            result_data AS (
+                SELECT
+                    le.surebet_id,
+                    le.associate_id,
+                    SUM(CAST(le.amount_eur AS REAL)) AS profit_eur
+                FROM ledger_entries le
+                WHERE le.type = 'BET_RESULT'
+                  AND le.surebet_id IS NOT NULL
+                  AND le.created_at_utc <= ?
+                GROUP BY le.surebet_id, le.associate_id
+            ),
+            group_stake AS (
+                SELECT surebet_id, SUM(stake_eur) AS total_stake
+                FROM stake_data
+                GROUP BY surebet_id
+            ),
+            group_profit AS (
+                SELECT surebet_id, SUM(profit_eur) AS total_profit
+                FROM result_data
+                GROUP BY surebet_id
+            )
+            SELECT
+                s.id AS surebet_id,
+                s.settled_at_utc,
+                sd.stake_eur AS associate_stake_eur,
+                rd.profit_eur AS associate_profit_eur,
+                gs.total_stake AS group_stake_eur,
+                gp.total_profit AS group_profit_eur
+            FROM surebets s
+            LEFT JOIN stake_data sd
+                   ON sd.surebet_id = s.id AND sd.associate_id = ?
+            LEFT JOIN result_data rd
+                   ON rd.surebet_id = s.id AND rd.associate_id = ?
+            LEFT JOIN group_stake gs ON gs.surebet_id = s.id
+            LEFT JOIN group_profit gp ON gp.surebet_id = s.id
+            WHERE s.status = 'settled'
+              AND s.settled_at_utc IS NOT NULL
+              AND s.settled_at_utc <= ?
+            ORDER BY s.settled_at_utc DESC, s.id DESC
+            """,
+            (cutoff_date, cutoff_date, associate_id, associate_id, cutoff_date),
+        )
+
+        results: List[Dict[str, Optional[Decimal]]] = []
+        for row in cursor.fetchall() or []:
+            associate_stake = self._to_optional_decimal(row["associate_stake_eur"])
+            associate_profit = self._to_optional_decimal(row["associate_profit_eur"])
+            if associate_stake is None and associate_profit is None:
+                # Skip surebets the associate was never part of
+                continue
+
+            results.append(
+                {
+                    "surebet_id": row["surebet_id"],
+                    "settled_at_utc": row["settled_at_utc"],
+                    "associate_stake": associate_stake,
+                    "associate_profit": associate_profit,
+                    "group_stake": self._to_optional_decimal(row["group_stake_eur"]),
+                    "group_profit": self._to_optional_decimal(row["group_profit_eur"]),
+                }
+            )
+        return results
+
+    def _calculate_roi(
+        self,
+        profit: Optional[Decimal],
+        stake: Optional[Decimal],
+    ) -> Optional[Decimal]:
+        if stake is None or stake == Decimal("0"):
+            return None
+        if profit is None:
+            return None
+        if abs(stake) < Decimal("0.01"):
+            return None
+        return (profit / stake) * Decimal("100")
+
+    def _calculate_multibook_delta(
+        self,
+        associate_id: int,
+        cutoff_date: str,
+    ) -> Decimal:
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                WITH settled_surebets AS (
+                    SELECT id
+                    FROM surebets
+                    WHERE status = 'settled'
+                      AND settled_at_utc IS NOT NULL
+                      AND settled_at_utc <= ?
+                ),
+                stake_rows AS (
+                    SELECT
+                        sb.surebet_id,
+                        le.associate_id,
+                        SUM(-CAST(le.amount_eur AS REAL)) AS stake_eur
+                    FROM ledger_entries le
+                    JOIN surebet_bets sb ON sb.bet_id = le.bet_id
+                    WHERE le.type = 'BET_STAKE'
+                      AND le.created_at_utc <= ?
+                      AND sb.surebet_id IN (SELECT id FROM settled_surebets)
+                    GROUP BY sb.surebet_id, le.associate_id
+                )
+                SELECT
+                    COALESCE(SUM(CASE WHEN associate_id = ? THEN stake_eur ELSE 0 END), 0) AS associate_total,
+                    COALESCE(SUM(stake_eur), 0) AS group_total
+                FROM stake_rows
+                """,
+                (cutoff_date, cutoff_date, associate_id),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return Decimal("0.00")
+            associate_total = Decimal(str(row["associate_total"] or 0.0))
+            group_total = Decimal(str(row["group_total"] or 0.0))
+            return group_total - associate_total
+        finally:
+            conn.close()
+
+    def _format_decimal(self, value: Decimal) -> str:
+        quantized = value.quantize(Decimal("0.01"))
+        if abs(quantized) < Decimal("0.005"):
+            quantized = Decimal("0.00")
+        if quantized == Decimal("-0.00"):
+            quantized = Decimal("0.00")
+        return f"{quantized:,.2f}"
+
+    def _format_percentage(self, value: Optional[Decimal]) -> str:
+        if value is None:
+            return ""
+        quantized = value.quantize(Decimal("0.01"))
+        if abs(quantized) < Decimal("0.005"):
+            quantized = Decimal("0.00")
+        return f"{quantized:,.2f}%"
+
+    def _to_optional_decimal(self, value: object) -> Optional[Decimal]:
+        if value is None:
+            return None
+        return Decimal(str(value))
+
+    def _build_filename(self, *, prefix: str, associate_alias: str, cutoff_date: str) -> str:
+        date_part = (cutoff_date or "").split("T")[0] or cutoff_date
+        if not date_part:
+            date_part = datetime.now().strftime("%Y-%m-%d")
+        alias_slug = self._slugify(associate_alias)
+        return f"{prefix}_{alias_slug}_{date_part}.csv"
+
+    def _slugify(self, value: str) -> str:
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", (value or "").strip()).strip("-").lower()
+        return slug or "associate"
+
+    def _normalize_bookmaker_name(self, name: str) -> str:
+        if not name:
+            return ""
+        if name.isupper() or name.islower():
+            return name.title()
+        return name
