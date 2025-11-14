@@ -4,7 +4,6 @@ Integration tests for Statement generation workflow.
 Tests complete flow from UI to database with realistic data scenarios.
 """
 
-import csv
 import io
 import importlib
 import os
@@ -15,6 +14,7 @@ from decimal import Decimal
 from unittest.mock import patch, Mock
 
 import pytest
+from openpyxl import load_workbook
 
 from src.core.schema import create_schema
 from src.services.statement_service import (
@@ -254,7 +254,7 @@ class TestTransactionRetrieval:
     """Test transaction retrieval for export functionality."""
     
     def test_get_associate_transactions_for_export(self, service, mock_database_with_data):
-        """Test transaction retrieval for CSV export."""
+        """Test transaction retrieval for Excel export."""
         conn, cursor = mock_database_with_data
         
         with patch('src.services.statement_service.get_db_connection', return_value=conn):
@@ -531,10 +531,10 @@ class TestLargeDatasetPerformance:
         assert result.profit_before_payout_eur == Decimal("0.00")
 
 
-class TestStatementCsvExport:
-    """Test CSV export contains profit before payout metric."""
+class TestStatementExcelExport:
+    """Test Excel export contains profit before payout metric."""
 
-    def test_statement_csv_exports_allocations_and_totals(self, tmp_path):
+    def test_statement_excel_exports_allocations_and_totals(self, tmp_path):
         module = importlib.import_module("src.ui.pages.6_statements")
         original_dir = module.STATEMENT_EXPORT_DIR
         module.STATEMENT_EXPORT_DIR = tmp_path
@@ -577,9 +577,13 @@ class TestStatementCsvExport:
             with patch.object(
                 module.StatementService, "_calculate_multibook_delta", return_value=Decimal("0")
             ):
-                csv_path = module.generate_statement_summary_csv(calc)
-                with csv_path.open(newline="", encoding="utf-8") as handle:
-                    rows = list(csv.reader(handle))
+                excel_path = module.generate_statement_summary_excel(calc)
+                workbook = load_workbook(excel_path)
+                try:
+                    worksheet = workbook.active
+                    rows = [list(row or []) for row in worksheet.iter_rows(values_only=True)]
+                finally:
+                    workbook.close()
 
             assert rows[0] == ["Associate", "CSV Tester"]
             assert rows[1][0] == "As of (UTC)"
@@ -673,15 +677,20 @@ class TestStatementCsvExport:
             "src.services.statement_service.get_db_connection", lambda: mock_conn
         )
 
-        export = service.export_surebet_roi_csv(
+        export = service.export_surebet_roi_excel(
             associate_id=calc.associate_id,
             cutoff_date=calc.cutoff_date,
             calculations=calc,
         )
 
-        reader = list(csv.reader(io.StringIO(export.content.decode("utf-8"))))
-        table_index = next(idx for idx, row in enumerate(reader) if row and row[0] == "Surebet ID")
-        roi_rows = [row for row in reader[table_index + 1 :] if row and row[0].isdigit()]
+        workbook = load_workbook(io.BytesIO(export.content))
+        try:
+            worksheet = workbook.active
+            rows = [list(row or []) for row in worksheet.iter_rows(values_only=True)]
+        finally:
+            workbook.close()
+        table_index = next(idx for idx, row in enumerate(rows) if row and row[0] == "Surebet ID")
+        roi_rows = [row for row in rows[table_index + 1 :] if row and str(row[0]).isdigit()]
 
         assert len(roi_rows) == 2
         first_row = roi_rows[0]

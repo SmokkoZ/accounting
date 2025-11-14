@@ -222,20 +222,55 @@ def _render_bet_details_editable(
     timestamp_rel = format_timestamp_relative(bet["created_at_utc"])
     st.caption(f"{source_label} - {timestamp_rel}")
 
+    # Load canonical data once
+    canonical_events = verification_service.load_canonical_events()
+    canonical_markets = verification_service.load_canonical_markets()
+
+    # Event search/filter to keep long lists manageable.
+    # Kept outside the form so pressing Enter here does NOT submit/approve.
+    search_col, _ = st.columns([2, 1])
+    with search_col:
+        event_search = st.text_input(
+            "Search events",
+            key=f"event_search_{bet_id}",
+            placeholder="Type team names or league...",
+        )
+
+    filtered_events = canonical_events
+    if event_search:
+        query = event_search.lower().strip()
+        if query:
+            filtered_events = [
+                e
+                for e in canonical_events
+                if query in (e.get("normalized_event_name") or "").lower()
+                or query in (e.get("league") or "").lower()
+            ]
+
     with st.form(key=f"edit_bet_{bet_id}"):
-        canonical_events = verification_service.load_canonical_events()
-        canonical_markets = verification_service.load_canonical_markets()
+
+        # Ensure currently selected event stays in the list even if filtered out
+        current_event_idx = 0
+        current_event_id = bet.get("canonical_event_id")
+        if current_event_id:
+            current_event = next(
+                (e for e in canonical_events if e.get("id") == current_event_id),
+                None,
+            )
+            if current_event and not any(
+                e.get("id") == current_event_id for e in filtered_events
+            ):
+                filtered_events = [current_event] + filtered_events
 
         event_options = ["(None - Select Event)"] + [
             f"{e['normalized_event_name']} ({e['kickoff_time_utc'][:10] if e['kickoff_time_utc'] else 'TBD'})"
-            for e in canonical_events
+            for e in filtered_events
         ]
         event_options.append("[+] Create New Event")
 
-        current_event_idx = 0
-        if bet.get("canonical_event_id"):
-            for i, event in enumerate(canonical_events):
-                if event["id"] == bet["canonical_event_id"]:
+        if current_event_id:
+            for i, event in enumerate(filtered_events):
+                if event.get("id") == current_event_id:
                     current_event_idx = i + 1
                     break
 

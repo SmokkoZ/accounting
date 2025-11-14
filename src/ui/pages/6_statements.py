@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import csv
 import io
 import json
 import re
@@ -35,7 +34,7 @@ from src.services.statement_service import (
     StatementCalculations,
     PartnerFacingSection,
     InternalSection,
-    CsvExportPayload,
+    WorkbookExportPayload,
 )
 from src.services.settlement_constants import SETTLEMENT_MODEL_VERSION
 from src.ui.helpers.fragments import (
@@ -160,15 +159,16 @@ def _daily_statement_log_records(log_entries: List[Any]) -> List[Dict[str, Any]]
     ]
 
 
-def _records_to_csv(records: List[Dict[str, Any]]) -> str:
-    """Serialize log records to CSV for download."""
+def _records_to_excel(records: List[Dict[str, Any]]) -> bytes:
+    """Serialize log records to an Excel workbook for download."""
     if not records:
-        return ""
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=list(records[0].keys()))
-    writer.writeheader()
-    writer.writerows(records)
-    return buffer.getvalue()
+        return b""
+    dataframe = pd.DataFrame(records)
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        dataframe.to_excel(writer, sheet_name="Log", index=False)
+    output.seek(0)
+    return output.getvalue()
 
 
 def _execute_daily_statements(
@@ -199,15 +199,15 @@ def _render_daily_statement_result(result: DailyStatementBatchResult) -> None:
     else:
         st.info("No log entries generated.")
 
-    csv_payload = _records_to_csv(records)
+    excel_payload = _records_to_excel(records)
     json_payload = json.dumps(records, indent=2)
     download_cols = st.columns(2)
     download_cols[0].download_button(
-        label="Download log (CSV)",
-        data=csv_payload,
-        file_name="daily_statements_log.csv",
-        mime="text/csv",
-        key="daily_statements_csv",
+        label="Download log (Excel)",
+        data=excel_payload,
+        file_name="daily_statements_log.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="daily_statements_excel",
     )
     download_cols[1].download_button(
         label="Download log (JSON)",
@@ -238,8 +238,8 @@ def _modal_context(title: str):
             yield
 
 
-def _persist_csv_export(export_payload: CsvExportPayload) -> Path:
-    """Write an in-memory CSV export to disk ensuring unique naming."""
+def _persist_workbook_export(export_payload: WorkbookExportPayload) -> Path:
+    """Write an in-memory Excel export to disk ensuring unique naming."""
     STATEMENT_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     target_path = STATEMENT_EXPORT_DIR / export_payload.filename
     counter = 1
@@ -252,26 +252,26 @@ def _persist_csv_export(export_payload: CsvExportPayload) -> Path:
     return target_path
 
 
-def generate_statement_summary_csv(calc: StatementCalculations) -> Path:
-    """Generate statement CSV using StatementService helper."""
+def generate_statement_summary_excel(calc: StatementCalculations) -> Path:
+    """Generate statement Excel workbook using StatementService helper."""
     statement_service = StatementService()
-    export_payload = statement_service.export_statement_csv(
+    export_payload = statement_service.export_statement_excel(
         calc.associate_id,
         calc.cutoff_date,
         calculations=calc,
     )
-    return _persist_csv_export(export_payload)
+    return _persist_workbook_export(export_payload)
 
 
-def generate_surebet_roi_csv(calc: StatementCalculations) -> Path:
-    """Generate Surebet ROI CSV for the given calculations snapshot."""
+def generate_surebet_roi_excel(calc: StatementCalculations) -> Path:
+    """Generate Surebet ROI Excel workbook for the given calculations snapshot."""
     statement_service = StatementService()
-    export_payload = statement_service.export_surebet_roi_csv(
+    export_payload = statement_service.export_surebet_roi_excel(
         calc.associate_id,
         calc.cutoff_date,
         calculations=calc,
     )
-    return _persist_csv_export(export_payload)
+    return _persist_workbook_export(export_payload)
 
 
 def export_all_statements_zip(cutoff_date: str) -> tuple[Optional[Path], List[str]]:
@@ -281,17 +281,17 @@ def export_all_statements_zip(cutoff_date: str) -> tuple[Optional[Path], List[st
         return None, []
 
     statement_service = StatementService()
-    csv_paths: List[Path] = []
+    export_paths: List[Path] = []
     errors: List[str] = []
 
     for associate in associates:
         try:
             calc = statement_service.generate_statement(associate["id"], cutoff_date)
-            csv_paths.append(generate_statement_summary_csv(calc))
+            export_paths.append(generate_statement_summary_excel(calc))
         except Exception as exc:
             errors.append(f"{associate['name']}: {exc}")
 
-    if not csv_paths:
+    if not export_paths:
         return None, errors
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -299,7 +299,7 @@ def export_all_statements_zip(cutoff_date: str) -> tuple[Optional[Path], List[st
     zip_path = STATEMENT_EXPORT_DIR / zip_name
 
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zipf:
-        for path in csv_paths:
+        for path in export_paths:
             zipf.write(path, arcname=path.name)
 
     return zip_path, errors
@@ -694,39 +694,39 @@ Bookmaker Breakdown:
             st.code(clipboard_text)
     
     with col2:
-        # Export statement CSV via service helper
-        if st.button(":material/grid_on: Export Statement CSV", key="export_statement_csv", width="stretch"):
-            with st.spinner("Generating statement summary CSV..."):
+        # Export statement via service helper
+        if st.button(":material/grid_on: Export Statement Excel", key="export_statement_excel", width="stretch"):
+            with st.spinner("Generating statement summary workbook..."):
                 try:
-                    csv_path = generate_statement_summary_csv(calc)
+                    summary_path = generate_statement_summary_excel(calc)
                     st.success("Statement summary ready.")
-                    with open(csv_path, "rb") as csv_file:
+                    with open(summary_path, "rb") as summary_file:
                         st.download_button(
-                            label="Download Statement CSV",
-                            data=csv_file.read(),
-                            file_name=csv_path.name,
-                            mime="text/csv",
-                            key=f"download_statement_csv_{csv_path.name}",
+                            label="Download Statement Excel",
+                            data=summary_file.read(),
+                            file_name=summary_path.name,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"download_statement_excel_{summary_path.name}",
                         )
                 except Exception as e:
-                    st.error(f"CSV export failed: {str(e)}")
+                    st.error(f"Excel export failed: {str(e)}")
 
     with col3:
-        if st.button(":material/table_view: Export Surebet ROI CSV", key="export_roi_csv", width="stretch"):
-            with st.spinner("Generating ROI CSV..."):
+        if st.button(":material/table_view: Export Surebet ROI Excel", key="export_roi_excel", width="stretch"):
+            with st.spinner("Generating ROI workbook..."):
                 try:
-                    roi_path = generate_surebet_roi_csv(calc)
+                    roi_path = generate_surebet_roi_excel(calc)
                     st.success("Surebet ROI export ready.")
                     with open(roi_path, "rb") as roi_file:
                         st.download_button(
-                            label="Download Surebet ROI CSV",
+                            label="Download Surebet ROI Excel",
                             data=roi_file.read(),
                             file_name=roi_path.name,
-                            mime="text/csv",
-                            key=f"download_roi_csv_{roi_path.name}",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"download_roi_excel_{roi_path.name}",
                         )
                 except Exception as e:
-                    st.error(f"ROI CSV export failed: {str(e)}")
+                    st.error(f"ROI Excel export failed: {str(e)}")
 
 
 def render_generate_button(associate_id: int, cutoff_date: str) -> bool:
@@ -940,7 +940,7 @@ def main() -> None:
                     calc = statement_service.generate_statement(associate_id, cutoff_date)
 
                     partner_section = statement_service.format_partner_facing_section(calc)
-                    summary_path = generate_statement_summary_csv(calc)
+                    summary_path = generate_statement_summary_excel(calc)
                     st.session_state.current_statement = calc
                     st.session_state.statement_generated = True
                     st.success(f"Statement generated for {calc.associate_name}")
@@ -1009,7 +1009,7 @@ def main() -> None:
 
             {identity_rollout_note()}
 
-            Statement CSV exports list ND/FS/{identity_symbol()}/TB/I'' plus **Exit Payout**. Run **Settle Associate Now** before
+            Statement Excel exports list ND/FS/{identity_symbol()}/TB/I'' plus **Exit Payout**. Run **Settle Associate Now** before
             deactivating an associate so they exit with `I'' = 0`.
             """
         )

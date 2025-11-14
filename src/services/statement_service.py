@@ -7,7 +7,6 @@ All calculations are read-only and use cutoff date filtering.
 
 from __future__ import annotations
 
-import csv
 import io
 import re
 from decimal import Decimal
@@ -15,6 +14,7 @@ from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 
 import structlog
+import xlsxwriter
 from datetime import datetime
 
 from src.core.database import get_db_connection
@@ -131,8 +131,8 @@ class InternalSection:
 
 
 @dataclass
-class CsvExportPayload:
-    """Container describing an in-memory CSV export."""
+class WorkbookExportPayload:
+    """Container describing an in-memory Excel export."""
 
     filename: str
     content: bytes
@@ -491,7 +491,7 @@ class StatementService:
     
     def get_associate_transactions(self, associate_id: int, cutoff_date: str) -> List[Dict]:
         """
-        Get detailed transaction list for CSV export.
+        Get detailed transaction list for Excel export.
         
         Args:
             associate_id: Associate ID
@@ -548,18 +548,18 @@ class StatementService:
             return False
 
     # ------------------------------------------------------------------
-    # CSV Export helpers
+    # Excel export helpers
     # ------------------------------------------------------------------
 
-    def export_statement_csv(
+    def export_statement_excel(
         self,
         associate_id: int,
         cutoff_date: str,
         *,
         calculations: Optional[StatementCalculations] = None,
-    ) -> CsvExportPayload:
+    ) -> WorkbookExportPayload:
         """
-        Export statement CSV with per-bookmaker allocations and totals.
+        Export statement Excel workbook with per-bookmaker allocations and totals.
 
         Args:
             associate_id: Target associate
@@ -570,23 +570,23 @@ class StatementService:
         export_time = utc_now_iso()
         multibook_delta = self._calculate_multibook_delta(associate_id, cutoff_date)
         rows = self._build_statement_csv_rows(calc, export_time, multibook_delta)
-        csv_bytes = self._rows_to_csv(rows)
+        workbook_bytes = self._rows_to_workbook(rows, sheet_name="Statement")
         filename = self._build_filename(
             prefix="legacy_statement",
             associate_alias=calc.associate_name,
             cutoff_date=cutoff_date,
         )
-        return CsvExportPayload(filename=filename, content=csv_bytes, generated_at=export_time)
+        return WorkbookExportPayload(filename=filename, content=workbook_bytes, generated_at=export_time)
 
-    def export_surebet_roi_csv(
+    def export_surebet_roi_excel(
         self,
         associate_id: int,
         cutoff_date: str,
         *,
         calculations: Optional[StatementCalculations] = None,
-    ) -> CsvExportPayload:
+    ) -> WorkbookExportPayload:
         """
-        Export per-surebet ROI CSV for a given associate.
+        Export per-surebet ROI Excel workbook for a given associate.
 
         Args:
             associate_id: Target associate
@@ -603,13 +603,13 @@ class StatementService:
             conn.close()
 
         rows = self._build_roi_csv_rows(calc, export_time, roi_rows)
-        csv_bytes = self._rows_to_csv(rows)
+        workbook_bytes = self._rows_to_workbook(rows, sheet_name="ROI")
         filename = self._build_filename(
             prefix="surebet_roi",
             associate_alias=calc.associate_name,
             cutoff_date=cutoff_date,
         )
-        return CsvExportPayload(filename=filename, content=csv_bytes, generated_at=export_time)
+        return WorkbookExportPayload(filename=filename, content=workbook_bytes, generated_at=export_time)
 
     def settle_associate_now(
         self,
@@ -636,11 +636,19 @@ class StatementService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _rows_to_csv(self, rows: List[List[str]]) -> bytes:
-        buffer = io.StringIO()
-        writer = csv.writer(buffer)
-        writer.writerows(rows)
-        return buffer.getvalue().encode("utf-8")
+    def _rows_to_workbook(self, rows: List[List[str]], sheet_name: str) -> bytes:
+        """Convert tabular rows into an in-memory Excel workbook."""
+        buffer = io.BytesIO()
+        workbook = xlsxwriter.Workbook(buffer, {"in_memory": True})
+        worksheet = workbook.add_worksheet(sheet_name)
+        for row_idx, row in enumerate(rows):
+            if not row:
+                continue
+            for col_idx, value in enumerate(row):
+                worksheet.write(row_idx, col_idx, value if value is not None else "")
+        workbook.close()
+        buffer.seek(0)
+        return buffer.getvalue()
 
     def _build_statement_csv_rows(
         self,
@@ -943,7 +951,7 @@ class StatementService:
         if not date_part:
             date_part = datetime.now().strftime("%Y-%m-%d")
         alias_slug = self._slugify(associate_alias)
-        return f"{prefix}_{alias_slug}_{date_part}.csv"
+        return f"{prefix}_{alias_slug}_{date_part}.xlsx"
 
     def _slugify(self, value: str) -> str:
         slug = re.sub(r"[^A-Za-z0-9]+", "-", (value or "").strip()).strip("-").lower()

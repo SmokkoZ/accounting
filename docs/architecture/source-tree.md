@@ -419,7 +419,7 @@ def utc_now_iso() -> str:
 src/jobs/
 â”œâ”€â”€ __init__.py
 â”œâ”€â”€ fetch_fx_rates.py           # Daily FX rate update
-â””â”€â”€ export_ledger_daily.py      # Automated CSV export
+â””â”€â”€ export_ledger_daily.py      # Automated Excel export
 ```
 
 **Purpose:** Cron-scheduled background tasks

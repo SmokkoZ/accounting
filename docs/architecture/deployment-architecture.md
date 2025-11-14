@@ -226,7 +226,7 @@ sudo systemctl start surebet-streamlit
 
 ### Daily Automated Backup
 
-**CSV Export (Cron Job):**
+**Excel Export (Cron Job):**
 
 ```bash
 # Crontab (Linux/macOS)
@@ -239,18 +239,13 @@ sudo systemctl start surebet-streamlit
 **Backup Script:**
 ```python
 # src/jobs/export_ledger_daily.py
-from datetime import datetime
-import os
+from src.services.ledger_export_service import LedgerExportService
+
 
 def export_ledger():
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    output_path = f"data/exports/ledger_backup_{timestamp}.csv"
+    service = LedgerExportService()
+    service.export_full_ledger()
 
-    # Export via LedgerService
-    from src.services.ledger_service import LedgerService
-    LedgerService().export_to_csv(output_path)
-
-    logger.info(f"Ledger exported to {output_path}")
 
 if __name__ == "__main__":
     export_ledger()

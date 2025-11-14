@@ -1,12 +1,10 @@
 """
 Unit tests for Ledger Export Service.
 
-Tests core export functionality including CSV generation, validation,
+Tests core export functionality including Excel generation, validation,
 and file handling with various data scenarios.
 """
 
-import csv
-import os
 import tempfile
 from datetime import datetime
 from decimal import Decimal
@@ -14,8 +12,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+from openpyxl import load_workbook
+import xlsxwriter
 
-from src.services.ledger_export_service import LedgerExportService
+from src.services.ledger_export_service import LedgerExportResult, LedgerExportService
 
 
 class TestLedgerExportService:
@@ -96,8 +96,8 @@ class TestLedgerExportService:
         assert service.export_dir.exists()
         assert service.export_dir.is_dir()
 
-    def test_format_row_for_csv_with_all_fields(self, service):
-        """Test CSV row formatting with complete data."""
+    def test_format_row_for_export_with_all_fields(self, service):
+        """Test workbook row formatting with complete data."""
         row = {
             "entry_id": 1,
             "amount_native": "100.50",
@@ -106,16 +106,16 @@ class TestLedgerExportService:
             "associate_alias": "Alice"
         }
         
-        formatted = service._format_row_for_csv(row)
+        formatted = service._format_row_for_export(row)
         
-        assert formatted["entry_id"] == "1"
-        assert formatted["amount_native"] == "100.50"
-        assert formatted["fx_rate_snapshot"] == "0.65"
+        assert formatted["entry_id"] == 1
+        assert formatted["amount_native"] == pytest.approx(100.5)
+        assert formatted["fx_rate_snapshot"] == pytest.approx(0.65)
         assert formatted["settlement_state"] == "WON"
         assert formatted["associate_alias"] == "Alice"
 
-    def test_format_row_for_csv_with_null_values(self, service):
-        """Test CSV row formatting with NULL values."""
+    def test_format_row_for_export_with_null_values(self, service):
+        """Test workbook row formatting with NULL values."""
         row = {
             "entry_id": 1,
             "bookmaker_name": None,
@@ -123,12 +123,12 @@ class TestLedgerExportService:
             "principal_returned_eur": None
         }
         
-        formatted = service._format_row_for_csv(row)
+        formatted = service._format_row_for_export(row)
         
-        assert formatted["entry_id"] == "1"
+        assert formatted["entry_id"] == 1
         assert formatted["bookmaker_name"] == ""
         assert formatted["settlement_state"] == ""
-        assert formatted["principal_returned_eur"] == ""
+        assert formatted["principal_returned_eur"] is None
 
     def test_get_file_size_display(self, service):
         """Test file size formatting."""
@@ -150,24 +150,32 @@ class TestLedgerExportService:
         mock_cursor.fetchall.return_value = mock_db_data
         
         # Execute export
-        file_path, row_count = service.export_full_ledger()
+        result = service.export_full_ledger()
         
         # Verify file was created
-        assert Path(file_path).exists()
-        assert row_count == 2
-        
-        # Verify file content
-        with open(file_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
-            
-        assert len(rows) == 2
-        assert rows[0]["entry_id"] == "1"
-        assert rows[0]["entry_type"] == "BET_RESULT"
-        assert rows[0]["associate_alias"] == "Alice"
-        assert rows[1]["entry_id"] == "2"
-        assert rows[1]["entry_type"] == "DEPOSIT"
-        assert rows[1]["associate_alias"] == "Bob"
+        assert Path(result.file_path).exists()
+        assert result.row_count == 2
+        workbook = load_workbook(result.file_path, data_only=True)
+        try:
+            worksheet = workbook.active
+            rows = list(worksheet.iter_rows(values_only=True))
+        finally:
+            workbook.close()
+
+        headers = rows[0]
+        data = [
+            dict(zip(headers, row))
+            for row in rows[1:]
+            if any(cell is not None for cell in row)
+        ]
+
+        assert len(data) == 2
+        assert data[0]["entry_id"] == 1
+        assert data[0]["entry_type"] == "BET_RESULT"
+        assert data[0]["associate_alias"] == "Alice"
+        assert data[1]["entry_id"] == 2
+        assert data[1]["entry_type"] == "DEPOSIT"
+        assert data[1]["associate_alias"] == "Bob"
 
     @patch('src.services.ledger_export_service.get_db_connection')
     def test_export_full_ledger_with_validation_failure(self, mock_get_conn, service):
@@ -198,33 +206,32 @@ class TestLedgerExportService:
 
     def test_validate_export_success(self, service):
         """Test successful export validation."""
-        # Create a test CSV file
-        test_file = service.export_dir / "test.csv"
-        with open(test_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['entry_id', 'entry_type'])  # Header
-            writer.writerow(['1', 'BET_RESULT'])        # Data row
-            writer.writerow(['2', 'DEPOSIT'])          # Data row
-        
-        # Should not raise exception
+        test_file = service.export_dir / "test.xlsx"
+        workbook = xlsxwriter.Workbook(test_file)
+        worksheet = workbook.add_worksheet()
+        worksheet.write_row(0, 0, ["entry_id", "entry_type"])
+        worksheet.write_row(1, 0, [1, "BET_RESULT"])
+        worksheet.write_row(2, 0, [2, "DEPOSIT"])
+        workbook.close()
+
         service._validate_export(test_file, 2)
 
     def test_validate_export_file_not_found(self, service):
         """Test validation when file doesn't exist."""
-        non_existent_file = service.export_dir / "non_existent.csv"
+        non_existent_file = service.export_dir / "non_existent.xlsx"
         
         with pytest.raises(FileNotFoundError, match="Export file not created"):
             service._validate_export(non_existent_file, 1)
 
     def test_validate_export_row_count_mismatch(self, service):
         """Test validation when row count doesn't match."""
-        # Create a test CSV file with wrong row count
-        test_file = service.export_dir / "test.csv"
-        with open(test_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['entry_id', 'entry_type'])  # Header
-            writer.writerow(['1', 'BET_RESULT'])        # Only 1 data row
-        
+        test_file = service.export_dir / "test_mismatch.xlsx"
+        workbook = xlsxwriter.Workbook(test_file)
+        worksheet = workbook.add_worksheet()
+        worksheet.write_row(0, 0, ["entry_id", "entry_type"])
+        worksheet.write_row(1, 0, [1, "BET_RESULT"])  # Only 1 data row
+        workbook.close()
+
         with pytest.raises(ValueError, match="Row count mismatch"):
             service._validate_export(test_file, 5)  # Expect 5 rows, only have 1
 
@@ -237,18 +244,19 @@ class TestLedgerExportService:
         """Test export history with existing files."""
         # Create test export files
         files_data = [
-            ("all_MULTI_01-01-2025_ledger.csv", 100),
-            ("all_MULTI_02-01-2025_ledger.csv", 150),
-            ("all_MULTI_03-01-2025_ledger.csv", 200)
+            ("all_MULTI_01-01-2025_ledger.xlsx", 100),
+            ("all_MULTI_02-01-2025_ledger.xlsx", 150),
+            ("all_MULTI_03-01-2025_ledger.xlsx", 200)
         ]
         
         for filename, row_count in files_data:
             file_path = service.export_dir / filename
-            with open(file_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(['entry_id'])  # Header
-                for i in range(row_count):
-                    writer.writerow([i])  # Data rows
+            workbook = xlsxwriter.Workbook(file_path)
+            worksheet = workbook.add_worksheet()
+            worksheet.write_row(0, 0, ['entry_id'])
+            for i in range(row_count):
+                worksheet.write(i + 1, 0, i + 1)
+            workbook.close()
         
         # Get history
         history = service.get_export_history(limit=10)
@@ -258,9 +266,9 @@ class TestLedgerExportService:
         filenames = [h['filename'] for h in history]
         row_counts = [h['row_count'] for h in history]
         
-        assert "all_MULTI_03-01-2025_ledger.csv" in filenames
-        assert "all_MULTI_02-01-2025_ledger.csv" in filenames
-        assert "all_MULTI_01-01-2025_ledger.csv" in filenames
+        assert "all_MULTI_03-01-2025_ledger.xlsx" in filenames
+        assert "all_MULTI_02-01-2025_ledger.xlsx" in filenames
+        assert "all_MULTI_01-01-2025_ledger.xlsx" in filenames
         assert 200 in row_counts
         assert 150 in row_counts
         assert 100 in row_counts
@@ -270,12 +278,13 @@ class TestLedgerExportService:
         # Create more files than limit
         for i in range(15):
             day = (i % 28) + 1
-            filename = f"all_MULTI_{day:02d}-01-2025_ledger.csv"
+            filename = f"all_MULTI_{day:02d}-01-2025_ledger.xlsx"
             file_path = service.export_dir / filename
-            with open(file_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(['entry_id'])
-                writer.writerow([i])
+            workbook = xlsxwriter.Workbook(file_path)
+            worksheet = workbook.add_worksheet()
+            worksheet.write_row(0, 0, ['entry_id'])
+            worksheet.write_row(1, 0, [i])
+            workbook.close()
         
         history = service.get_export_history(limit=5)
         assert len(history) == 5
@@ -285,31 +294,33 @@ class TestLedgerExportService:
         # Create mix of files
         (service.export_dir / "other.csv").touch()
         (service.export_dir / "ledger_test.csv").touch()
-        (service.export_dir / "all_MULTI_01-01-2025_ledger.csv").touch()
+        (service.export_dir / "all_MULTI_01-01-2025_ledger.xlsx").touch()
         
         history = service.get_export_history()
         
         # Should only find proper ledger file
         assert len(history) >= 1
         filenames = [h['filename'] for h in history]
-        assert "all_MULTI_01-01-2025_ledger.csv" in filenames
+        assert "all_MULTI_01-01-2025_ledger.xlsx" in filenames
 
     @patch('src.services.ledger_export_service.get_db_connection')
     def test_get_export_history_includes_scope_metadata(self, mock_get_conn, service):
         """Test that history entries include associate scope information."""
         # Create generic export
-        full_file = service.export_dir / "all_MULTI_01-01-2025_ledger.csv"
-        with open(full_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['entry_id'])
-            writer.writerow([1])
+        full_file = service.export_dir / "all_MULTI_01-01-2025_ledger.xlsx"
+        workbook = xlsxwriter.Workbook(full_file)
+        worksheet = workbook.add_worksheet()
+        worksheet.write_row(0, 0, ['entry_id'])
+        worksheet.write_row(1, 0, [1])
+        workbook.close()
 
         # Create associate-scoped export
-        assoc_file_new = service.export_dir / "jane-doe_EUR_01-01-2025_ledger.csv"
-        with open(assoc_file_new, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['entry_id'])
-            writer.writerow([1])
+        assoc_file_new = service.export_dir / "jane-doe_EUR_01-01-2025_ledger.xlsx"
+        workbook = xlsxwriter.Workbook(assoc_file_new)
+        worksheet = workbook.add_worksheet()
+        worksheet.write_row(0, 0, ['entry_id'])
+        worksheet.write_row(1, 0, [1])
+        workbook.close()
 
         assoc_file_legacy = service.export_dir / "ledger_assoc-7-jane-doe_20250101_130000.csv"
         with open(assoc_file_legacy, 'w', newline='', encoding='utf-8') as f:
@@ -334,21 +345,22 @@ class TestLedgerExportService:
         assert legacy_entry["alias_slug"] == "jane-doe"
 
     @patch('src.services.ledger_export_service.get_db_connection')
-    def test_export_csv_headers_and_format(self, mock_get_conn, service, mock_db_data):
-        """Test that CSV export has correct headers and format."""
+    def test_export_workbook_headers_and_format(self, mock_get_conn, service, mock_db_data):
+        """Test that Excel export has correct headers and format."""
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
         mock_cursor.fetchall.return_value = mock_db_data
         mock_get_conn.return_value = mock_conn
         
-        file_path, _ = service.export_full_ledger()
-        
-        # Read and verify CSV structure
-        with open(file_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            headers = reader.fieldnames
-            rows = list(reader)
+        result = service.export_full_ledger()
+        workbook = load_workbook(result.file_path, data_only=True)
+        try:
+            worksheet = workbook.active
+            rows = list(worksheet.iter_rows(values_only=True))
+        finally:
+            workbook.close()
+        headers = list(rows[0])
         
         # Check all expected headers are present (ordered per spec)
         expected_headers = [
@@ -374,18 +386,46 @@ class TestLedgerExportService:
             "created_by",
         ]
         
-        for header in expected_headers:
-            assert header in headers
-        
-        # Verify UTF-8 encoding by reading special characters
-        assert len(headers) == len(expected_headers)
-        assert len(rows) == len(mock_db_data)
+        assert headers == expected_headers
+        assert len(rows) == len(mock_db_data) + 1
 
-        first_row = rows[0]
-        assert first_row["created_at_utc"] == "01/01/2025"
-        assert first_row["event_name"] == "Manchester United vs Liverpool"
-        assert first_row["market_selection"] == "Total Goals Over/Under - OVER (2.5)"
-        assert first_row["principal_returned_native"] == "154.62"
+        first_row = rows[1]
+        assert first_row[expected_headers.index("created_at_utc")] == "01/01/2025"
+        assert first_row[expected_headers.index("event_name")] == "Manchester United vs Liverpool"
+        assert first_row[expected_headers.index("market_selection")] == "Total Goals Over/Under - OVER (2.5)"
+        assert isinstance(first_row[expected_headers.index("amount_native")], float)
+        assert first_row[expected_headers.index("principal_returned_native")] == pytest.approx(154.62)
+
+    @patch('src.services.ledger_export_service.get_db_connection')
+    def test_export_workbook_styles(self, mock_get_conn, service, mock_db_data):
+        """Test header styling and conditional formatting."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = mock_db_data
+        mock_get_conn.return_value = mock_conn
+
+        result = service.export_full_ledger()
+        workbook = load_workbook(result.file_path)
+        try:
+            worksheet = workbook.active
+            header_cell = worksheet["A1"]
+            assert header_cell.font.bold is True
+            assert header_cell.fill.start_color.rgb in {"FFE5ECFF", "FFe5ecff"}
+
+            cf_rules = []
+            for rules in worksheet.conditional_formatting.cf_rules.values():
+                cf_rules.extend(rules)
+
+            formulas = []
+            for rule in cf_rules:
+                if hasattr(rule, "formula"):
+                    formulas.extend(rule.formula)
+
+            assert any("DEPOSIT" in formula for formula in formulas)
+            assert any("WITHDRAWAL" in formula for formula in formulas)
+        finally:
+            workbook.close()
 
     @patch('src.services.ledger_export_service.get_db_connection')
     def test_export_full_ledger_with_associate_filter(self, mock_get_conn, service, mock_db_data):
@@ -401,10 +441,10 @@ class TestLedgerExportService:
 
         mock_get_conn.return_value = mock_conn
 
-        file_path, row_count = service.export_full_ledger(associate_id=3)
+        result = service.export_full_ledger(associate_id=3)
 
-        assert row_count == len(mock_db_data)
-        assert Path(file_path).name.startswith("alice-smith_EUR_")
+        assert result.row_count == len(mock_db_data)
+        assert Path(result.file_path).name.startswith("alice-smith_EUR_")
 
         executed_query, params = mock_cursor.execute.call_args[0]
         assert "WHERE le.associate_id = ?" in executed_query
@@ -436,7 +476,7 @@ class TestLedgerExportService:
         mock_cursor.fetchall.return_value = mock_db_data
         mock_get_conn.return_value = mock_conn
         
-        file_path, _ = service.export_full_ledger()
+        result = service.export_full_ledger()
         
-        expected_filename = "all_MULTI_01-01-2025_ledger.csv"
-        assert Path(file_path).name == expected_filename
+        expected_filename = "all_MULTI_01-01-2025_ledger.xlsx"
+        assert Path(result.file_path).name == expected_filename

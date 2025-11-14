@@ -5,15 +5,31 @@ Tests the complete export flow from UI interaction to file creation,
 including database integration and file system operations.
 """
 
-import csv
 import tempfile
 import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
+from openpyxl import load_workbook
 
 from src.services.ledger_export_service import LedgerExportService
+
+
+def _read_workbook_rows(file_path: str):
+    workbook = load_workbook(file_path, data_only=True)
+    try:
+        worksheet = workbook.active
+        rows = list(worksheet.iter_rows(values_only=True))
+    finally:
+        workbook.close()
+    headers = list(rows[0])
+    data = [
+        dict(zip(headers, row))
+        for row in rows[1:]
+        if any(cell is not None for cell in row)
+    ]
+    return headers, data
 
 
 class TestExportFlowIntegration:
@@ -154,11 +170,11 @@ class TestExportFlowIntegration:
         mock_cursor.fetchall.return_value = sample_ledger_data
         
         # Execute export
-        file_path, row_count = service.export_full_ledger()
+        result = service.export_full_ledger()
         
         # Verify export completion
-        assert Path(file_path).exists()
-        assert row_count == 4
+        assert Path(result.file_path).exists()
+        assert result.row_count == 4
         
         # Verify database connection was properly managed
         mock_get_conn.assert_called_once()
@@ -172,11 +188,7 @@ class TestExportFlowIntegration:
         assert "associates" in call_args
         assert "bookmakers" in call_args
         
-        # Verify file content
-        with open(file_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
-            headers = reader.fieldnames
+        headers, rows = _read_workbook_rows(result.file_path)
         
         # Check structure
         assert len(headers) == 20  # Expected number of columns
@@ -186,13 +198,13 @@ class TestExportFlowIntegration:
         bet_result_row = next(r for r in rows if r['entry_type'] == 'BET_RESULT')
         assert bet_result_row['associate_alias'] == 'Alice Smith'
         assert bet_result_row['bookmaker_name'] == 'Bet365'
-        assert bet_result_row['amount_native'] == '100.50'
+        assert bet_result_row['amount_native'] == pytest.approx(100.50)
         assert bet_result_row['settlement_state'] == 'WON'
         assert bet_result_row['created_at_utc'] == '01/01/2025'
         assert bet_result_row['event_name'] == 'Manchester United vs Liverpool'
         assert bet_result_row['market_selection'] == 'Total Goals Over/Under - OVER (2.5)'
-        assert bet_result_row['principal_returned_native'] == '154.07'
-        assert bet_result_row['surebet_id'] == '123'
+        assert bet_result_row['principal_returned_native'] == pytest.approx(154.07)
+        assert bet_result_row['surebet_id'] == 123
         assert bet_result_row['bet_id'] == '456'
         
         deposit_row = next(r for r in rows if r['entry_type'] == 'DEPOSIT')
@@ -247,20 +259,18 @@ class TestExportFlowIntegration:
         mock_cursor.fetchall.return_value = large_dataset
         
         # Execute export
-        file_path, row_count = service.export_full_ledger()
+        result = service.export_full_ledger()
         
         # Verify results
-        assert Path(file_path).exists()
-        assert row_count == 1000
+        assert Path(result.file_path).exists()
+        assert result.row_count == 1000
         
         # Spot-check file content
-        with open(file_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+        _, rows = _read_workbook_rows(result.file_path)
         
         assert len(rows) == 1000
-        assert rows[0]['entry_id'] == '1'
-        assert rows[-1]['entry_id'] == '1000'
+        assert rows[0]['entry_id'] == 1
+        assert rows[-1]['entry_id'] == 1000
         assert len(set(row['entry_type'] for row in rows)) == 2  # BET_RESULT and DEPOSIT
 
     @patch('src.services.ledger_export_service.get_db_connection')
@@ -316,12 +326,10 @@ class TestExportFlowIntegration:
         mock_cursor.fetchall.return_value = special_data
         
         # Execute export
-        file_path, row_count = service.export_full_ledger()
+        result = service.export_full_ledger()
         
         # Verify file content with special characters
-        with open(file_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+        _, rows = _read_workbook_rows(result.file_path)
         
         assert len(rows) == 2
         assert rows[0]['associate_alias'] == 'José García'
@@ -343,8 +351,8 @@ class TestExportFlowIntegration:
         # Create multiple exports with small delays to ensure different timestamps
         export_files = []
         for i in range(3):
-            file_path, _ = service.export_full_ledger()
-            export_files.append(Path(file_path))
+            result = service.export_full_ledger()
+            export_files.append(Path(result.file_path))
             if i < 2:  # Don't sleep after last export
                 time.sleep(0.1)  # Small delay to ensure different timestamps
         
@@ -399,30 +407,28 @@ class TestExportFlowIntegration:
         mock_cursor.fetchall.return_value = null_decimal_data
         
         # Execute export
-        file_path, row_count = service.export_full_ledger()
+        result = service.export_full_ledger()
         
         # Verify NULL values are handled correctly
-        with open(file_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+        _, rows = _read_workbook_rows(result.file_path)
         
         assert len(rows) == 1
         row = rows[0]
         
         assert row['bookmaker_name'] == ''
         assert row['settlement_state'] == ''
-        assert row['principal_returned_eur'] == ''
-        assert row['per_surebet_share_eur'] == ''
-        assert row['surebet_id'] == ''
-        assert row['bet_id'] == ''
+        assert row['principal_returned_eur'] is None
+        assert row['per_surebet_share_eur'] is None
+        assert row['surebet_id'] is None
+        assert row['bet_id'] is None
         assert row['settlement_batch_id'] == ''
         assert row['note'] == ''
         
         # Non-NULL values should be preserved
-        assert row['entry_id'] == '1'
+        assert row['entry_id'] == 1
         assert row['entry_type'] == 'DEPOSIT'
-        assert row['amount_native'] == '100.00'
-        assert row['amount_eur'] == '100.00'
+        assert row['amount_native'] == pytest.approx(100.00)
+        assert row['amount_eur'] == pytest.approx(100.00)
 
     def test_export_directory_creation_permissions(self, temp_export_dir):
         """Test export directory creation and permissions."""

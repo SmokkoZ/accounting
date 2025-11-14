@@ -403,17 +403,6 @@ else:
     canonical_events = svc.load_canonical_events()
     canonical_markets = svc.load_canonical_markets()
 
-    # Build event options
-    event_display = [
-        (
-            e["id"],
-            f"{e['normalized_event_name']} ({e['kickoff_time_utc'][:10] if e['kickoff_time_utc'] else 'TBD'})"
-        )
-        for e in canonical_events
-    ]
-    event_labels = ["(Keep current)"] + [label for _, label in event_display]
-    event_values = [None] + [eid for eid, _ in event_display]
-
     # Pull current values
     current = next(b for b in bets if b["bet_id"] == target_bet_id)
 
@@ -462,7 +451,38 @@ else:
     except Exception:
         st.info("OCR log unavailable.")
 
+    # Event search/filter kept outside the form so Enter does not submit.
+    search_col, _ = st.columns([2, 1])
+    with search_col:
+        event_search = st.text_input(
+            "Search events",
+            key="edit_verified_event_search",
+            placeholder="Type team names or league...",
+        )
+
+    filtered_events = canonical_events
+    if event_search:
+        query = event_search.lower().strip()
+        if query:
+            filtered_events = [
+                e
+                for e in canonical_events
+                if query in (e.get("normalized_event_name") or "").lower()
+                or query in (e.get("league") or "").lower()
+            ]
+
     with st.form("edit_verified_bet_form"):
+        # Build event options from filtered list
+        event_display = [
+            (
+                e["id"],
+                f"{e['normalized_event_name']} ({e['kickoff_time_utc'][:10] if e['kickoff_time_utc'] else 'TBD'})"
+            )
+            for e in filtered_events
+        ]
+        event_labels = ["(Keep current)"] + [label for _, label in event_display]
+        event_values = [None] + [eid for eid, _ in event_display]
+
         event_choice = st.selectbox("Event", event_labels, index=0)
         market_choice = st.selectbox(
             "Market",

@@ -1,10 +1,10 @@
-import csv
 import io
 import sqlite3
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from openpyxl import load_workbook
 
 from src.core.schema import create_schema
 from src.services.exit_settlement_service import ExitSettlementService
@@ -184,7 +184,7 @@ def _prepare_db(tmp_path: Path) -> Path:
     return db_path
 
 
-def test_exit_settlement_flow_generates_receipt_and_csv_footnote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_exit_settlement_flow_generates_receipt_and_excel_footnote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     db_path = _prepare_db(tmp_path)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -222,13 +222,22 @@ def test_exit_settlement_flow_generates_receipt_and_csv_footnote(tmp_path: Path,
         assert row["type"] == "WITHDRAWAL"
         assert Decimal(str(row["amount_eur"])) < Decimal("0")
 
-    export = statement_service.export_statement_csv(
+    export = statement_service.export_statement_excel(
         1,
         cutoff,
         calculations=result.updated_calculations,
     )
-    reader = list(csv.reader(io.StringIO(export.content.decode("utf-8"))))
-    summary_map = {row[0]: row[1] for row in reader if row and len(row) >= 2}
+    workbook = load_workbook(io.BytesIO(export.content))
+    try:
+        worksheet = workbook.active
+        rows = list(worksheet.iter_rows(values_only=True))
+    finally:
+        workbook.close()
+    summary_map = {
+        row[0]: row[1]
+        for row in rows
+        if row and len(row) >= 2
+    }
     assert "Exit Payout (-I'')" in summary_map
     assert summary_map.get("Footnote") == SETTLEMENT_MODEL_FOOTNOTE
 

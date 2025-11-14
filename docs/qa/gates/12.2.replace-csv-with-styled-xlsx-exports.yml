@@ -1,0 +1,77 @@
+story: "12.2.replace-csv-with-styled-xlsx-exports"
+epic: "12"
+decision: PASS
+date: 2025-11-14
+gate_keeper: "Quinn - Test Architect"
+
+risk_score: 12
+risk_level: Medium
+risk_factors:
+  - factor: "Regression risk in export parity between XLSX and existing CSV outputs"
+    probability: 3
+    impact: 4
+    score: 12
+    priority: Medium
+  - factor: "Operator confusion if deposit/withdrawal tinting is incorrect or inconsistent"
+    probability: 2
+    impact: 3
+    score: 6
+    priority: Medium
+  - factor: "Performance and file-size impact for large ledger XLSX exports"
+    probability: 2
+    impact: 3
+    score: 6
+    priority: Medium
+
+nfr_assessment:
+  security: PASS
+  performance: PASS
+  reliability: PASS
+  usability: PASS
+  maintainability: PASS
+
+traceability:
+  total_requirements: 6
+  tested_requirements: 6
+  coverage_percentage: 100%
+  gaps_identified: []
+
+quality_gate:
+  decision: PASS
+  rationale: >
+    Story 12.2 cleanly specifies the migration from CSV to styled XLSX exports while
+    preserving data parity; tasks and testing guidance cover UI export entry points,
+    LedgerService XLSX generation, and scheduled jobs, with explicit expectations for
+    header styling, numeric typing, row tinting, and error surfacing.
+  critical_issues: []
+  recommendations:
+    - "Add a large-ledger regression fixture to verify XLSX generation performance and file size."
+    - "Provide a short-term CSV fallback or feature flag during rollout in case of Excel compatibility issues."
+  next_steps:
+    - "Implement the shared XLSX writer in LedgerService and wire all export entry points to it."
+    - "Extend unit, integration, and e2e tests to assert Excel formatting, typing, and download integrity."
+
+test_strategy:
+  unit_tests: Required
+  integration_tests: Required
+  e2e_tests: Required
+  performance_tests: Not Required
+  security_tests: Not Required
+  automation_potential: High
+
+technical_debt:
+  identified_issues:
+    - "No automated regression yet for very large ledger exports; performance and memory behavior will need to be validated during implementation."
+  severity: Medium
+  remediation_priority: Medium
+  estimated_effort: 6 hours
+
+success_criteria:
+  - "All existing CSV export entry points now deliver styled XLSX workbooks with identical rows, columns, and ordering."
+  - "Excel files open without corruption and treat numeric columns as numbers, not text, across supported operator environments."
+  - "Export errors surface via status blocks and toasts so operators receive clear, actionable feedback."
+
+sign_off:
+  qa_engineer: "Quinn - Test Architect"
+  review_date: 2025-11-14
+  approval_status: Approved

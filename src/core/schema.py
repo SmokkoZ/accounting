@@ -54,6 +54,10 @@ def create_associates_table(conn: sqlite3.Connection) -> None:
             multibook_chat_id TEXT,
             is_active BOOLEAN NOT NULL DEFAULT TRUE,
             is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+            internal_notes TEXT,
+            max_surebet_stake_eur TEXT,
+            max_bookmaker_exposure_eur TEXT,
+            preferred_balance_chat_id TEXT,
             created_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
             updated_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z')
         )
@@ -68,12 +72,24 @@ def create_associates_table(conn: sqlite3.Connection) -> None:
     """
     )
 
-    # Backfill is_active column for existing databases
+    # Backfill optional columns for existing databases
     cursor = conn.execute("PRAGMA table_info(associates)")
     column_names = {row[1] for row in cursor.fetchall()}
     if "is_active" not in column_names:
         conn.execute(
             "ALTER TABLE associates ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT TRUE"
+        )
+    if "internal_notes" not in column_names:
+        conn.execute("ALTER TABLE associates ADD COLUMN internal_notes TEXT")
+    if "max_surebet_stake_eur" not in column_names:
+        conn.execute("ALTER TABLE associates ADD COLUMN max_surebet_stake_eur TEXT")
+    if "max_bookmaker_exposure_eur" not in column_names:
+        conn.execute(
+            "ALTER TABLE associates ADD COLUMN max_bookmaker_exposure_eur TEXT"
+        )
+    if "preferred_balance_chat_id" not in column_names:
+        conn.execute(
+            "ALTER TABLE associates ADD COLUMN preferred_balance_chat_id TEXT"
         )
 
 
@@ -87,6 +103,12 @@ def create_bookmakers_table(conn: sqlite3.Connection) -> None:
             bookmaker_name TEXT NOT NULL,
             parsing_profile TEXT,
             is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            account_currency TEXT NOT NULL DEFAULT 'EUR',
+            bookmaker_chat_id TEXT,
+            coverage_chat_id TEXT,
+            region TEXT,
+            risk_level TEXT,
+            internal_notes TEXT,
             created_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
             updated_at_utc TEXT NOT NULL DEFAULT (datetime('now') || 'Z'),
             FOREIGN KEY (associate_id) REFERENCES associates(id) ON DELETE CASCADE,
@@ -251,6 +273,24 @@ def create_bets_table(conn: sqlite3.Connection) -> None:
         ON bets(canonical_event_id)
     """
     )
+
+    # Backfill optional columns for existing databases
+    cursor = conn.execute("PRAGMA table_info(bookmakers)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    if "account_currency" not in existing_columns:
+        conn.execute(
+            "ALTER TABLE bookmakers ADD COLUMN account_currency TEXT NOT NULL DEFAULT 'EUR'"
+        )
+    if "bookmaker_chat_id" not in existing_columns:
+        conn.execute("ALTER TABLE bookmakers ADD COLUMN bookmaker_chat_id TEXT")
+    if "coverage_chat_id" not in existing_columns:
+        conn.execute("ALTER TABLE bookmakers ADD COLUMN coverage_chat_id TEXT")
+    if "region" not in existing_columns:
+        conn.execute("ALTER TABLE bookmakers ADD COLUMN region TEXT")
+    if "risk_level" not in existing_columns:
+        conn.execute("ALTER TABLE bookmakers ADD COLUMN risk_level TEXT")
+    if "internal_notes" not in existing_columns:
+        conn.execute("ALTER TABLE bookmakers ADD COLUMN internal_notes TEXT")
 
     # Ensure resolve_status column exists for older databases
     cursor = conn.execute("PRAGMA table_info(bets)")

@@ -62,7 +62,7 @@ surebet-accounting/
 ├── README.md                   # This file
 ├── data/                       # Data directory (git-ignored)
 │   ├── screenshots/            # Bet screenshots
-│   ├── exports/                # CSV exports
+│   ├── exports/                # Excel exports
 │   └── logs/                   # Application logs
 ├── docs/                       # Documentation
 ├── src/                        # Source code
@@ -118,8 +118,8 @@ pre-commit install
 
 - **2025-11-13 -- Exit Settlement Flow**
   - Added the backend ExitSettlementService and UI guardrails so the Streamlit Statements and Operations screens run *Settle Associate Now* with cutoff confirmation, versioned receipts, and explicit "Your Fair Balance (YF = ND + FS)" copy.
-  - Statement CSV exports now append a model footnote (Model: YF-v1 (YF = ND + FS; I'' = TB - YF). Values exclude operator fees/taxes.) and every run writes a markdown receipt to data/exports/receipts/<associate_id>/.
-  - Soft rollout toggle: set SUREBET_YF_COPY_ROLLOUT=legacy in .streamlit/secrets.toml to keep the legacy "Should Hold" wording during partner enablement; switch it to enabled (default) once training is complete. The flag only affects UI copy/notes, so CSV fields remain backward compatible.
+- Statement Excel exports now append a model footnote (Model: YF-v1 (YF = ND + FS; I'' = TB - YF). Values exclude operator fees/taxes.) and every run writes a markdown receipt to data/exports/receipts/<associate_id>/.
+- Soft rollout toggle: set SUREBET_YF_COPY_ROLLOUT=legacy in .streamlit/secrets.toml to keep the legacy "Should Hold" wording during partner enablement; switch it to enabled (default) once training is complete. The flag only affects UI copy/notes, so workbook fields remain backward compatible.
 
 ## Configuration
 
@@ -157,23 +157,23 @@ LOG_LEVEL=INFO
 - **Settlement Engine**: Automated profit/loss calculations
 - **Ledger Management**: Comprehensive financial tracking
 - **FX Conversion**: Multi-currency support with daily rate updates
-- **Export Functionality**: CSV exports for accounting purposes
+- **Export Functionality**: Excel exports for accounting purposes
 - **Monthly Statements**: Automated associate statements
-- **Statement & ROI CSVs**: `StatementService.export_statement_csv` and `export_surebet_roi_csv` generate per-bookmaker allocations plus per-surebet ROI snapshots (see `docs/examples/statement_A123_YYYY-MM-DD.csv` and `docs/examples/surebet_roi_A123_YYYY-MM-DD.csv`). These snapshots reuse the existing statement math and explicitly note that values exclude operator fees/taxes.
+- **Statement & ROI Workbooks**: `StatementService.export_statement_excel` and `export_surebet_roi_excel` generate per-bookmaker allocations plus per-surebet ROI snapshots (see `docs/examples/statement_A123_YYYY-MM-DD.xlsx` and `docs/examples/surebet_roi_A123_YYYY-MM-DD.xlsx`). These snapshots reuse the existing statement math and explicitly note that values exclude operator fees/taxes.
 
 ### Change Notes -- YF & Exit Settlement Alignment (2025-11-13)
 
 - Adopt unified financial identity: Your Fair Balance (YF) = Net Deposits (ND) + Fair Shares (FS); replaces the prior 'Should Hold' label in UI/docs.
 - Standardize ND computation: store WITHDRAWAL as negative and DEPOSIT as positive; compute ND by summing signed amounts (no double-negation).
 - Keep imbalance: I'' = TB - YF where TB is total bookmaker holdings; reconciliation still targets I'' -> 0.
-- Add 'Settle Associate Now' flow: computes I'' at a cutoff and posts a single balancing DEPOSIT/WITHDRAWAL to zero it; CSV exports at exit include an 'Exit Payout' row (-I'').
-- CSVs: include YF in summaries plus a version footnote (e.g., Model: YF-v1 -- YF=ND+FS; I''=TB-YF; values exclude operator fees/taxes).
+- Add 'Settle Associate Now' flow: computes I'' at a cutoff and posts a single balancing DEPOSIT/WITHDRAWAL to zero it; Excel exports at exit include an 'Exit Payout' row (-I'').
+- Workbooks: include YF in summaries plus a version footnote (e.g., Model: YF-v1 -- YF=ND+FS; I''=TB-YF; values exclude operator fees/taxes).
 - Backward compatibility: no schema changes; existing math reused; older references to 'Should Hold' now map to YF. Where docs state RAW_PROFIT_EUR = SHOULD_HOLD - NET_DEPOSITS, this equals FS under YF (YF - ND = FS).
 
-#### CSV Identity Notes (YF-v1)
+#### Excel Identity Notes (YF-v1)
 
-- export_statement_csv and export_surebet_roi_csv prepend an Identity Version row showing YF-v1 so downstream automation can detect copy updates without schema changes.
-- Each CSV ends with a footnote: Model: YF-v1 -- YF = ND + FS; I'' = TB - YF. Legacy 'Should Hold' values map to YF; exports append-only for backward compatibility.
+- export_statement_excel and export_surebet_roi_excel prepend an Identity Version row showing YF-v1 so downstream automation can detect copy updates without schema changes.
+- Each workbook ends with a footnote: Model: YF-v1 -- YF = ND + FS; I'' = TB - YF. Legacy 'Should Hold' values map to YF; exports remain backward compatible.
 - ND/FS/YF/TB/I'' rows remain append-only; historical exports are untouched and legacy columns keep their ordering.
 
 ## Contributing

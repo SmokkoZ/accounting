@@ -1,7 +1,7 @@
 """
-Export Page - Ledger CSV Export
+Export Page - Ledger Excel Export
 
-Provides interface for exporting the full ledger to CSV for audit and backup purposes.
+Provides interface for exporting the full ledger to styled Excel workbooks for audit and backup purposes.
 Includes export history and re-download functionality.
 """
 
@@ -15,10 +15,11 @@ from typing import Dict, List, Optional, Union
 import inspect
 import zipfile
 
+from openpyxl import load_workbook
 import streamlit as st
 
 from src.core.database import get_db_connection
-from src.services.ledger_export_service import LedgerExportService
+from src.services.ledger_export_service import LedgerExportResult, LedgerExportService
 from src.ui.helpers.fragments import (
     call_fragment,
     render_debug_panel,
@@ -107,7 +108,8 @@ def trigger_auto_download(file_path: Path) -> None:
     b64 = base64.b64encode(data).decode()
     download_id = f"download-link-{uuid.uuid4().hex}"
     download_html = (
-        f'<a id="{download_id}" href="data:text/csv;base64,{b64}" '
+        f'<a id="{download_id}" '
+        f'href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" '
         f'download="{file_path.name}"></a>'
         f"<script>document.getElementById('{download_id}').click();</script>"
     )
@@ -167,27 +169,26 @@ def render_export_button(*, validate_after_export: bool = True) -> None:
             with st.spinner("Exporting all associates..."):
                 for associate in associates:
                     try:
-                        file_path, row_count = export_service.export_full_ledger(
+                        result = export_service.export_full_ledger(
                             associate_id=associate["id"]
                         )
                         split_results.append(
                             {
                                 "associate": associate,
-                                "file_path": file_path,
-                                "row_count": row_count,
+                                "result": result,
                             }
                         )
                     except Exception as exc:
                         errors.append((associate["display_alias"], exc))
 
             if split_results:
-                parent_dir = Path(split_results[0]["file_path"]).resolve().parent
+                parent_dir = Path(split_results[0]["result"].file_path).resolve().parent
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 zip_name = f"all_associates_{timestamp}_ledger.zip"
                 zip_path = parent_dir / zip_name
                 with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zipf:
-                    for result in split_results:
-                        file_path = Path(result["file_path"]).resolve()
+                    for entry in split_results:
+                        file_path = Path(entry["result"].file_path).resolve()
                         zipf.write(file_path, arcname=file_path.name)
 
                 show_success_toast(
@@ -204,7 +205,7 @@ def render_export_button(*, validate_after_export: bool = True) -> None:
                     + "\n".join(f"- {name}: {err}" for name, err in errors)
                 )
             return
-        progress: Dict[str, str | int | None] = {"scope_label": selected_label}
+        progress: Dict[str, object] = {"scope_label": selected_label}
 
         def _run_export_job() -> None:
             def _export_generator():
@@ -216,8 +217,9 @@ def render_export_button(*, validate_after_export: bool = True) -> None:
                 if selected_associate_id is not None and supports_filter:
                     export_kwargs["associate_id"] = selected_associate_id
                 result = export_service.export_full_ledger(**export_kwargs)
-                progress["file_path"], progress["row_count"] = result
-                yield f":material/check: Ledger exported with {progress['row_count']:,} rows"
+                progress["result"] = result
+                progress["scope_label"] = result.scope_label or selected_label
+                yield f":material/check: Ledger exported with {result.row_count:,} rows"
 
             stream_with_fallback(_export_generator, header=":material/article: Export progress log")
 
@@ -236,26 +238,27 @@ def render_export_button(*, validate_after_export: bool = True) -> None:
             handle_streaming_error(exc, "ledger export")
             return
 
-        file_path = progress.get("file_path")
-        row_count = progress.get("row_count")
-        if not file_path or not row_count:
+        result: Optional[LedgerExportResult] = progress.get("result")  # type: ignore[arg-type]
+        if result is None:
             st.error("Export completed without returning file metadata.")
             return
 
-        show_success_toast(f"Ledger exported for {selected_label} ({int(row_count):,} rows)")
+        file_path = Path(result.file_path)
+        row_count = int(result.row_count)
 
-        trigger_auto_download(Path(file_path))
+        show_success_toast(f"Ledger Excel exported for {progress.get('scope_label', selected_label)} ({row_count:,} rows)")
+
+        trigger_auto_download(file_path)
         st.caption("If your browser blocked the automatic download, use the link below.")
-        st.markdown(f":material/download: [{Path(file_path).name}](file://{Path(file_path).absolute()})")
+        st.markdown(f":material/download: [{file_path.name}](file://{file_path.absolute()})")
 
-        file_stat = Path(file_path).stat()
-        file_size = export_service.get_file_size_display(file_stat.st_size)
+        file_size = export_service.get_file_size_display(result.file_size_bytes)
 
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("File Size", file_size)
         with col2:
-            st.metric("Rows Exported", f"{int(row_count):,}")
+            st.metric("Rows Exported", f"{row_count:,}")
         with col3:
             st.metric("Status", "Complete")
         with col4:
@@ -263,15 +266,24 @@ def render_export_button(*, validate_after_export: bool = True) -> None:
 
         if validate_after_export:
             try:
-                with open(file_path, "r", encoding="utf-8") as handle:
-                    actual_rows = max(sum(1 for _ in handle) - 1, 0)
-                if actual_rows != int(row_count):
+                workbook = load_workbook(file_path, read_only=True)
+                try:
+                    worksheet = workbook.active
+                    actual_rows = sum(
+                        1
+                        for excel_row in worksheet.iter_rows(min_row=2, values_only=True)
+                        if any(cell not in (None, "") for cell in excel_row)
+                    )
+                finally:
+                    workbook.close()
+
+                if actual_rows != row_count:
                     st.warning(
-                        f"Validation detected a mismatch ({actual_rows:,} rows vs expected {int(row_count):,})."
+                        f"Validation detected a mismatch ({actual_rows:,} rows vs expected {row_count:,})."
                     )
                 else:
                     st.caption(":material/task_alt: Validation passed for exported file.")
-            except OSError as exc:
+            except Exception as exc:
                 st.warning(f"Unable to validate export file: {exc}")
 
         safe_rerun()
@@ -330,19 +342,19 @@ def render_export_instructions() -> None:
         st.markdown("""
         ### About Ledger Export
         
-        **Purpose:** Create a complete CSV export of all ledger entries for external audit or backup.
+        **Purpose:** Create a complete Excel workbook of all ledger entries for external audit or backup.
         
         **File Format:** 
-        - CSV with UTF-8 encoding
-        - Comma delimiter with proper escaping
-        - All numeric fields as strings to preserve Decimal precision
-        - NULL values as empty strings
+        - `.xlsx` workbook with bold, tinted headers and frozen panes
+        - Auto-fit columns plus numeric formatting for currency and FX rate fields
+        - Deposits tinted green and withdrawals tinted red for quick scanning
+        - Blank cells preserved for downstream filtering
         
         **Columns Included:**
         - `associate_alias`, `bookmaker_name`
         - `event_name` (canonical when available) and `market_selection`
         - `settlement_state`, `native_currency`, `amount_native`
-        - `principal_returned_native` (new) and `note`
+        - `principal_returned_native` and `note`
         - `amount_eur`, `principal_returned_eur`, `per_surebet_share_eur`
         - `entry_id`, `entry_type`, `surebet_id`, `bet_id`, `settlement_batch_id`
         - `fx_rate_snapshot`, `created_at_utc`, `created_by`
@@ -351,7 +363,7 @@ def render_export_instructions() -> None:
 
         **Filtering:** Use the Associate Filter on this page to export transactions for a single associate. Leave it on "All Associates" for a complete ledger dump.
         
-        **Validation:** Each export is validated to ensure all data is correctly written and row counts match.
+        **Validation:** Each export is validated to ensure the workbook row count matches the query result.
         """)
 
 
@@ -364,7 +376,7 @@ def main() -> None:
     )
     load_global_styles()
 st.title(f"{PAGE_ICON} {PAGE_TITLE}")
-st.caption("CSV export workflow for ledger data and audit trails.")
+st.caption("Excel export workflow for ledger data and audit trails.")
 
 toggle_cols = st.columns([6, 2])
 with toggle_cols[1]:
@@ -381,7 +393,7 @@ with action_cols[1]:
         "Validate file after export",
         value=True,
         key="export_validate_file",
-        help="Read the generated CSV and verify the row count before completing.",
+        help="Open the generated Excel workbook and verify the row count before completing.",
     )
 
 

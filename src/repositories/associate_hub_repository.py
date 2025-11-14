@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from typing import Dict, List, Optional, Tuple, Any
 
 from src.core.database import get_db_connection
@@ -18,6 +18,32 @@ from src.utils.logging_config import get_logger
 logger = get_logger(__name__)
 
 TWO_PLACES = Decimal("0.01")
+
+
+def _to_decimal(value: Any) -> Optional[Decimal]:
+    """Safely convert DB scalar to quantized Decimal."""
+    if value in (None, ""):
+        return None
+    try:
+        return Decimal(str(value)).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def _to_decimal_raw(value: Any) -> Optional[Decimal]:
+    """Convert DB scalar to Decimal without quantizing (useful for FX rates)."""
+    if value in (None, ""):
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def _decimal_to_text(value: Any) -> Optional[str]:
+    """Normalize numeric input to a DB-friendly text representation."""
+    decimal_value = _to_decimal(value)
+    return str(decimal_value) if decimal_value is not None else None
 
 
 @dataclass
@@ -41,6 +67,10 @@ class AssociateMetrics:
     last_activity_utc: Optional[str]
     status: str  # 'balanced', 'overholding', 'short'
     status_color: str
+    internal_notes: Optional[str] = None
+    max_surebet_stake_eur: Optional[Decimal] = None
+    max_bookmaker_exposure_eur: Optional[Decimal] = None
+    preferred_balance_chat_id: Optional[str] = None
 
     def delta_display(self) -> str:
         """Format delta for display with sign."""
@@ -68,6 +98,15 @@ class BookmakerSummary:
     status: str
     status_icon: str
     status_color: str
+    pending_balance_eur: Optional[Decimal] = None
+    bookmaker_chat_id: Optional[str] = None
+    coverage_chat_id: Optional[str] = None
+    region: Optional[str] = None
+    risk_level: Optional[str] = None
+    internal_notes: Optional[str] = None
+    associate_alias: Optional[str] = None
+    active_balance_native: Optional[Decimal] = None
+    pending_balance_native: Optional[Decimal] = None
 
 
 class AssociateHubRepository:
@@ -126,6 +165,10 @@ class AssociateHubRepository:
             a.is_admin AS is_admin,
             a.is_active AS is_active,
             a.multibook_chat_id AS telegram_chat_id,
+            a.internal_notes AS internal_notes,
+            a.max_surebet_stake_eur AS max_surebet_stake_eur,
+            a.max_bookmaker_exposure_eur AS max_bookmaker_exposure_eur,
+            a.preferred_balance_chat_id AS preferred_balance_chat_id,
             COUNT(DISTINCT b.id) AS bookmaker_count,
             COUNT(DISTINCT CASE WHEN b.is_active = 1 THEN b.id END) AS active_bookmaker_count,
             COALESCE(deposits.net_deposits_eur, 0) AS net_deposits_eur,
@@ -187,9 +230,24 @@ class AssociateHubRepository:
         
         # Add filters
         if search:
-            query += " AND (a.display_alias LIKE ? OR a.multibook_chat_id LIKE ?)"
-            search_param = f"%{search}%"
-            params.extend([search_param, search_param])
+            normalized_search = f"%{search.lower()}%"
+            query += (
+                " AND (LOWER(a.display_alias) LIKE ? "
+                "OR LOWER(COALESCE(a.multibook_chat_id, '')) LIKE ? "
+                "OR EXISTS (SELECT 1 FROM bookmakers bsearch "
+                "WHERE bsearch.associate_id = a.id AND ("
+                "LOWER(COALESCE(bsearch.bookmaker_name, '')) LIKE ? "
+                "OR LOWER(COALESCE(bsearch.bookmaker_chat_id, '')) LIKE ?"
+                ")))"
+            )
+            params.extend(
+                [
+                    normalized_search,
+                    normalized_search,
+                    normalized_search,
+                    normalized_search,
+                ]
+            )
             
         if admin_filter:
             admin_placeholders = ",".join("?" * len(admin_filter))
@@ -213,7 +271,9 @@ class AssociateHubRepository:
         
         query += (
             " GROUP BY a.id, a.display_alias, a.home_currency, a.is_admin, a.is_active, "
-            "a.multibook_chat_id, deposits.net_deposits_eur, holdings.current_holding_eur, "
+            "a.multibook_chat_id, a.internal_notes, a.max_surebet_stake_eur, "
+            "a.max_bookmaker_exposure_eur, a.preferred_balance_chat_id, "
+            "deposits.net_deposits_eur, holdings.current_holding_eur, "
             "pending.pending_balance_eur"
         )
         
@@ -229,6 +289,7 @@ class AssociateHubRepository:
             "balance_asc": "COALESCE(holdings.current_holding_eur, 0) ASC",
             "pending_desc": "COALESCE(pending.pending_balance_eur, 0) DESC",
             "pending_asc": "COALESCE(pending.pending_balance_eur, 0) ASC",
+            "bookmaker_active_desc": "active_bookmaker_count DESC, a.display_alias ASC",
         }
         
         query += f" ORDER BY {sort_map.get(sort_by, sort_map['alias_asc'])}"
@@ -289,10 +350,14 @@ class AssociateHubRepository:
                 delta_eur=delta_eur,
                 last_activity_utc=row["last_activity_utc"],
                 status=status,
-                status_color=status_color
+                status_color=status_color,
+                internal_notes=row.get("internal_notes"),
+                max_surebet_stake_eur=_to_decimal(row.get("max_surebet_stake_eur")),
+                max_bookmaker_exposure_eur=_to_decimal(row.get("max_bookmaker_exposure_eur")),
+                preferred_balance_chat_id=row.get("preferred_balance_chat_id"),
             )
             metrics.append(metric)
-        
+
         return metrics
 
     def list_bookmakers_for_associate(self, associate_id: int) -> List[BookmakerSummary]:
@@ -311,31 +376,66 @@ class AssociateHubRepository:
             b.bookmaker_name,
             b.is_active AS is_active,
             b.parsing_profile AS parsing_profile,
-            a.home_currency AS native_currency,
+            b.account_currency AS account_currency,
+            b.bookmaker_chat_id AS bookmaker_chat_id,
+            b.coverage_chat_id AS coverage_chat_id,
+            b.region AS region,
+            b.risk_level AS risk_level,
+            b.internal_notes AS internal_notes,
+            a.display_alias AS associate_alias,
+            a.home_currency AS associate_home_currency,
             COALESCE(ledger.modeled_balance_eur, 0) AS modeled_balance_eur,
             checks.reported_balance_eur,
-            checks.last_balance_check_utc
+            checks.balance_native,
+            checks.native_currency AS check_native_currency,
+            checks.fx_rate_used,
+            checks.last_balance_check_utc,
+            COALESCE(pending.pending_balance_eur, 0) AS pending_balance_eur
         FROM bookmakers b
         JOIN associates a ON a.id = b.associate_id
         LEFT JOIN (
             SELECT 
                 bookmaker_id,
-                SUM(CASE WHEN amount_eur > 0 THEN amount_eur ELSE 0 END) - 
-                SUM(CASE WHEN amount_eur < 0 THEN ABS(amount_eur) ELSE 0 END) AS modeled_balance_eur
+                SUM(
+                    CASE
+                        WHEN amount_eur IS NULL THEN 0
+                        WHEN type = 'DEPOSIT' THEN CAST(amount_eur AS REAL)
+                        WHEN type = 'WITHDRAWAL' THEN -CAST(amount_eur AS REAL)
+                        ELSE 0
+                    END
+                ) AS modeled_balance_eur
             FROM ledger_entries 
             WHERE associate_id = ?
-            AND bookmaker_id IS NOT NULL
+              AND bookmaker_id IS NOT NULL
             GROUP BY bookmaker_id
         ) ledger ON ledger.bookmaker_id = b.id
         LEFT JOIN (
             SELECT 
                 bookmaker_id,
                 balance_eur AS reported_balance_eur,
+                balance_native,
+                native_currency,
+                fx_rate_used,
                 check_date_utc AS last_balance_check_utc,
-                ROW_NUMBER() OVER (PARTITION BY bookmaker_id ORDER BY check_date_utc DESC) as rn
+                ROW_NUMBER() OVER (PARTITION BY bookmaker_id ORDER BY check_date_utc DESC) AS rn
             FROM bookmaker_balance_checks
             WHERE associate_id = ?
         ) checks ON checks.bookmaker_id = b.id AND checks.rn = 1
+        LEFT JOIN (
+            SELECT 
+                bookmaker_id,
+                SUM(
+                    CASE
+                        WHEN stake_eur IS NOT NULL AND stake_eur != ''
+                        THEN CAST(stake_eur AS REAL)
+                        ELSE 0
+                    END
+                ) AS pending_balance_eur
+            FROM bets
+            WHERE status IN ('verified', 'matched')
+              AND bookmaker_id IS NOT NULL
+            GROUP BY bookmaker_id
+        ) pending ON pending.bookmaker_id = b.id
         WHERE b.associate_id = ?
         ORDER BY b.bookmaker_name
         """
@@ -372,20 +472,48 @@ class AssociateHubRepository:
                     status_icon = "🔻"
                     status_color = "#ffebee"
             
+            pending_balance = _to_decimal(row.get("pending_balance_eur")) or Decimal("0.00")
+            fx_rate = _to_decimal_raw(row.get("fx_rate_used"))
+            balance_native = _to_decimal(row.get("balance_native"))
+            native_currency = (
+                (row.get("check_native_currency")
+                 or row.get("account_currency")
+                 or row.get("associate_home_currency")
+                 or "EUR")
+                .strip()
+                .upper()
+            )
+
+            if balance_native is None and reported_balance is not None and fx_rate not in (None, Decimal("0")):
+                balance_native = (reported_balance / fx_rate).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+
+            pending_native = None
+            if pending_balance is not None and fx_rate not in (None, Decimal("0")):
+                pending_native = (pending_balance / fx_rate).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+
             summary = BookmakerSummary(
                 associate_id=associate_id,
                 bookmaker_id=row["bookmaker_id"],
                 bookmaker_name=row["bookmaker_name"],
                 is_active=bool(row["is_active"]),
                 parsing_profile=row["parsing_profile"],
-                native_currency=row["native_currency"] or "EUR",
+                native_currency=native_currency,
                 modeled_balance_eur=modeled_balance,
                 reported_balance_eur=reported_balance,
                 delta_eur=delta_eur.quantize(TWO_PLACES, rounding=ROUND_HALF_UP) if delta_eur else None,
                 last_balance_check_utc=row["last_balance_check_utc"],
                 status=status,
                 status_icon=status_icon,
-                status_color=status_color
+                status_color=status_color,
+                pending_balance_eur=pending_balance,
+                bookmaker_chat_id=row.get("bookmaker_chat_id"),
+                coverage_chat_id=row.get("coverage_chat_id"),
+                region=row.get("region"),
+                risk_level=row.get("risk_level"),
+                internal_notes=row.get("internal_notes"),
+                associate_alias=row.get("associate_alias"),
+                active_balance_native=balance_native,
+                pending_balance_native=pending_native,
             )
             summaries.append(summary)
         
@@ -410,6 +538,10 @@ class AssociateHubRepository:
                 is_admin,
                 is_active,
                 multibook_chat_id,
+                internal_notes,
+                max_surebet_stake_eur,
+                max_bookmaker_exposure_eur,
+                preferred_balance_chat_id,
                 created_at_utc,
                 updated_at_utc
             FROM associates
@@ -429,6 +561,10 @@ class AssociateHubRepository:
             "is_admin": bool(row["is_admin"]),
             "is_active": bool(row["is_active"]),
             "telegram_chat_id": row["multibook_chat_id"],
+            "internal_notes": row.get("internal_notes"),
+            "max_surebet_stake_eur": row.get("max_surebet_stake_eur"),
+            "max_bookmaker_exposure_eur": row.get("max_bookmaker_exposure_eur"),
+            "preferred_balance_chat_id": row.get("preferred_balance_chat_id"),
             "created_at_utc": row["created_at_utc"],
             "updated_at_utc": row["updated_at_utc"]
         }
@@ -440,7 +576,12 @@ class AssociateHubRepository:
         home_currency: str,
         is_admin: bool,
         is_active: bool,
-        telegram_chat_id: Optional[str] = None
+        telegram_chat_id: Optional[str] = None,
+        *,
+        internal_notes: Optional[str] = None,
+        max_surebet_stake_eur: Optional[Any] = None,
+        max_bookmaker_exposure_eur: Optional[Any] = None,
+        preferred_balance_chat_id: Optional[str] = None,
     ) -> None:
         """
         Update associate details.
@@ -452,6 +593,10 @@ class AssociateHubRepository:
             is_admin: New admin status
             is_active: New active status
             telegram_chat_id: New Telegram chat ID
+            internal_notes: Free-form notes for operators
+            max_surebet_stake_eur: Optional risk limit per surebet
+            max_bookmaker_exposure_eur: Optional aggregate exposure cap
+            preferred_balance_chat_id: Chat where balance reports go
         """
         from src.utils.datetime_helpers import utc_now_iso
         
@@ -463,6 +608,10 @@ class AssociateHubRepository:
                 is_admin = ?,
                 is_active = ?,
                 multibook_chat_id = ?,
+                internal_notes = ?,
+                max_surebet_stake_eur = ?,
+                max_bookmaker_exposure_eur = ?,
+                preferred_balance_chat_id = ?,
                 updated_at_utc = ?
             WHERE id = ?
             """,
@@ -472,6 +621,10 @@ class AssociateHubRepository:
                 is_admin,
                 is_active,
                 telegram_chat_id,
+                internal_notes,
+                _decimal_to_text(max_surebet_stake_eur),
+                _decimal_to_text(max_bookmaker_exposure_eur),
+                preferred_balance_chat_id,
                 utc_now_iso(),
                 associate_id
             )
@@ -489,6 +642,63 @@ class AssociateHubRepository:
             is_active=is_active,
             telegram_chat_id=telegram_chat_id
         )
+
+    def create_associate(
+        self,
+        display_alias: str,
+        home_currency: str,
+        is_admin: bool,
+        is_active: bool,
+        *,
+        telegram_chat_id: Optional[str] = None,
+        internal_notes: Optional[str] = None,
+        max_surebet_stake_eur: Optional[Any] = None,
+        max_bookmaker_exposure_eur: Optional[Any] = None,
+        preferred_balance_chat_id: Optional[str] = None,
+    ) -> int:
+        """Insert a new associate row and return its ID."""
+        from src.utils.datetime_helpers import utc_now_iso
+
+        timestamp = utc_now_iso()
+        cursor = self.db.execute(
+            """
+            INSERT INTO associates (
+                display_alias,
+                home_currency,
+                is_admin,
+                is_active,
+                multibook_chat_id,
+                internal_notes,
+                max_surebet_stake_eur,
+                max_bookmaker_exposure_eur,
+                preferred_balance_chat_id,
+                created_at_utc,
+                updated_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                display_alias,
+                home_currency.upper(),
+                is_admin,
+                is_active,
+                telegram_chat_id,
+                internal_notes,
+                _decimal_to_text(max_surebet_stake_eur),
+                _decimal_to_text(max_bookmaker_exposure_eur),
+                preferred_balance_chat_id,
+                timestamp,
+                timestamp,
+            ),
+        )
+        self.db.commit()
+        new_id = int(cursor.lastrowid)
+        logger.info(
+            "associate_created",
+            associate_id=new_id,
+            display_alias=display_alias,
+            home_currency=home_currency,
+        )
+        return new_id
 
     def get_bookmaker_for_edit(self, bookmaker_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -508,6 +718,12 @@ class AssociateHubRepository:
                 bookmaker_name,
                 is_active,
                 parsing_profile,
+                account_currency,
+                bookmaker_chat_id,
+                coverage_chat_id,
+                region,
+                risk_level,
+                internal_notes,
                 created_at_utc,
                 updated_at_utc
             FROM bookmakers
@@ -526,6 +742,12 @@ class AssociateHubRepository:
             "bookmaker_name": row["bookmaker_name"],
             "is_active": bool(row["is_active"]),
             "parsing_profile": row["parsing_profile"],
+            "account_currency": row.get("account_currency") or "EUR",
+            "bookmaker_chat_id": row.get("bookmaker_chat_id"),
+            "coverage_chat_id": row.get("coverage_chat_id"),
+            "region": row.get("region"),
+            "risk_level": row.get("risk_level"),
+            "internal_notes": row.get("internal_notes"),
             "created_at_utc": row["created_at_utc"],
             "updated_at_utc": row["updated_at_utc"]
         }
@@ -535,7 +757,15 @@ class AssociateHubRepository:
         bookmaker_id: int,
         bookmaker_name: str,
         is_active: bool,
-        parsing_profile: Optional[str] = None
+        parsing_profile: Optional[str] = None,
+        *,
+        associate_id: Optional[int] = None,
+        account_currency: Optional[str] = None,
+        bookmaker_chat_id: Optional[str] = None,
+        coverage_chat_id: Optional[str] = None,
+        region: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        internal_notes: Optional[str] = None,
     ) -> None:
         """
         Update bookmaker details.
@@ -547,20 +777,51 @@ class AssociateHubRepository:
             parsing_profile: New parsing profile
         """
         from src.utils.datetime_helpers import utc_now_iso
-        
+        current = self.get_bookmaker_for_edit(bookmaker_id)
+        if not current:
+            raise ValueError(f"Bookmaker not found: {bookmaker_id}")
+
+        target_associate = associate_id if associate_id is not None else current["associate_id"]
+        currency_value = (account_currency or current.get("account_currency") or "EUR").strip().upper()
+        chat_value = (bookmaker_chat_id if bookmaker_chat_id is not None else current.get("bookmaker_chat_id")) or None
+        coverage_value = (coverage_chat_id if coverage_chat_id is not None else current.get("coverage_chat_id")) or None
+        region_value = (region if region is not None else current.get("region")) or None
+        risk_value = (risk_level if risk_level is not None else current.get("risk_level")) or None
+        notes_value = (internal_notes if internal_notes is not None else current.get("internal_notes")) or None
+        profile_value = parsing_profile if parsing_profile is not None else current.get("parsing_profile")
+        chat_value = chat_value.strip() if isinstance(chat_value, str) and chat_value.strip() else None
+        coverage_value = coverage_value.strip() if isinstance(coverage_value, str) and coverage_value.strip() else None
+        region_value = region_value.strip() if isinstance(region_value, str) and region_value.strip() else None
+        risk_value = risk_value.strip() if isinstance(risk_value, str) and risk_value.strip() else None
+        notes_value = notes_value.strip() if isinstance(notes_value, str) and notes_value.strip() else None
+
         cursor = self.db.execute(
             """
             UPDATE bookmakers
             SET bookmaker_name = ?,
+                associate_id = ?,
+                account_currency = ?,
                 is_active = ?,
                 parsing_profile = ?,
+                bookmaker_chat_id = ?,
+                coverage_chat_id = ?,
+                region = ?,
+                risk_level = ?,
+                internal_notes = ?,
                 updated_at_utc = ?
             WHERE id = ?
             """,
             (
                 bookmaker_name,
+                target_associate,
+                currency_value,
                 is_active,
-                parsing_profile,
+                profile_value,
+                chat_value,
+                coverage_value,
+                region_value,
+                risk_value,
+                notes_value,
                 utc_now_iso(),
                 bookmaker_id
             )
@@ -574,8 +835,70 @@ class AssociateHubRepository:
             bookmaker_id=bookmaker_id,
             bookmaker_name=bookmaker_name,
             is_active=is_active,
-            parsing_profile=parsing_profile
+            parsing_profile=profile_value,
+            associate_id=target_associate,
+            account_currency=currency_value
         )
+
+    def create_bookmaker(
+        self,
+        associate_id: int,
+        bookmaker_name: str,
+        is_active: bool,
+        parsing_profile: Optional[str] = None,
+        *,
+        account_currency: str = "EUR",
+        bookmaker_chat_id: Optional[str] = None,
+        coverage_chat_id: Optional[str] = None,
+        region: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        internal_notes: Optional[str] = None,
+    ) -> int:
+        """Insert a new bookmaker for an associate and return its ID."""
+        from src.utils.datetime_helpers import utc_now_iso
+
+        timestamp = utc_now_iso()
+        cursor = self.db.execute(
+            """
+            INSERT INTO bookmakers (
+                associate_id,
+                bookmaker_name,
+                parsing_profile,
+                is_active,
+                account_currency,
+                bookmaker_chat_id,
+                coverage_chat_id,
+                region,
+                risk_level,
+                internal_notes,
+                created_at_utc,
+                updated_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                associate_id,
+                bookmaker_name,
+                parsing_profile,
+                is_active,
+                (account_currency or "EUR").strip().upper(),
+                (bookmaker_chat_id or "").strip() or None,
+                (coverage_chat_id or "").strip() or None,
+                (region or "").strip() or None,
+                (risk_level or "").strip() or None,
+                (internal_notes or "").strip() or None,
+                timestamp,
+                timestamp,
+            ),
+        )
+        self.db.commit()
+        new_id = int(cursor.lastrowid)
+        logger.info(
+            "bookmaker_created",
+            bookmaker_id=new_id,
+            associate_id=associate_id,
+            bookmaker_name=bookmaker_name,
+        )
+        return new_id
 
     # Context manager convenience -------------------------------------------------
 

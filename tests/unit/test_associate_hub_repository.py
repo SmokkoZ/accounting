@@ -116,7 +116,10 @@ class TestAssociateHubRepository:
         # Check that search term is in the query
         query = call_args[0][0]
         assert "WHERE" in query
-        assert "a.display_alias LIKE ?" in query
+        assert "LOWER(a.display_alias) LIKE ?" in query
+        assert "LOWER(COALESCE(a.multibook_chat_id, '')) LIKE ?" in query
+        assert "LOWER(COALESCE(bsearch.bookmaker_name, '')) LIKE ?" in query
+        assert "LOWER(COALESCE(bsearch.bookmaker_chat_id, '')) LIKE ?" in query
         assert "a.is_admin IN" in query
         assert "a.is_active IN" in query
         assert "a.home_currency IN" in query
@@ -139,6 +142,7 @@ class TestAssociateHubRepository:
             "balance_desc",
             "pending_asc",
             "pending_desc",
+            "bookmaker_active_desc",
         ]
         
         for sort_option in sort_options:
@@ -159,6 +163,10 @@ class TestAssociateHubRepository:
             'is_active': 1,
             'home_currency': 'EUR',
             'multibook_chat_id': '123456',
+            'internal_notes': 'notes',
+            'max_surebet_stake_eur': '100.00',
+            'max_bookmaker_exposure_eur': '200.00',
+            'preferred_balance_chat_id': '-999',
             'created_at_utc': '2025-01-01T00:00:00Z',
             'updated_at_utc': '2025-01-01T00:00:00Z'
         }
@@ -179,6 +187,10 @@ class TestAssociateHubRepository:
         assert result['is_active'] == True
         assert result['home_currency'] == 'EUR'
         assert result['telegram_chat_id'] == '123456'
+        assert result['internal_notes'] == 'notes'
+        assert result['max_surebet_stake_eur'] == '100.00'
+        assert result['max_bookmaker_exposure_eur'] == '200.00'
+        assert result['preferred_balance_chat_id'] == '-999'
     
     def test_get_associate_for_edit_not_found(self, repository, mock_db):
         """Test retrieving non-existent associate."""
@@ -200,7 +212,11 @@ class TestAssociateHubRepository:
             home_currency="GBP",
             is_admin=False,
             is_active=True,
-            telegram_chat_id="789012"
+            telegram_chat_id="789012",
+            internal_notes="note",
+            max_surebet_stake_eur="100",
+            max_bookmaker_exposure_eur="200",
+            preferred_balance_chat_id="-111",
         )
         
         # Verify query was called
@@ -216,14 +232,19 @@ class TestAssociateHubRepository:
         assert "is_admin = ?" in query
         assert "is_active = ?" in query
         assert "multibook_chat_id = ?" in query
+        assert "preferred_balance_chat_id = ?" in query
         assert "WHERE id = ?" in query
         
         assert params[0] == "Updated User"
         assert params[1] == "GBP"
-        assert params[2] == False
-        assert params[3] == True
+        assert params[2] is False
+        assert params[3] is True
         assert params[4] == "789012"
-        assert params[6] == 1
+        assert params[5] == "note"
+        assert params[6] == "100.00"
+        assert params[7] == "200.00"
+        assert params[8] == "-111"
+        assert params[10] == 1
         
         # Repository uses context manager for transactions, no explicit commit needed
     
@@ -236,11 +257,20 @@ class TestAssociateHubRepository:
                 'bookmaker_name': 'Bookmaker A',
                 'is_active': 1,
                 'parsing_profile': None,
-                'associate_id': 1,
-                'native_currency': 'EUR',
+                'account_currency': 'USD',
+                'bookmaker_chat_id': '-100',
+                'coverage_chat_id': '-200',
+                'region': 'EU',
+                'risk_level': 'High',
+                'internal_notes': 'note',
+                'associate_alias': 'Tester',
+                'associate_home_currency': 'EUR',
                 'modeled_balance_eur': '500.00',
                 'reported_balance_eur': '520.00',
-                'delta_eur': '20.00',
+                'balance_native': '800.00',
+                'check_native_currency': 'AUD',
+                'fx_rate_used': '1.60',
+                'pending_balance_eur': '50.00',
                 'last_balance_check_utc': '2025-01-01T10:00:00Z'
             }
         ]
@@ -261,20 +291,44 @@ class TestAssociateHubRepository:
         assert bookmaker.is_active == True
         assert bookmaker.parsing_profile is None
         assert bookmaker.associate_id == 1
-        assert bookmaker.native_currency == 'EUR'
+        assert bookmaker.associate_alias == 'Tester'
+        assert bookmaker.native_currency == 'AUD'
         assert bookmaker.modeled_balance_eur == Decimal('500.00')
         assert bookmaker.reported_balance_eur == Decimal('520.00')
         assert bookmaker.delta_eur == Decimal('20.00')
+        assert bookmaker.pending_balance_eur == Decimal('50.00')
+        assert bookmaker.active_balance_native == Decimal('800.00')
+        assert bookmaker.pending_balance_native == Decimal('31.25')
+        assert bookmaker.bookmaker_chat_id == '-100'
+        assert bookmaker.coverage_chat_id == '-200'
+        assert bookmaker.internal_notes == 'note'
         assert bookmaker.last_balance_check_utc == '2025-01-01T10:00:00Z'
     
     def test_update_bookmaker(self, repository, mock_db):
         """Test updating bookmaker details."""
+        repository.get_bookmaker_for_edit = Mock(
+            return_value={
+                "associate_id": 1,
+                "account_currency": "EUR",
+                "bookmaker_chat_id": None,
+                "coverage_chat_id": None,
+                "region": None,
+                "risk_level": None,
+                "internal_notes": None,
+                "parsing_profile": None,
+            }
+        )
+        mock_db.execute.return_value = Mock()
         # Call method
         repository.update_bookmaker(
             bookmaker_id=1,
             bookmaker_name="Updated Bookmaker",
             is_active=False,
-            parsing_profile='{"test": "profile"}'
+            parsing_profile='{"test": "profile"}',
+            associate_id=2,
+            account_currency="USD",
+            bookmaker_chat_id="-1",
+            internal_notes="note",
         )
         
         # Verify query
@@ -286,14 +340,20 @@ class TestAssociateHubRepository:
         
         assert "UPDATE bookmakers" in query
         assert "bookmaker_name = ?" in query
+        assert "associate_id = ?" in query
         assert "is_active = ?" in query
         assert "parsing_profile = ?" in query
+        assert "bookmaker_chat_id = ?" in query
         assert "WHERE id = ?" in query
         
         assert params[0] == "Updated Bookmaker"
-        assert params[1] == False
-        assert params[2] == '{"test": "profile"}'
-        assert params[4] == 1
+        assert params[1] == 2
+        assert params[2] == "USD"
+        assert params[3] is False
+        assert params[4] == '{"test": "profile"}'
+        assert params[5] == "-1"
+        assert params[9] == "note"
+        assert params[11] == 1
         
         # Repository uses context manager for transactions, no explicit commit needed
     

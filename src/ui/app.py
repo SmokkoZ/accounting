@@ -88,6 +88,13 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
         description="Manage associates, bookmakers, and funding transactions.",
     ),
     PageSpec(
+        title="Associates Hub",
+        section="Operations",
+        icon=":material/diversity_3:",
+        script="pages/7_associates_hub.py",
+        description="Configure associates and bookmakers with inline editing.",
+    ),
+    PageSpec(
         title="Incoming Bets",
         section="Operations",
         icon=":material/inbox:",
@@ -155,7 +162,7 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
         section="Operations",
         icon=":material/ios_share:",
         script="pages/5_export.py",
-        description="CSV export workflow for ledger data and audit trails.",
+        description="Excel export workflow for ledger data and audit trails.",
     ),
     PageSpec(
         title="Statements",

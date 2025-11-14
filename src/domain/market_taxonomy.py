@@ -581,6 +581,26 @@ def find_market_code_from_label(
             return "AWAY_TEAM_TOTAL_FOULS_OVER_UNDER", implied_period
         return "TOTAL_FOULS_OVER_UNDER", implied_period
 
+    # Team "to score" / "no goal" using explicit team name or side wording
+    if any_in(search_text, [" TO SCORE", " SEGNA "]):
+        home_flag = has_team_indicator(home=True)
+        away_flag = has_team_indicator(home=False)
+        if home_flag and not away_flag:
+            return "HOME_TEAM_TO_SCORE", implied_period
+        if away_flag and not home_flag:
+            return "AWAY_TEAM_TO_SCORE", implied_period
+
+    if any_in(
+        up_simplified,
+        [" NO GOAL", " NO GOL", " DOES NOT SCORE", " DOESN'T SCORE", " DOESNT SCORE"],
+    ):
+        home_flag = has_team_indicator(home=True)
+        away_flag = has_team_indicator(home=False)
+        if home_flag and not away_flag:
+            return "HOME_TEAM_TO_SCORE", implied_period
+        if away_flag and not home_flag:
+            return "AWAY_TEAM_TO_SCORE", implied_period
+
     # Team Yes/No props (no O/U)
     if any_in(up_simplified, ["HOME TEAM TO SCORE", "TEAM A TO SCORE", "SEGNA CASA"]):
         return "HOME_TEAM_TO_SCORE", implied_period

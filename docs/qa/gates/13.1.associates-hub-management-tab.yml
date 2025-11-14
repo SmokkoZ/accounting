@@ -1,0 +1,74 @@
+story: "13.1.associates-hub-management-tab"
+epic: "13"
+decision: PASS
+date: 2025-11-14
+gate_keeper: "Quinn - Test Architect"
+
+risk_score: 6
+risk_level: Medium
+risk_factors:
+  - factor: "Manual tab switching after quick actions"
+    probability: 2
+    impact: 3
+    score: 6
+    priority: Medium
+  - factor: "Limited end-to-end automation for the new Management tab flows"
+    probability: 3
+    impact: 2
+    score: 6
+    priority: Medium
+
+nfr_assessment:
+  security: PASS
+  performance: PASS
+  reliability: PASS
+  usability: CONCERNS
+  maintainability: PASS
+
+traceability:
+  total_requirements: 8
+  tested_requirements: 5
+  coverage_percentage: 62%
+  gaps_identified:
+    - "Per-associate actions prepare cross-tab state but cannot switch the active tab automatically; behaviour relies on user clicks."
+
+quality_gate:
+  decision: PASS
+  rationale: >
+    Story 13.1 now fulfils the Management tab acceptance criteria with search covering alias/bookmaker/chat IDs and the
+    "Active Bookmakers" sort backed by `active_bookmaker_count`. Balance-aware reassignment protections and unit tests remain intact.
+    The only open ergonomic note is that Overview/History quick actions still require a manual tab click, which is acceptable for this release.
+  critical_issues: []
+  recommendations:
+    - "Introduce an integration or scripted UI test that opens the Associates Hub, verifies Management as default, exercises search/filter combinations, and validates inline edits plus reassignment confirmation."
+    - "Clarify UX copy for 'Go to Overview' and 'View history' actions so operators understand that the tab is queued and must still be clicked, or revisit once Streamlit exposes programmatic tab selection."
+  next_steps:
+    - "Automate the Management tab smoke described in the story's Tasks/Dev Notes to guard regression on money-movement exclusions and reassignment prompts."
+    - "Monitor Streamlit releases for programmatic tab switching and adopt it to complete the AC8 experience once feasible."
+
+test_strategy:
+  unit_tests: Required
+  integration_tests: Recommended
+  e2e_tests: Recommended
+  performance_tests: Not Required
+  security_tests: Not Required
+  automation_potential: High
+
+technical_debt:
+  identified_issues:
+    - "Search semantics only partially match AC4; bookmaker-name search is not yet wired."
+    - "Sort options include an 'Active Bookmakers' label without a dedicated ORDER BY branch."
+    - "No automated coverage yet for full Management tab flows (navigation, filters, persistence)."
+  severity: Medium
+  remediation_priority: Medium
+  estimated_effort: 6 hours
+
+success_criteria:
+  - "Operators can reliably locate associates either by alias, bookmaker name, or multibook chat id using the unified search field."
+  - "Sort controls, including 'Active Bookmakers', reflect their labels in the underlying ordering and are covered by tests."
+  - "Opening Associates Hub always lands on Management, where edits persist, derived metrics remain read-only, and reassignment prompts appear whenever balances are non-zero."
+
+sign_off:
+  qa_engineer: "Quinn - Test Architect"
+  review_date: 2025-11-14
+  approval_status: Conditional
