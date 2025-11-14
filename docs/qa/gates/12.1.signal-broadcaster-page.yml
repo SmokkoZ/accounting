@@ -1,0 +1,79 @@
+story: "12.1.signal-broadcaster-page"
+epic: "12"
+decision: PASS
+date: 2025-11-14
+gate_keeper: "Quinn - Test Architect"
+
+risk_score: 16
+risk_level: Medium
+risk_factors:
+  - factor: "Telegram broadcast reliability (per-chat retry and banner accuracy)"
+    probability: 4
+    impact: 4
+    score: 16
+    priority: High
+  - factor: "Preset accuracy from associates/bookmakers joins"
+    probability: 3
+    impact: 3
+    score: 9
+    priority: Medium
+  - factor: "Preview versus actual Telegram formatting drift"
+    probability: 3
+    impact: 4
+    score: 12
+    priority: Medium
+
+nfr_assessment:
+  security: PASS
+  performance: PASS
+  reliability: CONCERNS
+  usability: PASS
+  maintainability: PASS
+
+traceability:
+  total_requirements: 5
+  tested_requirements: 3
+  coverage_percentage: 60%
+  gaps_identified:
+    - "AC4 and AC5 need deterministic integration tests for multi-chat success and failure flows."
+
+quality_gate:
+  decision: PASS
+  rationale: >
+    Requirements, tasks, and dev notes clearly describe the new Streamlit workflow,
+    chat data joins, and Telegram delivery path. Remaining risk is limited to
+    documenting and automating multi-chat send failure scenarios, which is
+    manageable before implementation.
+  critical_issues: []
+  recommendations:
+    - "Author concrete test cases for AC4 and AC5 with sample Telegram error payloads."
+    - "Add an operator resend or audit-log verification step to the testing checklist."
+  next_steps:
+    - "Mock the Telegram client in integration tests to assert retry/backoff and success banners."
+    - "Instrument structured logs (chat_id, preset, retry counts) so QA can audit broadcasts."
+
+test_strategy:
+  unit_tests: Required
+  integration_tests: Required
+  e2e_tests: Recommended
+  performance_tests: Not Required
+  security_tests: Recommended
+  automation_potential: High
+
+technical_debt:
+  identified_issues:
+    - "Reliability scenarios lack explicit acceptance tests; codify them before coding begins."
+  severity: Medium
+  remediation_priority: Medium
+  estimated_effort: 4 hours
+
+success_criteria:
+  - "Send button stays disabled until text and chats are selected, with helper copy explaining the state."
+  - "Preview renders whitespace verbatim and matches the message received in Telegram."
+  - "Success banners report the exact chat count and per-chat failures surface inline without page reload."
+
+sign_off:
+  qa_engineer: "Quinn - Test Architect"
+  review_date: 2025-11-14
+  approval_status: Approved
+

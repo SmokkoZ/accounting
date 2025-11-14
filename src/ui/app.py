@@ -165,6 +165,13 @@ PAGE_REGISTRY: Sequence[PageSpec] = (
         description="Generate monthly partner statements with funding, entitlement, and reconciliation.",
     ),
     PageSpec(
+        title="Signal Broadcaster",
+        section="Telegram",
+        icon=":material/campaign:",
+        script="pages/8_signal_broadcaster.py",
+        description="Compose, preview, and send raw signals to Telegram chats.",
+    ),
+    PageSpec(
         title="Pending Photos",
         section="Telegram",
         icon=":material/photo_library:",
