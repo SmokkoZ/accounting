@@ -611,7 +611,9 @@ class TestStatementCsvExport:
             assert table_rows[0][5] == "EURO"
 
             summary_start = rows.index([], header_index)
-            summary_rows = [row for row in rows[summary_start + 1 :] if row]
+            summary_rows = [
+                row for row in rows[summary_start + 1 :] if row and row[0] != "Footnote"
+            ]
             summary_map = {row[0]: to_decimal(row[1]) for row in summary_rows}
 
             assert summary_map["Net Deposits (ND)"] == Decimal("200.00")
@@ -620,6 +622,7 @@ class TestStatementCsvExport:
             assert summary_map["Exit Payout (-I'')"] == Decimal("50.00")
             assert summary_map["Multibook Delta"] == Decimal("0.00")
             assert summary_map["UTILE (YF - ND)"] == Decimal("250.00")
+            assert any(row for row in rows if row and row[0] == "Footnote")
         finally:
             module.STATEMENT_EXPORT_DIR = original_dir
 

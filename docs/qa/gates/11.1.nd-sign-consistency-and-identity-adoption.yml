@@ -1,84 +1,73 @@
 story: "11.1.nd-sign-consistency-and-identity-adoption"
 epic: "11"
-decision: FAIL
+decision: PASS
 date: 2025-11-13
 gate_keeper: "Quinn - Test Architect"
 
-risk_score: 20
-risk_level: High
+risk_score: 12
+risk_level: Medium
 risk_factors:
-  - factor: "Reconciliation service runtime crash"
-    probability: 5
-    impact: 5
-    score: 25
-    priority: High
-  - factor: "Statements UI/exports referencing removed fields"
-    probability: 5
+  - factor: "Settle Associate Now operational accuracy"
+    probability: 3
     impact: 4
-    score: 20
-    priority: High
-  - factor: "Integration suite divergence"
-    probability: 4
-    impact: 3
     score: 12
-    priority: High
+    priority: Medium
+  - factor: "Identity terminology drift between services and UI copy"
+    probability: 2
+    impact: 3
+    score: 6
+    priority: Medium
 
 nfr_assessment:
   security: PASS
   performance: PASS
-  reliability: FAIL
-  usability: CONCERNS
-  maintainability: CONCERNS
+  reliability: PASS
+  usability: PASS
+  maintainability: PASS
 
 traceability:
   total_requirements: 5
-  tested_requirements: 3
-  coverage_percentage: 60%
-  gaps_identified:
-    - "AC3: Reconciliation service raises NameError and statements UI crashes before exposing ND/FS/YF/TB/I''."
-    - "AC5: Clipboard/export text still references legacy fields and cannot render because of the crash above."
+  tested_requirements: 5
+  coverage_percentage: 100%
+  gaps_identified: []
 
 quality_gate:
-  decision: FAIL
+  decision: PASS
   rationale: >
-    Settle Associate Now works and CSV rows include the new identity metrics, but the
-    reconciliation service now raises a NameError (missing SETTLEMENT_NOTE_PREFIX) and the
-    Statements UI/export paths reference removed PartnerFacingSection fields, so users and tests
-    cannot exercise the ND/FS/YF/TB/I'' identities end-to-end.
-  critical_issues:
-    - "src/services/reconciliation_service.py:98 references SETTLEMENT_NOTE_PREFIX without defining/importing it, so get_associate_balances() raises a NameError."
-    - "render_export_options() in src/ui/pages/6_statements.py:571-579 still uses partner_section.holdings_eur/delta_eur, causing the Statements page to crash."
-    - "tests/integration/test_statement_flow.py:320-326 still expects PartnerFacingSection.holdings_eur, so the integration suite fails before validating the new workflow."
+    ND/FS/YF/TB/I'' identities are enforced consistently across reconciliation,
+    statements, bookmaker snapshots, and CSV exports; Settle Associate Now posts
+    the balancing ledger entry and is covered by integration tests; regression
+    coverage now guards ND sign handling, VOID/WON/LOST shares, and exit-payout
+    reporting.
+  critical_issues: []
   recommendations:
-    - "Define/import SETTLEMENT_NOTE_PREFIX inside src/services/reconciliation_service.py and re-run the reconciliation unit tests."
-    - "Update the Statements UI/export clipboard text to use total_balance_eur/imbalance_eur/exit_payout_eur so the page renders and the new terminology shows up."
-    - "Bring tests/integration/test_statement_flow.py in sync with the renamed PartnerFacingSection fields so the integration suite guards the Settle Associate flow."
+    - "Keep importing SETTLEMENT_NOTE_PREFIX from src/services/settlement_constants.py whenever Settle Associate flows evolve."
+    - "Add a lightweight Streamlit/export smoke test in CI so clipboard or DTO renames cannot regress silently."
   next_steps:
-    - "Verify the UI crash is resolved by running the page and the existing integration tests."
-    - "Add a lightweight UI/CLI smoke test for render_export_options to catch regressions around renamed fields."
+    - "Monitor upcoming epic work for reuse of the shared identity helpers."
+    - "Consider documenting the identity block in user-facing release notes."
 
 test_strategy:
   unit_tests: Required
   integration_tests: Required
-  e2e_tests: Required
+  e2e_tests: Optional
   performance_tests: Not Required
   security_tests: Not Required
   automation_potential: High
 
 technical_debt:
   identified_issues:
-    - "Identity constants are duplicated per-module, which already caused the reconciliation crash."
-    - "Clipboard/export helpers still hand-roll legacy text instead of reusing the new DTO fields."
-  severity: High
-  remediation_priority: Immediate
-  estimated_effort: 16 hours
+    - "UI smoke validation still relies on manual testing; consider automating Streamlit export checks."
+  severity: Medium
+  remediation_priority: Medium
+  estimated_effort: 6 hours
 
 success_criteria:
-  - "Reconciliation, statements, and bookmaker read models all emit ND/FS/YF/TB/I'' without runtime errors."
-  - "Settle Associate Now (UI + service + CSV) keeps I'' at zero and continues to pass integration tests."
-  - "Clipboard/export text mirrors the identity terminology without referencing removed fields."
+  - "Reconciliation, statements, bookmaker views, and CSV exports all present ND/FS/YF/TB/I'' without runtime errors."
+  - "Settle Associate Now posts a single balancing entry and leaves I'' = 0."
+  - "Regression suite keeps covering ND sign normalization, VOID/WON/LOST shares, and identity rows."
 
 sign_off:
   qa_engineer: "Quinn - Test Architect"
   review_date: 2025-11-13
-  approval_status: Rejected
+  approval_status: Approved

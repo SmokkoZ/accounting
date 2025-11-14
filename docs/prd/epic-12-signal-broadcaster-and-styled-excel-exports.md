@@ -39,7 +39,7 @@ Enable the operator to quickly broadcast raw surebet signals to chosen Telegram 
    - “Export CSV/Download CSV” becomes “Export Excel/Download Excel” and returns .xlsx files.
    - Columns/rows match current CSV content and ordering (unless refined later by design).
    - Header row is bold with a light background shade; basic column width adjustment for readability.
-   - Deposits styled as positive (e.g., green tint/text); withdrawals as negative (e.g., red tint/text).
+   - Deposits styled as positive (e.g., green tint/entire row); withdrawals as negative (e.g., red tint/entire row).
    - Numeric columns typed/formatted as numbers (not text); files open cleanly in Excel.
    - Export errors surface clear user feedback; no silent failure.
 

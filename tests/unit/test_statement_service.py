@@ -18,6 +18,10 @@ from src.services.statement_service import (
     StatementService,
     BookmakerStatementRow,
 )
+from src.services.settlement_constants import (
+    SETTLEMENT_MODEL_FOOTNOTE,
+    SETTLEMENT_MODEL_VERSION,
+)
 
 
 @pytest.fixture
@@ -280,9 +284,36 @@ def test_build_statement_csv_rows_includes_identity_rows(service: StatementServi
     labels = [row[0] for row in rows if row]
     assert "Net Deposits (ND)" in labels
     assert "Exit Payout (-I'')" in labels
+    assert ["Identity Version", SETTLEMENT_MODEL_VERSION] in rows
     identity_map = {row[0]: row[1] for row in rows if len(row) >= 2}
     assert identity_map["Net Deposits (ND)"] == "500.00"
     assert identity_map["Exit Payout (-I'')"] == "50.00"
+    footers = [row for row in rows if row and row[0] == "Footnote"]
+    assert footers
+    assert footers[-1][1] == SETTLEMENT_MODEL_FOOTNOTE
+
+
+def test_build_roi_csv_rows_include_version_and_footnote(service: StatementService):
+    calc = service.generate_statement(
+        associate_id=7, cutoff_date=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    roi_rows = [
+        {
+            "surebet_id": 42,
+            "settled_at_utc": "2025-10-31T00:00:00Z",
+            "associate_stake": Decimal("10.00"),
+            "associate_profit": Decimal("2.50"),
+            "group_stake": Decimal("10.00"),
+            "group_profit": Decimal("2.50"),
+        }
+    ]
+    rows = service._build_roi_csv_rows(
+        calc,
+        export_time="2025-11-15T00:00:00Z",
+        roi_rows=roi_rows,
+    )
+    assert ["Identity Version", SETTLEMENT_MODEL_VERSION] in rows
+    assert rows[-1] == ["Footnote", SETTLEMENT_MODEL_FOOTNOTE]
 
 
 def test_validate_cutoff_date_future(monkeypatch: pytest.MonkeyPatch):

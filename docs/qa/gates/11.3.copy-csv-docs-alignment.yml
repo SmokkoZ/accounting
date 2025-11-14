@@ -1,0 +1,72 @@
+story: "11.3.copy-csv-docs-alignment"
+epic: "11"
+decision: PASS
+date: 2025-11-14
+gate_keeper: "Quinn - Test Architect"
+
+risk_score: 6
+risk_level: Medium
+risk_factors:
+  - factor: "Legacy copy mode still relies on manual verification"
+    probability: 2
+    impact: 3
+    score: 6
+    priority: Medium
+  - factor: "Terminology drift remains possible in long-form docs"
+    probability: 2
+    impact: 2
+    score: 4
+    priority: Low
+
+nfr_assessment:
+  security: PASS
+  performance: PASS
+  reliability: PASS
+  usability: PASS
+  maintainability: PASS
+
+traceability:
+  total_requirements: 5
+  tested_requirements: 5
+  coverage_percentage: 100%
+  gaps_identified: []
+
+quality_gate:
+  decision: PASS
+  rationale: >
+    Rollout guidance is documented in README, identity copy is centralized in
+    src/ui/utils/identity_copy.py, and automated CSV plus Streamlit tests now
+    cover ND/FS/YF/TB/I'' presentation, so regressions will be caught in CI.
+  critical_issues: []
+  recommendations:
+    - "Update docs/prd/README.md:57 to reference ND/FS/YF/TB instead of SHOULD_HOLD."
+    - "Add an AppTest that forces SUREBET_YF_COPY_ROLLOUT=legacy to keep fallback copy covered."
+  next_steps:
+    - "Monitor toggle usage during rollout; default can flip to legacy if partners need more time."
+    - "Keep CSV append-only order under regression when future versions introduce new identity fields."
+
+test_strategy:
+  unit_tests: Required
+  integration_tests: Required
+  e2e_tests: Recommended
+  performance_tests: Not Required
+  security_tests: Not Required
+  automation_potential: High
+
+technical_debt:
+  identified_issues:
+    - "docs/prd/README.md still describes reconciliation as ND vs SHOULD_HOLD vs CURRENT_HOLDING."
+    - "Legacy-mode visual verification is manual until a flag-aware AppTest lands."
+  severity: Low
+  remediation_priority: Low
+  estimated_effort: 4 hours
+
+success_criteria:
+  - "README release notes explain how to operate the SUREBET_YF_COPY_ROLLOUT flag."
+  - "CSV exports include ND/FS/YF/TB/I'' rows plus version + footnote, validated by unit/integration tests."
+  - "Streamlit identity metrics raise failures if ND/FS/YF/TB/I'' copy regresses."
+
+sign_off:
+  qa_engineer: "Quinn - Test Architect"
+  review_date: 2025-11-14
+  approval_status: Approved

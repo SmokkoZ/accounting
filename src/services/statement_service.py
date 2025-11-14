@@ -11,23 +11,35 @@ import csv
 import io
 import re
 from decimal import Decimal
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 
 import structlog
 from datetime import datetime
 
 from src.core.database import get_db_connection
-from src.services.funding_transaction_service import (
-    FundingTransaction,
-    FundingTransactionError,
-    FundingTransactionService,
-)
-from src.services.settlement_constants import SETTLEMENT_NOTE_PREFIX
+from src.services import settlement_constants as _settlement_constants
 from src.utils.datetime_helpers import utc_now_iso
 
+if TYPE_CHECKING:
+    from src.services.exit_settlement_service import ExitSettlementResult
+
 logger = structlog.get_logger()
-SETTLEMENT_TOLERANCE = Decimal("0.01")
+
+SETTLEMENT_NOTE_PREFIX = getattr(
+    _settlement_constants, "SETTLEMENT_NOTE_PREFIX", "Settle Associate Now"
+)
+SETTLEMENT_TOLERANCE = getattr(
+    _settlement_constants, "SETTLEMENT_TOLERANCE", Decimal("0.01")
+)
+SETTLEMENT_MODEL_VERSION = getattr(
+    _settlement_constants, "SETTLEMENT_MODEL_VERSION", "YF-v1"
+)
+SETTLEMENT_MODEL_FOOTNOTE = getattr(
+    _settlement_constants,
+    "SETTLEMENT_MODEL_FOOTNOTE",
+    "Model: YF-v1 (YF = ND + FS; I'' = TB - YF). Values exclude operator fees/taxes.",
+)
 
 
 @dataclass
@@ -125,20 +137,6 @@ class CsvExportPayload:
     filename: str
     content: bytes
     generated_at: str
-
-
-@dataclass
-class SettleAssociateResult:
-    """Result metadata returned after executing Settle Associate Now."""
-
-    entry_id: Optional[int]
-    entry_type: Optional[str]
-    amount_eur: Decimal
-    delta_before: Decimal
-    delta_after: Decimal
-    note: str
-    was_posted: bool
-    updated_calculations: StatementCalculations
 
 
 class StatementService:
@@ -620,64 +618,18 @@ class StatementService:
         *,
         calculations: Optional[StatementCalculations] = None,
         created_by: str = "system",
-    ) -> SettleAssociateResult:
+    ) -> "ExitSettlementResult":
         """
-        Execute the Settle Associate Now workflow.
-
-        Computes the imbalance at the provided cutoff, writes a single balancing
-        DEPOSIT/WITHDRAWAL entry, and returns an updated statement snapshot.
+        Backwards-compatible wrapper around ExitSettlementService.
         """
-        calc = calculations or self.generate_statement(associate_id, cutoff_date)
-        delta_before = calc.i_double_prime_eur.quantize(Decimal("0.01"))
-        amount_eur = abs(delta_before)
+        from src.services.exit_settlement_service import ExitSettlementService
 
-        if amount_eur <= SETTLEMENT_TOLERANCE:
-            note = "Associate already balanced - no ledger entry created."
-            return SettleAssociateResult(
-                entry_id=None,
-                entry_type=None,
-                amount_eur=Decimal("0.00"),
-                delta_before=delta_before,
-                delta_after=delta_before,
-                note=note,
-                was_posted=False,
-                updated_calculations=calc,
-            )
-
-        entry_type = "WITHDRAWAL" if delta_before > 0 else "DEPOSIT"
-        settlement_note = f"{SETTLEMENT_NOTE_PREFIX} ({cutoff_date})"
-
-        funding_service = FundingTransactionService()
-        try:
-            transaction = FundingTransaction(
-                associate_id=associate_id,
-                bookmaker_id=None,
-                transaction_type=entry_type,
-                amount_native=amount_eur,
-                native_currency="EUR",
-                note=settlement_note,
-                created_by=created_by,
-            )
-            entry_id = funding_service.record_transaction(
-                transaction, created_at_override=cutoff_date
-            )
-        except (FundingTransactionError, ValueError) as exc:
-            raise RuntimeError(f"Failed to post settlement entry: {exc}") from exc
-        finally:
-            funding_service.close()
-
-        updated_calc = self.generate_statement(associate_id, cutoff_date)
-        delta_after = updated_calc.i_double_prime_eur.quantize(Decimal("0.01"))
-
-        return SettleAssociateResult(
-            entry_id=entry_id,
-            entry_type=entry_type,
-            amount_eur=amount_eur,
-            delta_before=delta_before,
-            delta_after=delta_after,
-            note=settlement_note,
-            was_posted=True,
-            updated_calculations=updated_calc,
+        service = ExitSettlementService(statement_service=self)
+        return service.settle_associate_now(
+            associate_id,
+            cutoff_date,
+            calculations=calculations,
+            created_by=created_by,
         )
 
     # ------------------------------------------------------------------
@@ -700,6 +652,7 @@ class StatementService:
             ["Associate", calc.associate_name],
             ["As of (UTC)", calc.cutoff_date],
             ["Generated", export_time],
+            ["Identity Version", SETTLEMENT_MODEL_VERSION],
             [
                 "Note",
                 "Totals in EUR. Native shown for reference. FX frozen at posting time.",
@@ -758,6 +711,10 @@ class StatementService:
                 ["UTILE (YF - ND)", self._format_decimal(calc.raw_profit_eur), "EURO"],
             ]
         )
+        rows.append([])
+        rows.append(
+            ["Footnote", SETTLEMENT_MODEL_FOOTNOTE, ""]
+        )
         return rows
 
     def _build_roi_csv_rows(
@@ -770,6 +727,7 @@ class StatementService:
             ["Associate", calc.associate_name],
             ["As of UTC", calc.cutoff_date],
             ["Generated", export_time],
+            ["Identity Version", SETTLEMENT_MODEL_VERSION],
             [
                 "Note",
                 "ROI rows only include fully settled surebets up to the cutoff.",
@@ -811,6 +769,9 @@ class StatementService:
 
         if len(roi_rows) == 0:
             rows.append(["No settled surebets found"] + [""] * 7)
+
+        rows.append([])
+        rows.append(["Footnote", SETTLEMENT_MODEL_FOOTNOTE])
 
         return rows
 

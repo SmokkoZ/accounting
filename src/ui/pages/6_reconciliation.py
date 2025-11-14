@@ -38,6 +38,12 @@ from src.ui.helpers.streaming import (
     status_with_steps,
 )
 from src.utils.logging_config import get_logger
+from src.ui.utils.identity_copy import (
+    identity_formula,
+    identity_label,
+    identity_symbol,
+    identity_tooltip,
+)
 
 
 logger = get_logger(__name__)
@@ -226,9 +232,9 @@ def _render_reconciliation_details_fragment(
 
                 with col_yf:
                     st.metric(
-                        "YIELD FUNDS (YF)",
+                        identity_label().upper(),
                         f"EUR {balance.yf_eur:,.2f}",
-                        help="Identity target: ND + FS",
+                        help=identity_tooltip(),
                     )
 
                 with col_tb:
@@ -243,7 +249,7 @@ def _render_reconciliation_details_fragment(
                     st.metric(
                         "IMBALANCE (I'')",
                         delta_formatted,
-                        help="TB - YF (should be zero when balanced)",
+                        help=f"TB - {identity_symbol()} (should be zero when balanced)",
                     )
 
                 with st.expander(":material/info: View Details"):
@@ -264,9 +270,9 @@ def _render_reconciliation_details_fragment(
                     "Metric": [
                         "Net Deposits (ND)",
                         "Fair Share (FS)",
-                        "Yield Funds (YF = ND + FS)",
+                        f"{identity_label()} ({identity_formula()})",
                         "Total Balance (TB)",
-                        "Imbalance (I'' = TB - YF)",
+                        f"Imbalance (I'' = TB - {identity_symbol()})",
                     ],
                     "Amount (EUR)": [
                         f"EUR {balance.net_deposits_eur:,.2f}",
@@ -280,7 +286,7 @@ def _render_reconciliation_details_fragment(
                         "Settlement profit/loss from BET_RESULT share rows",
                         "Identity target combining funding and share",
                         "Bookmaker ledger holdings across entry types",
-                        "TB - YF (zero means balanced)",
+                        f"TB - {identity_symbol()} (zero means balanced)",
                     ],
                 }
 
@@ -418,7 +424,7 @@ def _render_reconciliation_details_fragment(
 
     with st.expander(":material/help: How Reconciliation Works"):
         st.markdown(
-            """
+            f"""
         ### Reconciliation Math
 
         **NET DEPOSITS (ND)**: Personal funding
@@ -429,8 +435,8 @@ def _render_reconciliation_details_fragment(
         - Formula: `SUM(per_surebet_share_eur)` from BET_RESULT rows (covers WON/LOST/VOID)
         - Explanation: "Profit/loss allocated to the associate"
 
-        **YIELD FUNDS (YF)**: Identity target
-        - Formula: `YF = ND + FS`
+        **{identity_label().upper()}**: Identity target
+        - Formula: `{identity_formula()}`
         - Explanation: "How much cash they should be holding after settlement"
 
         **TOTAL BALANCE (TB)**: Physical bookmaker holdings
@@ -438,7 +444,7 @@ def _render_reconciliation_details_fragment(
         - Explanation: "What they're actually holding in bookmaker accounts"
 
         **IMBALANCE (I'')**: Discrepancy
-        - Formula: `TB - YF`
+        - Formula: `TB - {identity_symbol()}`
         - **Red (Overholder)**: `I'' > +10 EUR` - Holding group float (collect from them)
         - **Green (Balanced)**: `-10 EUR <= I'' <= +10 EUR` - Holdings match entitlement
         - **Orange (Short)**: `I'' < -10 EUR` - Someone else is holding their money

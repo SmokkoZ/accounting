@@ -16,6 +16,7 @@ from src.repositories.associate_hub_repository import AssociateMetrics, Bookmake
 from src.ui.components.associate_hub.filters import update_filter_state
 from src.ui.utils.formatters import format_currency_amount
 from src.ui.utils.state_management import safe_rerun
+from src.ui.utils.identity_copy import identity_label, identity_tooltip
 
 CARD_STYLE_KEY = "associate_card_styles_loaded"
 
@@ -112,27 +113,46 @@ def render_associate_listing(
                 )
                 st.caption(f"Last activity: {last_activity}")
 
-            metric_cols = st.columns(4)
-            metric_cols[0].metric(
-                "Net Deposits (EUR)",
-                _format_optional_eur(associate.net_deposits_eur),
-                delta="Auto-refresh",
-            )
-            metric_cols[1].metric(
-                "Should Hold (EUR)",
-                _format_optional_eur(associate.should_hold_eur),
-                delta=f"{associate.bookmaker_count} total",
-            )
-            metric_cols[2].metric(
-                "Current Holding (EUR)",
-                _format_optional_eur(associate.current_holding_eur),
-                delta="Latest snapshot",
-            )
-            metric_cols[3].metric(
-                "Delta (EUR)",
-                _format_signed_eur(associate.delta_eur),
-                delta=status_label,
-            )
+            identity_cols = st.columns(5)
+            identity_metrics = [
+                {
+                    "label": "Net Deposits (ND)",
+                    "value": _format_optional_eur(associate.net_deposits_eur),
+                    "delta": "Deposits - withdrawals",
+                    "help": "ND sums DEPOSIT - WITHDRAWAL ledger entries.",
+                },
+                {
+                    "label": "Fair Share (FS)",
+                    "value": _format_signed_eur(associate.fair_share_eur),
+                    "delta": "Equal-share ROI",
+                    "help": "FS comes from BET_RESULT shares; can be +/- based on ROI.",
+                },
+                {
+                    "label": identity_label(),
+                    "value": _format_optional_eur(associate.should_hold_eur),
+                    "delta": f"{associate.bookmaker_count} total",
+                    "help": identity_tooltip(),
+                },
+                {
+                    "label": "Total Balance (TB)",
+                    "value": _format_optional_eur(associate.current_holding_eur),
+                    "delta": "Latest snapshot",
+                    "help": "TB aggregates bookmaker holdings from ledger entries.",
+                },
+                {
+                    "label": "Imbalance (I'')",
+                    "value": _format_signed_eur(associate.delta_eur),
+                    "delta": status_label,
+                    "help": "I'' = TB - YF. Positive = overholding, negative = short.",
+                },
+            ]
+            for column, metric in zip(identity_cols, identity_metrics):
+                column.metric(
+                    metric["label"],
+                    metric["value"],
+                    delta=metric.get("delta"),
+                    help=metric.get("help"),
+                )
 
             render_action_buttons(associate)
 

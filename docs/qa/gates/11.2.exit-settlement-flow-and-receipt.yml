@@ -1,0 +1,73 @@
+story: "11.2.exit-settlement-flow-and-receipt"
+epic: "11"
+decision: PASS
+date: 2025-11-14
+gate_keeper: "Quinn - Test Architect"
+
+risk_score: 12
+risk_level: Medium
+risk_factors:
+  - factor: "Receipt preview visibility regresses in Streamlit surfaces"
+    probability: 2
+    impact: 4
+    score: 8
+    priority: Medium
+  - factor: "Operators skip the manual refresh step and view stale data"
+    probability: 3
+    impact: 3
+    score: 9
+    priority: Medium
+
+nfr_assessment:
+  security: PASS
+  performance: PASS
+  reliability: PASS
+  usability: PASS
+  maintainability: PASS
+
+traceability:
+  total_requirements: 5
+  tested_requirements: 5
+  coverage_percentage: 100%
+  gaps_identified: []
+
+quality_gate:
+  decision: PASS
+  rationale: >
+    The exit settlement service continues to balance associates with a single signed
+    ledger entry, CSV exports include the Exit Payout row plus footnote, receipts are
+    written to disk, and both Streamlit entry points now keep the success panel and
+    receipt preview visible until the operator manually refreshes. UI automation
+    covers the success flow so the earlier regression cannot reappear silently.
+  critical_issues: []
+  recommendations:
+    - "Maintain the explicit refresh button pattern whenever Settle Associate flows evolve."
+    - "Consider auto-expanding the receipt expander for large payout magnitudes to draw operator attention."
+  next_steps:
+    - "Monitor the new UI regression test in CI to ensure Streamlit rerun behavior stays stable."
+    - "Carry the refresh-gate pattern forward to any upcoming exit automation screens."
+
+test_strategy:
+  unit_tests: Complete
+  integration_tests: Complete
+  e2e_tests: Complete
+  performance_tests: Not Required
+  security_tests: Not Required
+  automation_potential: High
+
+technical_debt:
+  identified_issues:
+    - "Receipt markdown remains on local disk; evaluate moving artifacts to centralized storage for auditability."
+  severity: Low
+  remediation_priority: Medium
+  estimated_effort: 4 hours
+
+success_criteria:
+  - "Operators can view and download the receipt artifact immediately after settlement in both Statements and Operations flows."
+  - "UI regression coverage asserts the receipt expander and refresh control remain visible."
+  - "Integration suite continues to verify ledger polarity, idempotency, and CSV footnotes."
+
+sign_off:
+  qa_engineer: "Quinn - Test Architect"
+  review_date: 2025-11-14
+  approval_status: Approved

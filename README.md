@@ -114,6 +114,13 @@ Install pre-commit hooks to automatically run code quality checks before each co
 pre-commit install
 ```
 
+## Release Notes
+
+- **2025-11-13 -- Exit Settlement Flow**
+  - Added the backend ExitSettlementService and UI guardrails so the Streamlit Statements and Operations screens run *Settle Associate Now* with cutoff confirmation, versioned receipts, and explicit "Your Fair Balance (YF = ND + FS)" copy.
+  - Statement CSV exports now append a model footnote (Model: YF-v1 (YF = ND + FS; I'' = TB - YF). Values exclude operator fees/taxes.) and every run writes a markdown receipt to data/exports/receipts/<associate_id>/.
+  - Soft rollout toggle: set SUREBET_YF_COPY_ROLLOUT=legacy in .streamlit/secrets.toml to keep the legacy "Should Hold" wording during partner enablement; switch it to enabled (default) once training is complete. The flag only affects UI copy/notes, so CSV fields remain backward compatible.
+
 ## Configuration
 
 ### Environment Variables
@@ -154,14 +161,20 @@ LOG_LEVEL=INFO
 - **Monthly Statements**: Automated associate statements
 - **Statement & ROI CSVs**: `StatementService.export_statement_csv` and `export_surebet_roi_csv` generate per-bookmaker allocations plus per-surebet ROI snapshots (see `docs/examples/statement_A123_YYYY-MM-DD.csv` and `docs/examples/surebet_roi_A123_YYYY-MM-DD.csv`). These snapshots reuse the existing statement math and explicitly note that values exclude operator fees/taxes.
 
-### Change Notes — YF & Exit Settlement Alignment (2025-11-13)
+### Change Notes -- YF & Exit Settlement Alignment (2025-11-13)
 
-- Adopt unified financial identity: `Your Fair Balance (YF) = Net Deposits (ND) + Fair Shares (FS)`; replaces prior “Should Hold” label in UI/docs.
-- Standardize ND computation: store `WITHDRAWAL` as negative and `DEPOSIT` as positive; compute ND by summing signed amounts (no double-negation).
-- Keep imbalance: `Δ = TB − YF` where `TB` is total bookmaker holdings; reconciliation still targets Δ ≈ 0.
-- Add “Settle Associate Now” flow: computes Δ at a cutoff and posts a single balancing DEPOSIT/WITHDRAWAL to zero Δ; CSV exports at exit include an “Exit Payout” row (`−Δ`).
-- CSVs: include YF in summaries and a version footnote (e.g., `Model: YF-v1 — YF=ND+FS; Δ=TB−YF; values exclude operator fees/taxes`).
-- Backward compatibility: no schema changes; existing math reused; older references to “Should Hold” now map to YF. Where docs state `RAW_PROFIT_EUR = SHOULD_HOLD − NET_DEPOSITS`, this equals FS under YF (`YF − ND = FS`).
+- Adopt unified financial identity: Your Fair Balance (YF) = Net Deposits (ND) + Fair Shares (FS); replaces the prior 'Should Hold' label in UI/docs.
+- Standardize ND computation: store WITHDRAWAL as negative and DEPOSIT as positive; compute ND by summing signed amounts (no double-negation).
+- Keep imbalance: I'' = TB - YF where TB is total bookmaker holdings; reconciliation still targets I'' -> 0.
+- Add 'Settle Associate Now' flow: computes I'' at a cutoff and posts a single balancing DEPOSIT/WITHDRAWAL to zero it; CSV exports at exit include an 'Exit Payout' row (-I'').
+- CSVs: include YF in summaries plus a version footnote (e.g., Model: YF-v1 -- YF=ND+FS; I''=TB-YF; values exclude operator fees/taxes).
+- Backward compatibility: no schema changes; existing math reused; older references to 'Should Hold' now map to YF. Where docs state RAW_PROFIT_EUR = SHOULD_HOLD - NET_DEPOSITS, this equals FS under YF (YF - ND = FS).
+
+#### CSV Identity Notes (YF-v1)
+
+- export_statement_csv and export_surebet_roi_csv prepend an Identity Version row showing YF-v1 so downstream automation can detect copy updates without schema changes.
+- Each CSV ends with a footnote: Model: YF-v1 -- YF = ND + FS; I'' = TB - YF. Legacy 'Should Hold' values map to YF; exports append-only for backward compatibility.
+- ND/FS/YF/TB/I'' rows remain append-only; historical exports are untouched and legacy columns keep their ordering.
 
 ## Contributing
 

@@ -33,6 +33,7 @@ class AssociateMetrics:
     active_bookmaker_count: int
     net_deposits_eur: Decimal
     should_hold_eur: Decimal
+    fair_share_eur: Decimal
     current_holding_eur: Decimal
     balance_eur: Decimal
     pending_balance_eur: Decimal
@@ -129,6 +130,7 @@ class AssociateHubRepository:
             COUNT(DISTINCT CASE WHEN b.is_active = 1 THEN b.id END) AS active_bookmaker_count,
             COALESCE(deposits.net_deposits_eur, 0) AS net_deposits_eur,
             COALESCE(holdings.current_holding_eur, 0) AS current_holding_eur,
+            COALESCE(shares.fair_share_eur, 0) AS fair_share_eur,
             COALESCE(pending.pending_balance_eur, 0) AS pending_balance_eur,
             MAX(COALESCE(bh.check_date_utc, le.created_at_utc)) AS last_activity_utc
         FROM associates a
@@ -148,6 +150,20 @@ class AssociateHubRepository:
             FROM ledger_entries
             GROUP BY associate_id
         ) holdings ON holdings.associate_id = a.id
+        LEFT JOIN (
+            SELECT
+                associate_id,
+                SUM(
+                    CASE
+                        WHEN per_surebet_share_eur IS NOT NULL AND per_surebet_share_eur != ''
+                        THEN CAST(per_surebet_share_eur AS REAL)
+                        ELSE 0
+                    END
+                ) AS fair_share_eur
+            FROM ledger_entries
+            WHERE type = 'BET_RESULT'
+            GROUP BY associate_id
+        ) shares ON shares.associate_id = a.id
         LEFT JOIN (
             SELECT
                 associate_id,
@@ -232,12 +248,16 @@ class AssociateHubRepository:
             # Calculate should_hold and delta
             net_deposits = Decimal(str(row["net_deposits_eur"])).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
             current_holding = Decimal(str(row["current_holding_eur"])).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+            fair_share_raw = row["fair_share_eur"] if row["fair_share_eur"] is not None else 0
+            fair_share = Decimal(str(fair_share_raw)).quantize(
+                TWO_PLACES, rounding=ROUND_HALF_UP
+            )
             pending_raw = row["pending_balance_eur"]
             pending_balance = Decimal(str(pending_raw if pending_raw is not None else 0)).quantize(
                 TWO_PLACES, rounding=ROUND_HALF_UP
             )
-            delta_eur = current_holding - net_deposits
-            should_hold_eur = net_deposits  # Should hold what was deposited
+            should_hold_eur = (net_deposits + fair_share).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+            delta_eur = (current_holding - should_hold_eur).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
             
             # Determine status
             abs_delta = abs(delta_eur)
@@ -261,11 +281,12 @@ class AssociateHubRepository:
                 bookmaker_count=row["bookmaker_count"],
                 active_bookmaker_count=row["active_bookmaker_count"],
                 net_deposits_eur=net_deposits,
-                should_hold_eur=should_hold_eur.quantize(TWO_PLACES, rounding=ROUND_HALF_UP),
+                should_hold_eur=should_hold_eur,
+                fair_share_eur=fair_share,
                 current_holding_eur=current_holding,
                 balance_eur=current_holding,
                 pending_balance_eur=pending_balance,
-                delta_eur=delta_eur.quantize(TWO_PLACES, rounding=ROUND_HALF_UP),
+                delta_eur=delta_eur,
                 last_activity_utc=row["last_activity_utc"],
                 status=status,
                 status_color=status_color

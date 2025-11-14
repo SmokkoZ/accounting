@@ -8,10 +8,12 @@ Handles forms for editing associate/bookmaker details and funding operations.
 from __future__ import annotations
 
 import streamlit as st
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Optional, Any
 
 from src.repositories.associate_hub_repository import AssociateHubRepository, BookmakerSummary
+from src.services.exit_settlement_service import ExitSettlementService
 from src.services.funding_transaction_service import (
     FundingTransactionService,
     FundingTransaction,
@@ -21,9 +23,36 @@ from src.ui.utils.state_management import safe_rerun
 from src.services.bookmaker_balance_service import BookmakerBalanceService, BookmakerBalance
 from src.services.telegram_notifier import TelegramNotifier, TelegramNotificationError
 from src.ui.utils.validators import validate_decimal_input, validate_currency_code
+from src.ui.utils.formatters import format_currency_amount
+from src.utils.datetime_helpers import utc_now_iso
 from src.utils.logging_config import get_logger
+from src.services.settlement_constants import SETTLEMENT_MODEL_VERSION
 
 logger = get_logger(__name__)
+
+
+def _resolve_operator_identity() -> str:
+    """Return the best operator identifier available for created_by fields."""
+    candidate_keys = (
+        "operator_name",
+        "operator_email",
+        "user_email",
+        "user_display_name",
+    )
+    for key in candidate_keys:
+        value = st.session_state.get(key)
+        if value:
+            return str(value)
+    return "local_user"
+
+
+def _parse_cutoff_or_now(raw_value: Optional[str]) -> datetime:
+    """Parse ISO strings or fall back to now."""
+    candidate = raw_value or utc_now_iso()
+    try:
+        return datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.now(timezone.utc)
 
 
 def render_detail_drawer(
@@ -744,20 +773,119 @@ def render_transactions_tab(
         
         if not history:
             st.info(" No recent transactions found.")
-            return
-        
-        # Display transactions
-        for transaction in history:
-            with st.expander(
-                f"{'' if transaction['transaction_type'] == 'DEPOSIT' else ''} "
-                f"{transaction['transaction_type']} - "
-                f"{transaction['created_at_utc'][:10]}",
-                expanded=False
-            ):
-                render_transaction_details(transaction)
+        else:
+            # Display transactions
+            for transaction in history:
+                with st.expander(
+                    f"{'' if transaction['transaction_type'] == 'DEPOSIT' else ''} "
+                    f"{transaction['transaction_type']} - "
+                    f"{transaction['created_at_utc'][:10]}",
+                    expanded=False
+                ):
+                    render_transaction_details(transaction)
                 
     except Exception as e:
         st.error(f" Failed to load transaction history: {e}")
+    
+    st.divider()
+    render_exit_settlement_controls(associate)
+
+
+def render_exit_settlement_controls(
+    associate: Dict[str, Any],
+    *,
+    exit_service: Optional[ExitSettlementService] = None,
+) -> None:
+    """
+    Render the Settle Associate Now action within the operations drawer.
+    """
+    st.markdown("#### :material/account_balance_wallet: Exit Settlement")
+    st.caption(
+        f"Use this to zero I'' for {associate['display_alias']} before exit. "
+        f"Receipts follow model {SETTLEMENT_MODEL_VERSION}."
+    )
+    cutoff_key = f"ops_exit_cutoff_{associate['id']}"
+    default_dt = _parse_cutoff_or_now(st.session_state.get(cutoff_key))
+    date_value = st.date_input(
+        "Settlement date (UTC)",
+        value=default_dt.date(),
+        key=f"{cutoff_key}_date",
+    )
+    time_value = st.time_input(
+        "Settlement time (UTC)",
+        value=default_dt.time(),
+        key=f"{cutoff_key}_time",
+    )
+    cutoff_value = (
+        datetime.combine(date_value, time_value)
+        .replace(tzinfo=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    confirm_key = f"ops_exit_confirm_{associate['id']}"
+    confirm = st.checkbox(
+        "I confirm this posts a balancing deposit/withdrawal.",
+        key=confirm_key,
+    )
+    button_pressed = st.button(
+        ":material/account_balance_wallet: Run Settle Associate Now",
+        key=f"ops_exit_run_{associate['id']}",
+        disabled=not confirm,
+    )
+    if not button_pressed:
+        return
+
+    service = exit_service or ExitSettlementService()
+    validator = service.statement_service
+    if not validator.validate_cutoff_date(cutoff_value):
+        st.error("Cutoff must be a valid ISO8601 UTC timestamp that is not in the future.")
+        return
+
+    with st.spinner("Posting balancing ledger entry..."):
+        try:
+            result = service.settle_associate_now(
+                associate["id"],
+                cutoff_value,
+                created_by=_resolve_operator_identity(),
+            )
+        except RuntimeError as exc:
+            st.error(f"Settlement failed: {exc}")
+            return
+
+    if not result.was_posted:
+        st.info(result.note)
+        return
+
+    st.success(
+        f"Posted {result.entry_type} {format_currency_amount(result.amount_eur, 'EUR')} "
+        f"(I'' after {format_currency_amount(result.delta_after, 'EUR')})."
+    )
+
+    with st.expander("Receipt Preview", expanded=False):
+        st.markdown(result.receipt.markdown)
+        file_path = result.receipt.file_path
+        if file_path and file_path.exists():
+            with open(file_path, "r", encoding="utf-8") as receipt_file:
+                st.download_button(
+                    "Download Receipt Markdown",
+                    data=receipt_file.read(),
+                    file_name=file_path.name,
+                    mime="text/markdown",
+                    key=f"ops_receipt_download_{associate['id']}",
+                )
+
+    st.caption(
+        f"Receipts live under data/exports/receipts/{associate['id']} (model {result.receipt.version})."
+    )
+    refresh_key = f"ops_exit_refresh_{associate['id']}"
+    if st.button(
+        ":material/refresh: Refresh operations drawer",
+        key=refresh_key,
+        help="Click after confirming the receipt and stats before rerunning.",
+    ):
+        safe_rerun()
+    else:
+        st.caption("Receipt preview is visible above; hit Refresh once you are ready to reload the drawer.")
 
 
 def render_transaction_details(transaction: Dict[str, Any]) -> None:

@@ -429,7 +429,7 @@ On confirm:
 │ │ ✅ Marco (AUD)                                           │  │
 │ │ Net Deposits:        500.00 EUR                          │  │
 │ │ Current Holding:     520.50 EUR                          │  │
-│ │ Should Hold:         518.00 EUR                          │  │
+│ │ Your Fair Balance (YF):         518.00 EUR                          │  │
 │ │ DELTA:               +2.50 EUR                           │  │
 │ │ Status: "Holding +€2.50 more than entitlement           │  │
 │ │         (minor group float)"                             │  │
@@ -440,7 +440,7 @@ On confirm:
 │ │ ⚠ Alice (GBP)                                            │  │
 │ │ Net Deposits:        1,000.00 EUR                        │  │
 │ │ Current Holding:     950.00 EUR                          │  │
-│ │ Should Hold:         980.00 EUR                          │  │
+│ │ Your Fair Balance (YF):         980.00 EUR                          │  │
 │ │ DELTA:               -30.00 EUR                          │  │
 │ │ Status: "Holding -€30.00 less than entitlement          │  │
 │ │         (they're owed €30 / someone else parking)"       │  │
@@ -451,7 +451,7 @@ On confirm:
 │ │ 🔴 Bob (GBP)                                             │  │
 │ │ Net Deposits:        800.00 EUR                          │  │
 │ │ Current Holding:     1,250.00 EUR                        │  │
-│ │ Should Hold:         820.00 EUR                          │  │
+│ │ Your Fair Balance (YF):         820.00 EUR                          │  │
 │ │ DELTA:               +430.00 EUR                         │  │
 │ │ Status: "Holding +€430.00 more than entitlement         │  │
 │ │         (group float you should collect)"                │  │
@@ -581,7 +581,7 @@ On confirm:
 │ │                                                            │  │
 │ │ Internal (for operator only):                             │  │
 │ │ Current Holding:   520.50 EUR                             │  │
-│ │ Should Hold:       650.00 EUR                             │  │
+│ │ Your Fair Balance (YF):       650.00 EUR                             │  │
 │ │ DELTA:             -129.50 EUR                            │  │
 │ │ (They're holding -€129.50 less than entitlement)          │  │
 │ │                                                            │  │
@@ -746,7 +746,7 @@ Show modal with error details:
 
 ## Change Notes — YF & Exit Settlement Alignment (2025-11-13)
 
-- Replace “Should Hold” labels with “Your Fair Balance (YF)” and surface `ND`, `FS`, `YF`, `TB`, `Δ` in Reconciliation and Statements headers.
+- Use "Your Fair Balance (YF)" labels wherever legacy "Should Hold" copy previously appeared, and surface ND, FS, YF, TB, Δ in Reconciliation and Statements headers.
 - Update tooltips to define: `YF = ND + FS`; `Δ = TB − YF`; withdrawals are stored negative, deposits positive; CSV values exclude operator fees/taxes.
 - Add a “Settle Associate Now” action to Statements/Operations with cutoff selector; posts one balancing DEPOSIT/WITHDRAWAL to zero Δ and generates a receipt. After action, `Δ == 0` should display.
 - CSV exports at exit cutoff include an “Exit Payout” row (`−Δ`) and a footer footnote `Model: YF‑v1 (YF=ND+FS; Δ=TB−YF).`

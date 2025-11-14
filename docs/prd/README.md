@@ -66,11 +66,12 @@ This PRD is organized as a sharded document collection for easier navigation and
 | **Associate** | Trusted partner who places bets |
 | **Surebet** | Arbitrage opportunity with guaranteed profit on two-way market |
 | **Two-Way Market** | Over/Under, Yes/No, Team A/Team B |
-| **NET_DEPOSITS_EUR (ND)** | Cash personally funded by associate (sum of signed DEPOSIT/WITHDRAWAL; withdrawals stored negative) |
-| **YOUR FAIR BALANCE (YF)** | Entitlement identity used across views: YF = ND + FS (replaces prior “Should Hold”) |
-| **CURRENT_HOLDING_EUR** | Modeled physical holdings |
-| **DELTA (Δ)** | TB − YF (imbalance); for legacy contexts CURRENT_HOLDING − SHOULD_HOLD maps to the same target of ≈ 0 |
-| **RAW_PROFIT_EUR** | Under YF, RAW_PROFIT_EUR equals FS because YF − ND = FS |
+| **NET_DEPOSITS_EUR (ND)** | Cash personally funded by the associate (signed DEPOSIT/WITHDRAWAL; withdrawals stored negative) |
+| **FAIR_SHARE_EUR (FS)** | Equal-share profit/loss from BET_RESULT entries; represents ROI owed before payout |
+| **YOUR FAIR BALANCE (YF)** | Entitlement identity YF = ND + FS; replaces the legacy "Should Hold" label |
+| **TOTAL_BALANCE_EUR (TB)** | Modeled physical holdings derived from bookmaker balances / ledger entries |
+| **IMBALANCE (I'')** | TB - YF; positive = overholding, negative = short. Legacy CURRENT_HOLDING - SHOULD_HOLD mapped to the same approx 0 target |
+| **RAW_PROFIT_EUR / UTILE** | Under the YF identity, RAW_PROFIT_EUR = YF - ND = FS |
 | **Admin Seat** | Extra equal-split seat for coordinator if they didn't stake |
 | **Principal Returned** | Stake returned via WON/VOID bets |
 | **Per-Surebet Share** | Equal-split profit/loss per participant |

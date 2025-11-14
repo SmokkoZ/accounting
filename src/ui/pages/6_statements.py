@@ -29,6 +29,7 @@ from src.services.daily_statement_service import (
     DailyStatementBatchResult,
     DailyStatementSender,
 )
+from src.services.exit_settlement_service import ExitSettlementService
 from src.services.statement_service import (
     StatementService,
     StatementCalculations,
@@ -36,6 +37,7 @@ from src.services.statement_service import (
     InternalSection,
     CsvExportPayload,
 )
+from src.services.settlement_constants import SETTLEMENT_MODEL_VERSION
 from src.ui.helpers.fragments import (
     call_fragment,
     render_debug_panel,
@@ -45,6 +47,16 @@ from src.ui.helpers.streaming import show_success_toast
 from src.ui.ui_components import advanced_section, form_gated_filters, load_global_styles
 from src.ui.utils.formatters import format_utc_datetime
 from src.ui.utils.state_management import render_reset_control, safe_rerun
+from src.ui.utils.identity_copy import (
+    identity_anchor_sentence,
+    identity_caption_text,
+    identity_formula,
+    identity_label,
+    identity_rollout_note,
+    identity_symbol,
+    identity_tooltip,
+    is_yf_copy_enabled,
+)
 
 PAGE_TITLE = "Statements"
 PAGE_ICON = ":material/contract:"
@@ -59,6 +71,13 @@ def _format_eur(value: Decimal | float | str) -> str:
 def _decimal_str(value: Decimal | float | str) -> str:
     """Return standardized decimal string with two decimal places."""
     return f"{Decimal(str(value)).quantize(Decimal('0.01'))}"
+
+def _coerce_cutoff_datetime(value: str) -> datetime:
+    """Parse ISO cutoff strings and fall back to now."""
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.now(timezone.utc)
 
 
 def _roi_ratio_percentage(roi: Decimal, utile: Decimal) -> Optional[Decimal]:
@@ -88,6 +107,13 @@ def _roi_vs_utile_ratio_display(roi: Decimal, utile: Decimal) -> tuple[str, str]
         "using absolute values."
     )
     return ratio_display, help_text
+
+
+def _utile_help_text() -> str:
+    """Describe how UTILE relates to the entitlement identity."""
+    if is_yf_copy_enabled():
+        return "UTILE = YF - ND = FS (legacy 'Should Hold' target minus Net Deposits)."
+    return "UTILE = Should Hold - ND = FS (rename flag disabled)."
 
 
 def _slugify_name(value: str) -> str:
@@ -360,7 +386,7 @@ def render_statement_header(calc: StatementCalculations) -> None:
         st.metric(
             "Net Profit (UTILE)",
             _format_eur(calc.raw_profit_eur),
-            help="UTILE = Should Hold - Net Deposits (unchanged).",
+            help=_utile_help_text(),
         )
     with metric_cols[2]:
         st.metric(
@@ -373,9 +399,9 @@ def render_statement_header(calc: StatementCalculations) -> None:
     identity_metrics = [
         ("Net Deposits (ND)", calc.net_deposits_eur, "Deposits - withdrawals"),
         ("Fair Share (FS)", calc.fs_eur, "Equal-share profit/loss from BET_RESULT rows"),
-        ("Yield Funds (YF)", calc.yf_eur, "Identity target: ND + FS"),
+        (identity_label(), calc.yf_eur, identity_tooltip()),
         ("Total Balance (TB)", calc.tb_eur, "Current bookmaker holdings"),
-        ("Imbalance (I'')", calc.i_double_prime_eur, "TB - YF"),
+        ("Imbalance (I'')", calc.i_double_prime_eur, f"TB - {identity_symbol()}"),
     ]
     for column, (label, value, help_text) in zip(identity_cols, identity_metrics):
         with column:
@@ -396,9 +422,9 @@ def render_partner_facing_section(partner_section: PartnerFacingSection) -> None
     identity_metrics = [
         ("Net Deposits (ND)", partner_section.net_deposits_eur, "Deposits - withdrawals"),
         ("Fair Share (FS)", partner_section.fair_share_eur, "Equal-share profits from settlements"),
-        ("Yield Funds (YF)", partner_section.yield_funds_eur, "Identity target: ND + FS"),
+        (identity_label(), partner_section.yield_funds_eur, identity_tooltip()),
         ("Total Balance (TB)", partner_section.total_balance_eur, "Current bookmaker holdings"),
-        ("Imbalance (I'')", partner_section.imbalance_eur, "TB - YF"),
+        ("Imbalance (I'')", partner_section.imbalance_eur, f"TB - {identity_symbol()}"),
         ("Exit Payout (-I'')", partner_section.exit_payout_eur, "Amount to settle associate now"),
     ]
     for column, (label, value, help_text) in zip(identity_cols, identity_metrics):
@@ -431,7 +457,7 @@ def render_partner_facing_section(partner_section: PartnerFacingSection) -> None
         st.metric(
             "Net Profit (UTILE)",
             _format_eur(partner_section.raw_profit_eur),
-            help="UTILE = Should Hold - Net Deposits.",
+            help=_utile_help_text(),
         )
     with profit_cols[2]:
         st.metric(
@@ -442,12 +468,10 @@ def render_partner_facing_section(partner_section: PartnerFacingSection) -> None
 
     st.info(
         f"Bookmaker balances (TB) total {_format_eur(partner_section.total_balance_eur)} "
-        "- combine with ND/FS to keep YF identities visible."
+        f"- combine with ND/FS to keep {identity_symbol()} identities visible."
     )
-    st.caption(
-        "YF = ND + FS. TB - YF = I'' (imbalance). Exit payout (-I'') is the amount the "
-        "Settle Associate Now workflow posts to zero the associate before exit."
-    )
+    st.caption(identity_caption_text())
+    st.caption(identity_rollout_note())
 
 def render_internal_section(internal_section: InternalSection) -> None:
     """Render internal-only statement section."""
@@ -471,7 +495,7 @@ def render_internal_section(internal_section: InternalSection) -> None:
     else:
         st.warning(delta_status)
     
-    st.caption("Imbalance (I'') = Total Balance (TB) - Yield Funds (YF)")
+    st.caption(f"Imbalance (I'') = Total Balance (TB) - {identity_symbol()}")
 
     st.markdown("##### Identity Snapshot")
     identity_rows = [
@@ -486,7 +510,7 @@ def render_internal_section(internal_section: InternalSection) -> None:
             "Description": "Equal-share settlement profit/loss",
         },
         {
-            "Metric": "Yield Funds (YF = ND + FS)",
+            "Metric": f"{identity_label()} ({identity_formula()})",
             "Amount": _format_eur(internal_section.yield_funds_eur),
             "Description": "Cash the associate should be holding",
         },
@@ -498,7 +522,7 @@ def render_internal_section(internal_section: InternalSection) -> None:
         {
             "Metric": "Imbalance (I'')",
             "Amount": _format_eur(internal_section.imbalance_eur),
-            "Description": "TB - YF (positive = overholder)",
+            "Description": f"TB - {identity_symbol()} (positive = overholder)",
         },
         {
             "Metric": "Exit Payout (-I'')",
@@ -509,45 +533,121 @@ def render_internal_section(internal_section: InternalSection) -> None:
     st.table(identity_rows)
 
 
-def render_settle_associate_section(calc: StatementCalculations) -> None:
+def render_settle_associate_section(
+    calc: StatementCalculations, exit_service: Optional[ExitSettlementService] = None
+) -> None:
     """Render Settle Associate Now controls."""
     st.markdown("---")
     st.subheader(":material/account_balance_wallet: Settle Associate Now")
     st.caption(
-        "Exit payout (-I'') = "
-        f"{_format_eur(calc.exit_payout_eur)}. Positive values mean we pay the associate; "
-        "negative values mean they return funds."
+        f"{identity_anchor_sentence()} "
+        f"Exit payout (-I'') = {_format_eur(calc.exit_payout_eur)} at the current cutoff. "
+        f"Model {SETTLEMENT_MODEL_VERSION} keeps exports versioned."
     )
 
-    if st.button(
-        ":material/account_balance_wallet: Run Settle Associate Now",
-        key="settle_associate_now",
-        help="Posts a balancing deposit/withdrawal so I'' becomes zero.",
-    ):
-        statement_service = StatementService()
-        with st.spinner("Posting balancing ledger entry..."):
-            try:
-                result = statement_service.settle_associate_now(
-                    calc.associate_id,
-                    calc.cutoff_date,
-                    calculations=calc,
-                    created_by="statements_ui",
-                )
-            except RuntimeError as exc:
-                st.error(f"Settlement failed: {exc}")
-                return
+    default_cutoff = _coerce_cutoff_datetime(calc.cutoff_date)
+    date_value = st.date_input(
+        "Settlement date (UTC)",
+        value=default_cutoff.date(),
+        key=f"settle_date_{calc.associate_id}",
+    )
+    time_value = st.time_input(
+        "Settlement time (UTC)",
+        value=default_cutoff.time(),
+        key=f"settle_time_{calc.associate_id}",
+    )
+    cutoff_value = (
+        datetime.combine(date_value, time_value)
+        .replace(tzinfo=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
-        if not result.was_posted:
-            st.info(result.note)
+    confirm_key = f"settle_confirm_{calc.associate_id}"
+    confirm_intent = st.checkbox(
+        "I confirm this posts a balancing ledger entry and updates exports.",
+        key=confirm_key,
+        help="Guardrail to avoid accidental settlements.",
+    )
+
+    run_label = ":material/account_balance_wallet: Run Settle Associate Now"
+    trigger = st.button(
+        run_label,
+        key=f"settle_associate_now_{calc.associate_id}",
+        help="Posts a balancing deposit/withdrawal so I'' becomes zero.",
+        disabled=not confirm_intent,
+    )
+
+    if not trigger:
+        return
+
+    service = exit_service
+    validator: Optional[StatementService] = None
+    if service is None:
+        validator = StatementService()
+        service = ExitSettlementService(statement_service=validator)
+    else:
+        validator = getattr(service, "statement_service", StatementService())
+
+    if not validator or not validator.validate_cutoff_date(cutoff_value):
+        st.error("Cutoff must be a valid ISO8601 UTC timestamp that is not in the future.")
+        return
+
+    calc_payload = calc if cutoff_value == calc.cutoff_date else None
+
+    with st.spinner("Posting balancing ledger entry..."):
+        try:
+            result = service.settle_associate_now(
+                calc.associate_id,
+                cutoff_value,
+                calculations=calc_payload,
+                created_by="statements_ui",
+            )
+        except RuntimeError as exc:
+            st.error(f"Settlement failed: {exc}")
             return
 
-        st.success(
-            f"Posted {result.entry_type} for {_decimal_str(result.amount_eur)} EUR. "
-            "Recomputing statement snapshot..."
-        )
-        st.session_state.current_statement = result.updated_calculations
-        show_success_toast("Associate balanced successfully.")
+    if not result.was_posted:
+        st.info(result.note)
+        return
+
+    st.success(
+        f"Posted {result.entry_type} for {_decimal_str(result.amount_eur)} EUR. "
+        "Recomputing statement snapshot..."
+    )
+    metrics_col1, metrics_col2 = st.columns(2)
+    metrics_col1.metric("Amount Posted (EUR)", _decimal_str(result.amount_eur))
+    metrics_col2.metric("Imbalance After I''", _decimal_str(result.delta_after))
+
+    with st.expander("Receipt Preview", expanded=False):
+        st.markdown(result.receipt.markdown)
+        if result.receipt.file_path and result.receipt.file_path.exists():
+            with open(result.receipt.file_path, "r", encoding="utf-8") as receipt_file:
+                st.download_button(
+                    label="Download Receipt Markdown",
+                    data=receipt_file.read(),
+                    file_name=result.receipt.file_path.name,
+                    mime="text/markdown",
+                    key=f"download_receipt_{result.receipt.file_path.name}",
+                )
+    st.caption(
+        f"Model {result.receipt.version} receipt stored at "
+        f"{result.receipt.file_path or 'data/exports/receipts/<associate_id>'}."
+    )
+    st.session_state.current_statement = result.updated_calculations
+    show_success_toast("Associate balanced successfully.")
+
+    refresh_key = f"settle_associate_refresh_{calc.associate_id}"
+    if st.button(
+        ":material/refresh: Refresh statement view",
+        key=refresh_key,
+        help="Click after reviewing the receipt to recompute the snapshot.",
+    ):
         safe_rerun()
+    else:
+        st.caption(
+            "Receipt preview is visible above; hit Refresh when you are ready to rerun the statement."
+        )
 
 
 def render_export_options(calc: StatementCalculations, partner_section: PartnerFacingSection) -> None:
@@ -574,9 +674,9 @@ Period Ending: {calc.cutoff_date.split('T')[0]}
 
 Net Deposits (ND): {_format_eur(partner_section.net_deposits_eur)}
 Fair Share (FS): {_format_eur(partner_section.fair_share_eur)}
-Yield Funds (YF = ND + FS): {_format_eur(partner_section.yield_funds_eur)}
+{identity_label()} ({identity_formula()}): {_format_eur(partner_section.yield_funds_eur)}
 Total Balance (TB): {_format_eur(partner_section.total_balance_eur)}
-Imbalance (I''): {_format_eur(partner_section.imbalance_eur)}
+Imbalance (I''): {_format_eur(partner_section.imbalance_eur)}  (TB - {identity_symbol()})
 Exit Payout (-I''): {_format_eur(partner_section.exit_payout_eur)}
 Total Deposits: {_format_eur(partner_section.total_deposits_eur)}
 Total Withdrawals: {_format_eur(partner_section.total_withdrawals_eur)}
@@ -891,23 +991,25 @@ def main() -> None:
     # Instructions
     with st.expander(":material/menu_book: Statement Information", expanded=False):
         st.markdown(
-            """
+            f"""
             ### About Monthly Statements
 
             - **Partner Statement**: Shareable with associates showing funding, entitlement, and bookmaker balances
-            - **Internal Reconciliation**: Internal-only section showing ND/FS/YF/TB identities
+            - **Internal Reconciliation**: Internal-only section showing ND/FS/{identity_symbol()}/TB identities
             - **Transaction Details**: Complete transaction list for verification
 
             **Identity & Settlements**
 
             - `ND = SUM(DEPOSIT.amount_eur) - SUM(WITHDRAWAL.amount_eur)`
             - `FS = SUM(BET_RESULT.per_surebet_share_eur)` (covers WON / LOST / VOID)
-            - `YF = ND + FS` (legacy *Should Hold*)
+            - `{identity_formula()}` (toggle via `SUREBET_YF_COPY_ROLLOUT`)
             - `TB = SUM(all ledger entries)`
-            - `I'' = TB - YF` (positive = overholder, negative = short)
+            - `I'' = TB - {identity_symbol()}` (positive = overholder, negative = short)
             - `Exit payout = -I''` (positive = pay associate, negative = collect from them)
 
-            Statement CSV exports list ND/FS/YF/TB/I'' plus **Exit Payout**. Run **Settle Associate Now** before
+            {identity_rollout_note()}
+
+            Statement CSV exports list ND/FS/{identity_symbol()}/TB/I'' plus **Exit Payout**. Run **Settle Associate Now** before
             deactivating an associate so they exit with `I'' = 0`.
             """
         )

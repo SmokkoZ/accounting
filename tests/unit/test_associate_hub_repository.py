@@ -52,6 +52,7 @@ class TestAssociateHubRepository:
                 'home_currency': 'EUR',
                 'telegram_chat_id': '123456',
                 'net_deposits_eur': '1000.00',
+                'fair_share_eur': '50.00',
                 'current_holding_eur': '950.00',
                 'pending_balance_eur': '75.00',
                 'bookmaker_count': 3,
@@ -78,16 +79,17 @@ class TestAssociateHubRepository:
         assert associate.home_currency == 'EUR'
         assert associate.telegram_chat_id == '123456'
         assert associate.net_deposits_eur == Decimal('1000.00')
-        assert associate.should_hold_eur == Decimal('1000.00')
+        assert associate.fair_share_eur == Decimal('50.00')
+        assert associate.should_hold_eur == Decimal('1050.00')
         assert associate.current_holding_eur == Decimal('950.00')
         assert associate.balance_eur == Decimal('950.00')
         assert associate.pending_balance_eur == Decimal('75.00')
-        assert associate.delta_eur == Decimal('-50.00')
+        assert associate.delta_eur == Decimal('-100.00')
         assert associate.bookmaker_count == 3
         assert associate.active_bookmaker_count == 2
         assert associate.last_activity_utc == '2025-01-01T12:00:00Z'
         assert associate.status == "short"
-        assert associate.delta_display() == "-€50.00"
+        assert associate.delta_display() == "-€100.00"
         assert associate.title() == "Short"
         assert associate.status_color == "#ffebee"
     
@@ -329,6 +331,7 @@ class TestAssociateMetrics:
             active_bookmaker_count=2,
             net_deposits_eur=Decimal('1000.00'),
             should_hold_eur=Decimal('1000.00'),
+            fair_share_eur=Decimal('0.00'),
             current_holding_eur=Decimal('1000.00'),
             balance_eur=Decimal('1000.00'),
             pending_balance_eur=Decimal('0.00'),
@@ -356,6 +359,7 @@ class TestAssociateMetrics:
             active_bookmaker_count=2,
             net_deposits_eur=Decimal('1000.00'),
             should_hold_eur=Decimal('1000.00'),
+            fair_share_eur=Decimal('0.00'),
             current_holding_eur=Decimal('1050.00'),
             balance_eur=Decimal('1050.00'),
             pending_balance_eur=Decimal('25.00'),
@@ -383,6 +387,7 @@ class TestAssociateMetrics:
             active_bookmaker_count=2,
             net_deposits_eur=Decimal('1000.00'),
             should_hold_eur=Decimal('1000.00'),
+            fair_share_eur=Decimal('0.00'),
             current_holding_eur=Decimal('950.00'),
             balance_eur=Decimal('950.00'),
             pending_balance_eur=Decimal('75.00'),
