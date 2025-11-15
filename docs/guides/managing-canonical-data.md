@@ -16,7 +16,7 @@ This ensures bets from different bookmakers can be matched for surebet identific
 
 ### Current Coverage
 
-The system includes **47 markets** across 5 tiers:
+The system includes **82 markets** across 5 tiers, plus every soccer two-way split (home/away totals for goals, cards, corners, shots, offsides, fouls, yes/no props). Romanian bookmaker phrasing (e.g., *Peste/Sub*, *Cornere gazdă*, *Cartonaș roșu*) is normalized automatically, while canonical codes remain in English.
 
 **Tier 1: Most Common (Football)** - Covers ~80% of betting volume
 - Match Winner / 1X2
@@ -39,6 +39,8 @@ The system includes **47 markets** across 5 tiers:
 - Booking Points
 - Odd/Even Goals
 - Time of First Goal
+- Home & Away props for goals/corners/cards/shots/fouls/offside
+- Team-to-Score / Clean Sheet / Red Card (per side)
 
 **Tier 4: Other Sports**
 - Tennis (Match Winner, Sets, Games)
@@ -55,10 +57,10 @@ The system includes **47 markets** across 5 tiers:
 #### Method 1: Using the Management Script
 
 ```bash
-# Seed all comprehensive markets
+# Seed all comprehensive markets (82 definitions today)
 python scripts/manage_canonical_data.py seed-markets
 
-# This adds 47 common markets covering most betting scenarios
+# The script pulls from the shared taxonomy, so new two-way markets are added automatically.
 ```
 
 #### Method 2: Manual SQL Insert
@@ -422,6 +424,6 @@ python scripts/manage_canonical_data.py create-event \
 4. Consider normalization service (Option C) for scale
 
 **Current Coverage:**
-- ✅ 47 canonical markets (covers 95%+ of common bets)
+- ✅ 82 canonical markets (covers virtually every two-way soccer market plus core multi-sport bets)
 - ⚠️ 2 sample events (needs scaling solution)
 - 🎯 Next: Implement auto-event creation

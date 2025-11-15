@@ -13,6 +13,7 @@ from pathlib import Path
 from src.core.database import initialize_database, get_db_connection
 from src.core.schema_validation import validate_schema, SchemaValidationError
 from src.core.seed_data import get_seed_data_summary
+from src.domain.market_taxonomy import get_all_canonical_market_definitions
 
 
 class TestCoreDatabase(unittest.TestCase):
@@ -105,7 +106,8 @@ class TestCoreDatabase(unittest.TestCase):
         self.assertEqual(summary["bookmakers"], 4)
 
         # Check that canonical markets were inserted
-        self.assertEqual(summary["canonical_markets"], 14)
+        expected_markets = len(get_all_canonical_market_definitions())
+        self.assertEqual(summary["canonical_markets"], expected_markets)
 
         # Check that other tables are empty (except for seed data)
         self.assertEqual(summary["canonical_events"], 0)

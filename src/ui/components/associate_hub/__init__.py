@@ -6,6 +6,7 @@ from .listing import (
     render_bookmaker_subtable,
     render_empty_state,
     render_hub_dashboard,
+    QuickAction,
 )
 from .drawer import render_detail_drawer
 
@@ -18,5 +19,6 @@ __all__ = [
     "render_bookmaker_subtable",
     "render_empty_state",
     "render_hub_dashboard",
-    "render_detail_drawer"
+    "render_detail_drawer",
+    "QuickAction",
 ]

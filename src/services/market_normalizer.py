@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 from typing import Any, Dict, Optional, Tuple
+import unicodedata
 
 import structlog
 
@@ -144,15 +145,18 @@ class MarketNormalizer:
         if not side_text:
             return None
         s = side_text.strip().upper()
+        s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
         mapping = {
             "O": "OVER",
             "U": "UNDER",
             "OVER": "OVER",
             "UNDER": "UNDER",
             "YES": "YES",
+            "DA": "YES",
             "SI": "YES",
-            "SÌ": "YES",
+            "SAO": "YES",
             "NO": "NO",
+            "NU": "NO",
             "TEAM A": "TEAM_A",
             "TEAM B": "TEAM_B",
             "HOME": "TEAM_A",
@@ -161,8 +165,9 @@ class MarketNormalizer:
             "OSPITE": "TEAM_B",
             "TRASFERTA": "TEAM_B",
             "PIU": "OVER",
-            "PIÙ": "OVER",
+            "PESTE": "OVER",
             "MENO": "UNDER",
+            "SUB": "UNDER",
             "PLAYER A": "TEAM_A",
             "PLAYER B": "TEAM_B",
             "PARI": "EVEN",

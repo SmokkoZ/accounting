@@ -1,18 +1,23 @@
 story: "13.1.associates-hub-management-tab"
 epic: "13"
-decision: PASS
-date: 2025-11-14
+decision: CONCERNS
+date: 2025-11-15
 gate_keeper: "Quinn - Test Architect"
 
-risk_score: 6
+risk_score: 12
 risk_level: Medium
 risk_factors:
-  - factor: "Manual tab switching after quick actions"
-    probability: 2
+  - factor: "Risk filters and ND/last-activity sorting missing from Management tab (AC4)"
+    probability: 3
     impact: 3
+    score: 9
+    priority: High
+  - factor: "Quick actions do not navigate to Overview/History automatically (AC8)"
+    probability: 3
+    impact: 2
     score: 6
     priority: Medium
-  - factor: "Limited end-to-end automation for the new Management tab flows"
+  - factor: "Limited integration coverage for inline edits and reassignment flows"
     probability: 3
     impact: 2
     score: 6
@@ -27,28 +32,34 @@ nfr_assessment:
 
 traceability:
   total_requirements: 8
-  tested_requirements: 5
-  coverage_percentage: 62%
+  tested_requirements: 6
+  coverage_percentage: 75%
   gaps_identified:
-    - "Per-associate actions prepare cross-tab state but cannot switch the active tab automatically; behaviour relies on user clicks."
+    - "Management filters lack risk-flag controls and ND/last-activity sorts, so AC4 is unmet."
+    - "Per-associate actions queue state but cannot switch tabs automatically, leaving AC8 incomplete."
 
 quality_gate:
-  decision: PASS
+  decision: CONCERNS
   rationale: >
-    Story 13.1 now fulfils the Management tab acceptance criteria with search covering alias/bookmaker/chat IDs and the
-    "Active Bookmakers" sort backed by `active_bookmaker_count`. Balance-aware reassignment protections and unit tests remain intact.
-    The only open ergonomic note is that Overview/History quick actions still require a manual tab click, which is acceptable for this release.
-  critical_issues: []
+    Story 13.1 delivers the core inline editing and reassignment safeguards, but it still violates two acceptance
+    criteria: the filter/sort experience is missing the specified risk and ND/last-activity options, and quick actions
+    fail to take the operator to the requested tab. These gaps materially impact usability, so the gate is marked CONCERNS
+    until the behaviours or requirements are reconciled.
+  critical_issues:
+    - "Add the risk-flag filter plus ND and last-activity sorting options to `render_filters` and the repository."
+    - "Update quick actions so 'Go to Overview'/'View history' actually navigate to the destination tab (or re-scope the AC)."
   recommendations:
-    - "Introduce an integration or scripted UI test that opens the Associates Hub, verifies Management as default, exercises search/filter combinations, and validates inline edits plus reassignment confirmation."
-    - "Clarify UX copy for 'Go to Overview' and 'View history' actions so operators understand that the tab is queued and must still be clicked, or revisit once Streamlit exposes programmatic tab selection."
+    - "Implement the missing risk filter and ND/last-activity sort orders, and cover them with unit tests."
+    - "Adopt a tab implementation that permits programmatic selection (or reroute to dedicated pages) so quick actions complete the navigation."
+    - "Automate an integration/AppTest flow that exercises filters, inline edits, and balance-aware reassignment."
   next_steps:
-    - "Automate the Management tab smoke described in the story's Tasks/Dev Notes to guard regression on money-movement exclusions and reassignment prompts."
-    - "Monitor Streamlit releases for programmatic tab switching and adopt it to complete the AC8 experience once feasible."
+    - "Prioritise AC4 remediation before shipping the Management tab widely."
+    - "Decide whether to change the UX requirement or engineering approach for AC8, then implement the agreed path."
+    - "Extend AppTest coverage beyond the smoke test to include filter persistence, edits, and reassignment confirmations."
 
 test_strategy:
   unit_tests: Required
-  integration_tests: Recommended
+  integration_tests: Required
   e2e_tests: Recommended
   performance_tests: Not Required
   security_tests: Not Required
@@ -56,19 +67,19 @@ test_strategy:
 
 technical_debt:
   identified_issues:
-    - "Search semantics only partially match AC4; bookmaker-name search is not yet wired."
-    - "Sort options include an 'Active Bookmakers' label without a dedicated ORDER BY branch."
-    - "No automated coverage yet for full Management tab flows (navigation, filters, persistence)."
-  severity: Medium
-  remediation_priority: Medium
-  estimated_effort: 6 hours
+    - "Risk filter and ND/last-activity sorts required by AC4 are not implemented."
+    - "Quick actions depend on manual tab clicks despite AC8 mandating an automatic switch."
+    - "No automated coverage yet for the end-to-end Management tab workflow (filters, edits, reassignment)."
+  severity: High
+  remediation_priority: High
+  estimated_effort: 8 hours
 
 success_criteria:
-  - "Operators can reliably locate associates either by alias, bookmaker name, or multibook chat id using the unified search field."
-  - "Sort controls, including 'Active Bookmakers', reflect their labels in the underlying ordering and are covered by tests."
-  - "Opening Associates Hub always lands on Management, where edits persist, derived metrics remain read-only, and reassignment prompts appear whenever balances are non-zero."
+  - "Filter bar includes the requested risk-flag selector and ND/last-activity sort orders, all persisted in session state."
+  - "Clicking 'Go to Overview' or 'View history' takes the operator to the corresponding tab without an extra manual click."
+  - "An automated test opens the Associates Hub, applies filters, edits data, and exercises reassignment confirmation to guard against regressions."
 
 sign_off:
   qa_engineer: "Quinn - Test Architect"
-  review_date: 2025-11-14
-  approval_status: Conditional
+  review_date: 2025-11-15
+  approval_status: CONCERNS

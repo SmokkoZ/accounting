@@ -17,6 +17,17 @@ from src.ui.utils.state_management import safe_rerun
 
 ADMIN_LABELS: Dict[bool, str] = {True: "Admin", False: "Non-Admin"}
 STATUS_LABELS: Dict[bool, str] = {True: "Active", False: "Inactive"}
+RISK_LABELS: Dict[str, str] = {
+    "balanced": "Balanced",
+    "overholding": "Overholding",
+    "short": "Short",
+}
+RISK_SLUG_BY_LABEL: Dict[str, str] = {label: slug for slug, label in RISK_LABELS.items()}
+
+
+def _widget_key(base: str, suffix: str) -> str:
+    """Return a stable widget key with optional suffix for multi-render pages."""
+    return f"{base}{suffix}" if suffix else base
 
 
 def _labels_from_state(values: Iterable[bool], mapping: Dict[bool, str]) -> List[str]:
@@ -35,6 +46,21 @@ def _flags_from_selection(selection: Iterable[str], mapping: Dict[bool, str]) ->
     return seen
 
 
+def _risk_labels_from_state(values: Iterable[str]) -> List[str]:
+    """Convert stored risk slugs into display labels."""
+    return [RISK_LABELS.get(slug, slug.title()) for slug in values if slug in RISK_LABELS]
+
+
+def _risk_slugs_from_labels(labels: Iterable[str]) -> List[str]:
+    """Convert selected risk labels back into slug storage."""
+    slugs: List[str] = []
+    for label in labels:
+        slug = RISK_SLUG_BY_LABEL.get(label)
+        if slug and slug not in slugs:
+            slugs.append(slug)
+    return slugs
+
+
 def get_filter_state() -> Dict[str, Any]:
     """Read the current filter state from Streamlit session state."""
     return {
@@ -42,6 +68,7 @@ def get_filter_state() -> Dict[str, Any]:
         "admin_filter": st.session_state.get("hub_admin_filter", []),
         "associate_status_filter": st.session_state.get("hub_associate_status_filter", []),
         "bookmaker_status_filter": st.session_state.get("hub_bookmaker_status_filter", []),
+        "risk_filter": st.session_state.get("hub_risk_filter", []),
         "currency_filter": st.session_state.get("hub_currency_filter", []),
         "sort_by": st.session_state.get("hub_sort_by", "alias_asc"),
         "page": st.session_state.get("hub_page", 0),
@@ -56,6 +83,7 @@ def update_filter_state(**kwargs: Any) -> None:
         "admin_filter": "hub_admin_filter",
         "associate_status_filter": "hub_associate_status_filter",
         "bookmaker_status_filter": "hub_bookmaker_status_filter",
+        "risk_filter": "hub_risk_filter",
         "currency_filter": "hub_currency_filter",
         "sort_by": "hub_sort_by",
         "page": "hub_page",
@@ -68,7 +96,11 @@ def update_filter_state(**kwargs: Any) -> None:
             st.session_state[session_key] = value
 
 
-def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], bool]:
+def render_filters(
+    repository: AssociateHubRepository,
+    *,
+    widget_suffix: str = "",
+) -> Tuple[Dict[str, Any], bool]:
     """Render the filter bar and return the updated state plus refresh flag."""
     current_state = get_filter_state()
     should_refresh = False
@@ -127,7 +159,7 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
         st.markdown('<div class="hub-filter-heading">Filters & Search</div>', unsafe_allow_html=True)
 
         filter_cols = st.columns(
-            (1.5, 1.1, 1.1, 1.1, 1.0, 0.9, 0.7),
+            (1.5, 1.1, 1.1, 1.1, 1.0, 1.0, 0.9, 0.7),
             gap="small",
         )
 
@@ -136,7 +168,7 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
             search_value = st.text_input(
                 "Search Associates",
                 value=current_state["search"],
-                key="hub_search_input",
+                key=_widget_key("hub_search_input", widget_suffix),
                 placeholder="Alias, bookmaker, or chat ID",
                 help="Searches associate aliases, bookmaker names, and Telegram chat IDs.",
                 label_visibility="collapsed",
@@ -151,7 +183,7 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 "Admin Status",
                 options=list(ADMIN_LABELS.values()),
                 default=_labels_from_state(current_state["admin_filter"], ADMIN_LABELS),
-                key="hub_admin_filter_select",
+                key=_widget_key("hub_admin_filter_select", widget_suffix),
                 label_visibility="collapsed",
                 placeholder="Choose options",
                 help="Filter by whether the associate has admin privileges.",
@@ -167,7 +199,7 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 "Associate Status",
                 options=list(STATUS_LABELS.values()),
                 default=_labels_from_state(current_state["associate_status_filter"], STATUS_LABELS),
-                key="hub_associate_status_filter_select",
+                key=_widget_key("hub_associate_status_filter_select", widget_suffix),
                 label_visibility="collapsed",
                 placeholder="Choose options",
                 help="Filter by whether the associate is active.",
@@ -183,7 +215,7 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 "Bookmaker Status",
                 options=list(STATUS_LABELS.values()),
                 default=_labels_from_state(current_state["bookmaker_status_filter"], STATUS_LABELS),
-                key="hub_bookmaker_status_filter_select",
+                key=_widget_key("hub_bookmaker_status_filter_select", widget_suffix),
                 label_visibility="collapsed",
                 placeholder="Choose options",
                 help="Filter by whether any bookmaker mapped to the associate is active.",
@@ -194,6 +226,22 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 should_refresh = True
 
         with filter_cols[4]:
+            _compact_label("Risk Flags")
+            risk_selection = st.multiselect(
+                "Risk Flags",
+                options=list(RISK_SLUG_BY_LABEL.keys()),
+                default=_risk_labels_from_state(current_state["risk_filter"]),
+                key=_widget_key("hub_risk_filter_select", widget_suffix),
+                label_visibility="collapsed",
+                placeholder="Balanced / Overholding / Short",
+                help="Filter by ND/YF imbalance classification.",
+            )
+            normalized_risk = _risk_slugs_from_labels(risk_selection)
+            if normalized_risk != current_state["risk_filter"]:
+                update_filter_state(risk_filter=normalized_risk, page=0)
+                should_refresh = True
+
+        with filter_cols[5]:
             _compact_label("Currencies")
             currency_cache_key = "hub_currency_options"
             if currency_cache_key not in st.session_state:
@@ -211,7 +259,7 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 "Currencies",
                 options=currencies,
                 default=current_state["currency_filter"],
-                key="hub_currency_filter_select",
+                key=_widget_key("hub_currency_filter_select", widget_suffix),
                 label_visibility="collapsed",
                 placeholder="Choose options",
                 help="Filter associates by their home currency.",
@@ -223,8 +271,12 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
         sort_options = {
             "Alias (A-Z)": "alias_asc",
             "Alias (Z-A)": "alias_desc",
-            "Delta (High-Low)": "delta_desc",
-            "Delta (Low-High)": "delta_asc",
+            "Net Deposits (High-Low)": "nd_desc",
+            "Net Deposits (Low-High)": "nd_asc",
+            "Imbalance I'' (High-Low)": "delta_desc",
+            "Imbalance I'' (Low-High)": "delta_asc",
+            "Last Activity (Newest-Oldest)": "activity_desc",
+            "Last Activity (Oldest-Newest)": "activity_asc",
             "Active Bookmakers": "bookmaker_active_desc",
         }
         sort_labels = list(sort_options.keys())
@@ -234,13 +286,13 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
         )
         selected_sort_label = current_sort_label
 
-        with filter_cols[5]:
+        with filter_cols[6]:
             _compact_label("Sort By")
             selected_label = st.selectbox(
                 "Sort By",
                 options=sort_labels,
                 index=sort_labels.index(current_sort_label),
-                key="hub_sort_by_select",
+                key=_widget_key("hub_sort_by_select", widget_suffix),
                 label_visibility="collapsed",
                 help="Sort order for the associate listing.",
             )
@@ -249,14 +301,14 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
                 update_filter_state(sort_by=sort_options[selected_label], page=0)
                 should_refresh = True
 
-        with filter_cols[6]:
+        with filter_cols[7]:
             _compact_label("Page Size")
             page_size_options = [10, 25, 50, 100]
             page_size = st.selectbox(
                 "Page Size",
                 options=page_size_options,
                 index=page_size_options.index(current_state["page_size"]),
-                key="hub_page_size_select",
+                key=_widget_key("hub_page_size_select", widget_suffix),
                 label_visibility="collapsed",
                 help="Number of associates to show per page.",
             )
@@ -283,6 +335,10 @@ def render_filters(repository: AssociateHubRepository) -> Tuple[Dict[str, Any], 
         if current_state["bookmaker_status_filter"]:
             bookmaker_labels = _labels_from_state(current_state["bookmaker_status_filter"], STATUS_LABELS)
             active_filter_labels.append(f"Bookmakers: {', '.join(bookmaker_labels)}")
+
+        if current_state["risk_filter"]:
+            risk_labels = _risk_labels_from_state(current_state["risk_filter"])
+            active_filter_labels.append(f"Risk: {', '.join(risk_labels)}")
 
         if current_state["currency_filter"]:
             active_filter_labels.append(f"Currencies: {', '.join(current_state['currency_filter'])}")
@@ -340,6 +396,8 @@ def get_active_filters_count(current_state: Dict[str, Any]) -> int:
     if current_state["associate_status_filter"]:
         count += 1
     if current_state["bookmaker_status_filter"]:
+        count += 1
+    if current_state["risk_filter"]:
         count += 1
     if current_state["currency_filter"]:
         count += 1

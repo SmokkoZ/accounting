@@ -228,3 +228,50 @@ def test_normalize_home_total_shots_by_team_label():
     )
     assert result["market_code"] == "HOME_TEAM_TOTAL_SHOTS_OVER_UNDER"
     assert result["side"] == "UNDER"
+
+
+def test_normalize_romanian_total_goals_label():
+    db = _db()
+    norm = MarketNormalizer(db)
+    result = norm.normalize(
+        sport="football",
+        market_label="Peste/Sub 2.5 goluri",
+        market_code_guess=None,
+        period_scope_text="Meci intreg",
+        side_text="peste",
+        line_value="2.5",
+    )
+    assert result["market_code"] == "TOTAL_GOALS_OVER_UNDER"
+    assert result["period_scope"] == "FULL_MATCH"
+    assert result["side"] == "OVER"
+
+
+def test_normalize_romanian_home_corners_label():
+    db = _db()
+    norm = MarketNormalizer(db)
+    result = norm.normalize(
+        sport="football",
+        market_label="Cornere gazda peste 4.5",
+        market_code_guess=None,
+        period_scope_text=None,
+        side_text="peste",
+        line_value="4.5",
+    )
+    assert result["market_code"] == "HOME_TEAM_TOTAL_CORNERS_OVER_UNDER"
+    assert result["side"] == "OVER"
+
+
+def test_normalize_romanian_away_to_score_no():
+    db = _db()
+    norm = MarketNormalizer(db)
+    result = norm.normalize(
+        sport="football",
+        market_label="Oaspete marcheaza?",
+        market_code_guess=None,
+        period_scope_text=None,
+        side_text="nu",
+        line_value=None,
+        event_name="Farul vs CFR Cluj",
+    )
+    assert result["market_code"] == "AWAY_TEAM_TO_SCORE"
+    assert result["side"] == "NO"

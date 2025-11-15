@@ -311,41 +311,38 @@ def _render_bet_details_editable(
                     current_market_idx = i + 1
                     break
 
-        market_col, period_col = st.columns(2)
-        with market_col:
-            selected_market = st.selectbox(
-                "Market", market_options, index=current_market_idx
-            )
-            market_code = None
-            if selected_market != "(None - Select Market)":
-                market_code = selected_market.split("(")[-1].rstrip(")")
-            valid_sides = verification_service.get_valid_sides_for_market(market_code)
-            current_side = bet.get("side", valid_sides[0] if valid_sides else "OVER")
-            side_idx = valid_sides.index(current_side) if current_side in valid_sides else 0
-            side = st.selectbox("Side", valid_sides, index=side_idx)
+        selected_market = st.selectbox(
+            "Market", market_options, index=current_market_idx
+        )
+        market_code = None
+        if selected_market != "(None - Select Market)":
+            market_code = selected_market.split("(")[-1].rstrip(")")
+        valid_sides = verification_service.get_valid_sides_for_market(market_code)
+        current_side = bet.get("side", valid_sides[0] if valid_sides else "OVER")
+        side_idx = valid_sides.index(current_side) if current_side in valid_sides else 0
+        side = st.selectbox("Side", valid_sides, index=side_idx)
 
-        with period_col:
-            period_options = [
-                "FULL_MATCH",
-                "FIRST_HALF",
-                "SECOND_HALF",
-                "FIRST_QUARTER",
-                "SECOND_QUARTER",
-            ]
-            current_period = bet.get("period_scope", "FULL_MATCH")
-            selected_period = st.selectbox(
-                "Period",
-                period_options,
-                index=(
-                    period_options.index(current_period)
-                    if current_period in period_options
-                    else 0
-                ),
-            )
-            current_line = float(bet["line_value"]) if bet.get("line_value") else 0.0
-            line_value = st.number_input(
-                "Line Value (optional)", value=current_line, step=0.5, format="%.1f"
-            )
+        period_options = [
+            "FULL_MATCH",
+            "FIRST_HALF",
+            "SECOND_HALF",
+            "FIRST_QUARTER",
+            "SECOND_QUARTER",
+        ]
+        current_period = bet.get("period_scope", "FULL_MATCH")
+        selected_period = st.selectbox(
+            "Period",
+            period_options,
+            index=(
+                period_options.index(current_period)
+                if current_period in period_options
+                else 0
+            ),
+        )
+        current_line = float(bet["line_value"]) if bet.get("line_value") else 0.0
+        line_value = st.number_input(
+            "Line Value (optional)", value=current_line, step=0.5, format="%.1f"
+        )
 
         col_stake, col_odds, col_payout = st.columns(3)
 

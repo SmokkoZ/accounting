@@ -103,6 +103,7 @@ class TestAssociateHubRepository:
             admin_filter=[True],
             associate_status_filter=[True],
             bookmaker_status_filter=[True],
+            risk_filter=["balanced", "overholding"],
             currency_filter=["EUR", "GBP"],
             sort_by="delta_desc",
             limit=25,
@@ -122,9 +123,30 @@ class TestAssociateHubRepository:
         assert "LOWER(COALESCE(bsearch.bookmaker_chat_id, '')) LIKE ?" in query
         assert "a.is_admin IN" in query
         assert "a.is_active IN" in query
-        assert "a.home_currency IN" in query
+        assert "UPPER(a.home_currency) IN" in query
+        assert "HAVING CASE" in query
         assert "ORDER BY" in query
         assert "LIMIT ? OFFSET ?" in query
+        params = call_args[0][1]
+        assert "balanced" in params
+        assert "overholding" in params
+
+    def test_list_associates_with_risk_filter(self, repository, mock_db):
+        """Ensure risk filter adds HAVING clause and normalizes slugs."""
+        mock_db.execute.return_value.fetchall.return_value = []
+
+        repository.list_associates_with_metrics(
+            risk_filter=["balanced", "Balanced", "unknown", "short"],
+            limit=10,
+        )
+
+        call_args = mock_db.execute.call_args
+        query = call_args[0][0]
+        params = call_args[0][1]
+        assert "HAVING CASE" in query
+        assert params.count("balanced") == 1
+        assert "short" in params
+        assert "unknown" not in params
     
     def test_list_associates_with_sort_options(self, repository, mock_db):
         """Test different sorting options."""
@@ -134,6 +156,8 @@ class TestAssociateHubRepository:
         sort_options = [
             "alias_asc",
             "alias_desc",
+            "nd_asc",
+            "nd_desc",
             "delta_asc",
             "delta_desc",
             "activity_asc",

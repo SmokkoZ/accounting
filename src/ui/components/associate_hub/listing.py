@@ -7,18 +7,32 @@ Handles expand/collapse state persistence and displays status indicators.
 
 from __future__ import annotations
 
-import streamlit as st
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Sequence
+
+import streamlit as st
 
 from src.repositories.associate_hub_repository import AssociateMetrics, BookmakerSummary
-from src.ui.components.associate_hub.filters import update_filter_state
+from src.ui.components.associate_hub.filters import RISK_LABELS, update_filter_state
 from src.ui.utils.formatters import format_currency_amount
 from src.ui.utils.state_management import safe_rerun
 from src.ui.utils.identity_copy import identity_label, identity_tooltip
 
 CARD_STYLE_KEY = "associate_card_styles_loaded"
+
+
+@dataclass(frozen=True)
+class QuickAction:
+    """Definition for an action rendered within a card."""
+
+    key_prefix: str
+    label: str
+    help_text: str
+    callback: Callable[[AssociateMetrics], None]
+    icon: Optional[str] = None
+    button_type: str = "secondary"
 
 
 def _format_optional_eur(value: Optional[Decimal]) -> str:
@@ -59,6 +73,11 @@ def _ensure_card_styles() -> None:
             padding: 1.25rem 1.5rem;
             margin-bottom: 1rem;
             background-color: rgba(255, 255, 255, 0.02);
+            scroll-margin-top: 90px;
+        }
+        .associate-card.associate-card--highlight {
+            border-color: #a5b4fc;
+            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.35);
         }
         .associate-card + .associate-card {
             margin-top: 0.5rem;
@@ -66,14 +85,29 @@ def _ensure_card_styles() -> None:
         .associate-card h4 {
             margin-bottom: 0.25rem;
         }
+        .associate-card .selected-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.15rem 0.55rem;
+            border-radius: 999px;
+            background-color: rgba(99, 102, 241, 0.22);
+            color: #c7d2fe;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
         </style>
         """,
         unsafe_allow_html=True,
     )
     st.session_state[CARD_STYLE_KEY] = True
 def render_associate_listing(
-    associates: List[AssociateMetrics], 
-    bookmakers_dict: Dict[int, List[BookmakerSummary]]
+    associates: List[AssociateMetrics],
+    bookmakers_dict: Optional[Dict[int, List[BookmakerSummary]]] = None,
+    *,
+    quick_actions: Optional[Sequence[QuickAction]] = None,
+    highlight_associate_id: Optional[int] = None,
+    show_bookmakers: bool = True,
 ) -> None:
     """
     Render each associate as a card with summary metrics and bookmaker details.
@@ -83,15 +117,28 @@ def render_associate_listing(
         return
 
     _ensure_card_styles()
+    bookmaker_lookup = bookmakers_dict or {}
 
     for associate in associates:
+        is_highlighted = (
+            highlight_associate_id is not None
+            and associate.associate_id == highlight_associate_id
+        )
+        card_classes = "associate-card"
+        if is_highlighted:
+            card_classes += " associate-card--highlight"
+
         admin_label = "Admin" if associate.is_admin else "User"
         currency_label = associate.home_currency or "EUR"
         bookie_summary = f"{associate.active_bookmaker_count}/{associate.bookmaker_count}"
         status_label = associate.title()
         last_activity = _format_local_timestamp(associate.last_activity_utc)
 
-        st.markdown('<div class="associate-card">', unsafe_allow_html=True)
+        st.markdown(
+            f"<div id='associate-card-{associate.associate_id}'></div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(f'<div class="{card_classes}">', unsafe_allow_html=True)
         with st.container():
             header_cols = st.columns([3, 1, 1])
             with header_cols[0]:
@@ -100,6 +147,13 @@ def render_associate_listing(
                 st.caption(f"{bookie_summary} bookmakers")
                 if associate.telegram_chat_id:
                     st.caption(f"Telegram: {associate.telegram_chat_id}")
+                if is_highlighted:
+                    st.markdown(
+                        "<span class='selected-pill'>"
+                        ":material/star: Selected"
+                        "</span>",
+                        unsafe_allow_html=True,
+                    )
             with header_cols[1]:
                 st.metric(
                     "Bookmakers",
@@ -154,79 +208,101 @@ def render_associate_listing(
                     help=metric.get("help"),
                 )
 
-            render_action_buttons(associate)
+            render_action_buttons(associate, quick_actions=quick_actions)
 
-            bookmakers = bookmakers_dict.get(associate.associate_id)
-            if bookmakers:
-                with st.expander(
-                    f"Bookmaker details · {associate.associate_alias}",
-                    expanded=False,
-                ):
-                    render_bookmaker_subtable(bookmakers)
-            else:
-                st.info("No bookmakers configured for this associate.")
+            if show_bookmakers:
+                bookmakers = bookmaker_lookup.get(associate.associate_id)
+                if bookmakers:
+                    with st.expander(
+                        f"Bookmaker details \u2022 {associate.associate_alias}",
+                        expanded=False,
+                    ):
+                        render_bookmaker_subtable(bookmakers)
+                else:
+                    st.info("No bookmakers configured for this associate.")
         st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_action_buttons(associate: AssociateMetrics) -> None:
+def render_action_buttons(
+    associate: AssociateMetrics,
+    *,
+    quick_actions: Optional[Sequence[QuickAction]] = None,
+) -> None:
     """
-    Render action buttons for an associate row.
-    
-    Args:
-        associate: Associate metrics
+    Render dynamic action buttons for an associate card.
     """
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        if st.button(
-            ":material/edit: Edit Profile",
-            key=f"edit_profile_{associate.associate_id}",
-            help="Edit associate details",
-            width="stretch"
-        ):
-            # Set session state for drawer
-            st.session_state["hub_drawer_open"] = True
-            st.session_state["hub_drawer_associate_id"] = associate.associate_id
-            st.session_state["hub_drawer_tab"] = "profile"
-            safe_rerun()
-    
-    with col2:
-        if st.button(
-            ":material/savings: Deposit",
-            key=f"deposit_{associate.associate_id}",
-            help="Record deposit transaction",
-            width="stretch"
-        ):
-            st.session_state["hub_drawer_open"] = True
-            st.session_state["hub_drawer_associate_id"] = associate.associate_id
-            st.session_state["hub_drawer_tab"] = "transactions"
-            st.session_state["hub_funding_action"] = "deposit"
-            safe_rerun()
-    
-    with col3:
-        if st.button(
-            ":material/payments: Withdraw",
-            key=f"withdraw_{associate.associate_id}",
-            help="Record withdrawal transaction",
-            width="stretch"
-        ):
-            st.session_state["hub_drawer_open"] = True
-            st.session_state["hub_drawer_associate_id"] = associate.associate_id
-            st.session_state["hub_drawer_tab"] = "transactions"
-            st.session_state["hub_funding_action"] = "withdraw"
-            safe_rerun()
-    
-    with col4:
-        if st.button(
-            ":material/visibility: View Details",
-            key=f"details_{associate.associate_id}",
-            help="View full associate details",
-            width="stretch"
-        ):
-            st.session_state["hub_drawer_open"] = True
-            st.session_state["hub_drawer_associate_id"] = associate.associate_id
-            st.session_state["hub_drawer_tab"] = "profile"
-            safe_rerun()
+    actions = [
+        action for action in (quick_actions or _default_quick_actions())
+        if action.callback is not None
+    ]
+    if not actions:
+        return
+
+    columns = st.columns(len(actions))
+    for column, action in zip(columns, actions):
+        with column:
+            label = f"{action.icon} {action.label}" if action.icon else action.label
+            if st.button(
+                label,
+                key=f"{action.key_prefix}_{associate.associate_id}",
+                help=action.help_text,
+                type=action.button_type,
+                use_container_width=True,
+            ):
+                action.callback(associate)
+
+
+def _default_quick_actions() -> Sequence[QuickAction]:
+    """Default action layout for the operations hub."""
+    return (
+        QuickAction(
+            key_prefix="edit_profile",
+            label="Edit Profile",
+            icon=":material/edit:",
+            help_text="Edit associate details",
+            callback=_open_drawer(tab="profile"),
+        ),
+        QuickAction(
+            key_prefix="deposit",
+            label="Deposit",
+            icon=":material/savings:",
+            help_text="Record deposit transaction",
+            callback=_open_drawer(tab="transactions", funding_action="deposit"),
+        ),
+        QuickAction(
+            key_prefix="withdraw",
+            label="Withdraw",
+            icon=":material/payments:",
+            help_text="Record withdrawal transaction",
+            callback=_open_drawer(tab="transactions", funding_action="withdraw"),
+        ),
+        QuickAction(
+            key_prefix="details",
+            label="View Details",
+            icon=":material/visibility:",
+            help_text="View full associate details",
+            callback=_open_drawer(tab="profile"),
+        ),
+    )
+
+
+def _open_drawer(
+    *,
+    tab: str,
+    funding_action: Optional[str] = None,
+) -> Callable[[AssociateMetrics], None]:
+    """Return a callback that opens the shared drawer for an associate."""
+
+    def _callback(associate: AssociateMetrics) -> None:
+        st.session_state["hub_drawer_open"] = True
+        st.session_state["hub_drawer_associate_id"] = associate.associate_id
+        st.session_state.pop("hub_drawer_bookmaker_id", None)
+        st.session_state["hub_drawer_tab"] = tab
+        if funding_action:
+            st.session_state["hub_funding_action"] = funding_action
+        safe_rerun()
+
+    return _callback
 
 
 def render_bookmaker_subtable(bookmakers: List[BookmakerSummary]) -> None:
@@ -368,7 +444,21 @@ def render_empty_state(filter_state: Dict) -> None:
         if False in filter_state["associate_status_filter"]:
             status_labels.append("Inactive")
         active_filters.append(f"Status: {', '.join(status_labels)}")
-    
+
+    if filter_state.get("bookmaker_status_filter"):
+        status_labels = []
+        if True in filter_state["bookmaker_status_filter"]:
+            status_labels.append("Active")
+        if False in filter_state["bookmaker_status_filter"]:
+            status_labels.append("Inactive")
+        active_filters.append(f"Bookmakers: {', '.join(status_labels)}")
+
+    risk_values = filter_state.get("risk_filter") or []
+    if risk_values:
+        risk_labels = [RISK_LABELS.get(slug, slug.title()) for slug in risk_values]
+        if risk_labels:
+            active_filters.append(f"Risk: {', '.join(risk_labels)}")
+
     if filter_state.get("currency_filter"):
         active_filters.append(f"Currencies: {', '.join(filter_state['currency_filter'])}")
     
@@ -412,7 +502,7 @@ def render_hub_dashboard(associates: List[AssociateMetrics]) -> None:
         st.metric(
             "Total Associates",
             total_associates,
-            delta=f"{total_active} active · {total_admins} admins",
+            delta=f"{total_active} active  {total_admins} admins",
         )
 
     with col2:
@@ -444,7 +534,7 @@ def render_hub_dashboard(associates: List[AssociateMetrics]) -> None:
         st.metric(
             "Status mix",
             f"{balanced_count} balanced",
-            delta=f"{overholding_count} over · {short_count} short",
+            delta=f"{overholding_count} over  {short_count} short",
         )
         st.progress(min(max(balanced_ratio, 0.0), 1.0))
         st.caption(f"{balanced_ratio:.0%} of associates balanced")

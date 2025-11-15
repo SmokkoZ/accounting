@@ -9,8 +9,8 @@ management with confirmation prompts for sensitive operations.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from decimal import Decimal, InvalidOperation
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -21,9 +21,14 @@ from src.repositories.associate_hub_repository import (
     BookmakerSummary,
 )
 from src.services.bookmaker_balance_service import BookmakerBalanceService
-from src.services.funding_transaction_service import FundingTransactionService
+from src.services.funding_transaction_service import (
+    FundingTransaction,
+    FundingTransactionError,
+    FundingTransactionService,
+)
 from src.ui.components.associate_hub.drawer import render_detail_drawer
 from src.ui.components.associate_hub.filters import render_filters
+from src.ui.components.associate_hub.listing import QuickAction, render_associate_listing, render_empty_state, render_hub_dashboard
 from src.ui.helpers.dialogs import open_dialog, render_confirmation_dialog
 from src.ui.helpers.editor import (
     extract_editor_changes,
@@ -32,9 +37,11 @@ from src.ui.helpers.editor import (
 from src.ui.ui_components import load_global_styles
 from src.ui.utils.state_management import safe_rerun
 from src.ui.utils.validators import VALID_CURRENCIES
+from src.ui.helpers.dialogs import close_dialog
 
 
 PENDING_TAB_KEY = "associates_hub_pending_tab"
+ACTIVE_TAB_KEY = "associates_hub_active_tab"
 ASSOC_EDITOR_KEY = "associates_hub_associates_editor"
 BOOKMAKER_EDITOR_KEY = "associates_hub_bookmakers_editor"
 SELECTED_IDS_KEY = "associates_hub_selected_ids"
@@ -46,6 +53,36 @@ BOOKMAKER_REASSIGN_DIALOG_KEY = "associates_hub_reassign_dialog"
 MANAGEMENT_TAB_INDEX = 0
 OVERVIEW_TAB_INDEX = 1
 HISTORY_TAB_INDEX = 2
+
+
+def _queue_tab_switch(tab_index: int, message: str) -> None:
+    """Persist a tab switch request so it executes on the next render."""
+    st.session_state[ACTIVE_TAB_KEY] = tab_index
+    st.session_state[PENDING_TAB_KEY] = {
+        "tab": tab_index,
+        "message": message,
+    }
+
+
+def _list_associates_with_metrics(repository: AssociateHubRepository, **kwargs: Any) -> List[AssociateMetrics]:
+    """
+    Call repository.list_associates_with_metrics with backward compatibility.
+
+    Older deployments may not yet accept the new `risk_filter` argument, so we
+    fall back to removing it if Python raises the corresponding TypeError.
+    """
+    try:
+        return repository.list_associates_with_metrics(**kwargs)
+    except TypeError as exc:
+        if "risk_filter" in str(exc) and "risk_filter" in kwargs:
+            trimmed = dict(kwargs)
+            trimmed.pop("risk_filter", None)
+            return repository.list_associates_with_metrics(**trimmed)
+        raise
+
+OVERVIEW_FUNDING_DIALOG_KEY = "associates_overview_funding_dialog"
+OVERVIEW_DIALOG_PAYLOAD_KEY = f"{OVERVIEW_FUNDING_DIALOG_KEY}__payload"
+METRIC_OVERRIDE_KEY = "associates_hub_metric_overrides"
 
 
 @dataclass(frozen=True)
@@ -62,6 +99,25 @@ class AssociateRow:
     max_surebet_stake_eur: Optional[Decimal]
     max_bookmaker_exposure_eur: Optional[Decimal]
     preferred_balance_chat_id: Optional[str]
+
+
+class FundingDialogValidationError(Exception):
+    """Raised when overview funding dialog validation fails."""
+
+
+def _resolve_operator_identity() -> str:
+    """Return the best operator identifier available for created_by fields."""
+    candidate_keys = (
+        "operator_name",
+        "operator_email",
+        "user_email",
+        "user_display_name",
+    )
+    for key in candidate_keys:
+        value = st.session_state.get(key)
+        if value:
+            return str(value)
+    return "local_user"
 
 
 def _configure_page() -> None:
@@ -96,6 +152,101 @@ def _decimal_to_float(value: Optional[Decimal]) -> Optional[float]:
         return float(value)
     except (ValueError, TypeError):
         return None
+
+
+def _apply_metric_overrides(
+    associates: List[AssociateMetrics],
+) -> List[AssociateMetrics]:
+    """Merge any cached overrides created after funding operations."""
+    overrides: Dict[int, AssociateMetrics] = st.session_state.get(
+        METRIC_OVERRIDE_KEY, {}
+    )
+    if not overrides:
+        return associates
+    merged: List[AssociateMetrics] = []
+    for metric in associates:
+        merged.append(overrides.get(metric.associate_id, metric))
+    return merged
+
+
+def _store_metric_override(metric: AssociateMetrics) -> None:
+    """Persist the freshest metrics for an associate for subsequent renders."""
+    overrides: Dict[int, AssociateMetrics] = st.session_state.setdefault(
+        METRIC_OVERRIDE_KEY, {}
+    )
+    overrides[metric.associate_id] = metric
+
+
+def _launch_overview_funding_dialog(
+    associate: AssociateMetrics,
+    action: str,
+) -> None:
+    """Open the funding dialog prefilled for the given associate."""
+    st.session_state[SELECTED_ASSOCIATE_KEY] = associate.associate_id
+    st.session_state[OVERVIEW_DIALOG_PAYLOAD_KEY] = {
+        "associate_id": associate.associate_id,
+        "associate_alias": associate.associate_alias,
+        "home_currency": associate.home_currency or "EUR",
+        "action": action.lower(),
+    }
+    open_dialog(OVERVIEW_FUNDING_DIALOG_KEY)
+    safe_rerun("overview_funding_launch")
+
+
+def submit_overview_funding_transaction(
+    *,
+    funding_service: FundingTransactionService,
+    repository: AssociateHubRepository,
+    associate_id: int,
+    action: str,
+    amount_value: str,
+    currency_value: str,
+    bookmaker_id: Optional[int],
+    note_value: str,
+    operator_name: Optional[str] = None,
+) -> Tuple[str, AssociateMetrics]:
+    """
+    Validate and submit a funding transaction coming from the Overview tab.
+    """
+    amount_text = (amount_value or "").strip()
+    if not amount_text:
+        raise FundingDialogValidationError("Amount is required.")
+    try:
+        amount = Decimal(amount_text)
+    except (InvalidOperation, ValueError) as exc:  # pragma: no cover - safety
+        raise FundingDialogValidationError("Amount must be a valid decimal.") from exc
+    if amount <= 0:
+        raise FundingDialogValidationError("Amount must be positive.")
+
+    currency = (currency_value or "").strip().upper()
+    if not currency:
+        raise FundingDialogValidationError("Currency is required.")
+    if currency not in VALID_CURRENCIES:
+        raise FundingDialogValidationError(
+            f"{currency} is not a supported currency."
+        )
+
+    direction = action.strip().upper()
+    if direction not in {"DEPOSIT", "WITHDRAW"}:
+        raise FundingDialogValidationError("Unsupported funding direction.")
+
+    note = (note_value or "").strip() or None
+    transaction = FundingTransaction(
+        associate_id=associate_id,
+        bookmaker_id=bookmaker_id,
+        transaction_type=direction,
+        amount_native=amount,
+        native_currency=currency,
+        note=note,
+        created_by=operator_name or _resolve_operator_identity(),
+    )
+    ledger_id = funding_service.record_transaction(transaction)
+    metrics = repository.get_associate_metrics(associate_id)
+    if metrics is None:
+        raise FundingDialogValidationError(
+            "Could not refresh associate metrics after posting the transaction."
+        )
+    return str(ledger_id), metrics
 
 
 def _build_associate_dataframe(
@@ -335,12 +486,10 @@ def _handle_associate_actions(
             st.toast(f"Opening details for {alias}")
             safe_rerun("open_associate_details")
         elif action == "Go to Overview":
-            st.session_state[PENDING_TAB_KEY] = OVERVIEW_TAB_INDEX
-            st.toast(f"{alias} queued for Overview tab")
+            _queue_tab_switch(OVERVIEW_TAB_INDEX, f"{alias} opened in the Overview tab.")
             safe_rerun("associate_overview_jump")
         elif action == "View history":
-            st.session_state[PENDING_TAB_KEY] = HISTORY_TAB_INDEX
-            st.toast(f"{alias} queued for Balance History")
+            _queue_tab_switch(HISTORY_TAB_INDEX, f"{alias} opened in Balance History.")
             safe_rerun("associate_history_jump")
 
 
@@ -612,11 +761,13 @@ def _render_associate_table(
     """Render associates data_editor and return selection + lookup."""
     page = max(int(filter_state.get("page", 0)), 0)
     page_size = int(filter_state.get("page_size") or 25)
-    associates = repository.list_associates_with_metrics(
+    associates = _list_associates_with_metrics(
+        repository,
         search=filter_state.get("search"),
         admin_filter=filter_state.get("admin_filter"),
         associate_status_filter=filter_state.get("associate_status_filter"),
         bookmaker_status_filter=filter_state.get("bookmaker_status_filter"),
+        risk_filter=filter_state.get("risk_filter"),
         currency_filter=filter_state.get("currency_filter"),
         sort_by=filter_state.get("sort_by"),
         limit=page_size,
@@ -916,12 +1067,212 @@ def _render_management_tab(
     _render_bookmaker_table(repository, selected_ids, associate_lookup)
 
 
-def _render_overview_placeholder() -> None:
-    st.title("Overview")
-    st.info(
-        "Overview tab is coming in Story 13.2. Use Management actions to "
-        "pre-select an associate for deep links."
+def _open_overview_drawer(associate_id: int, tab: str = "profile") -> None:
+    """Open the shared associate drawer from the Overview tab."""
+    st.session_state["hub_drawer_open"] = True
+    st.session_state["hub_drawer_associate_id"] = associate_id
+    st.session_state.pop("hub_drawer_bookmaker_id", None)
+    st.session_state["hub_drawer_tab"] = tab
+    safe_rerun("overview_drawer_open")
+
+
+def _overview_funding_callback(action: str) -> Callable[[AssociateMetrics], None]:
+    """Return a QuickAction callback that launches the funding dialog."""
+
+    def _callback(associate: AssociateMetrics) -> None:
+        _launch_overview_funding_dialog(associate, action)
+
+    return _callback
+
+
+def _build_overview_quick_actions() -> Sequence[QuickAction]:
+    """Quick actions for the Overview tab cards."""
+
+    def _details_callback(associate: AssociateMetrics) -> None:
+        st.session_state[SELECTED_ASSOCIATE_KEY] = associate.associate_id
+        _open_overview_drawer(associate.associate_id, tab="profile")
+
+    def _go_to_management(associate: AssociateMetrics) -> None:
+        st.session_state[SELECTED_ASSOCIATE_KEY] = associate.associate_id
+        _queue_tab_switch(
+            MANAGEMENT_TAB_INDEX,
+            f"{associate.associate_alias} opened in the Management tab.",
+        )
+        safe_rerun("overview_go_to_management")
+
+    return (
+        QuickAction(
+            key_prefix="overview_deposit",
+            label="Deposit",
+            icon=":material/savings:",
+            help_text="Record a deposit for this associate",
+            callback=_overview_funding_callback("deposit"),
+            button_type="primary",
+        ),
+        QuickAction(
+            key_prefix="overview_withdraw",
+            label="Withdraw",
+            icon=":material/payments:",
+            help_text="Record a withdrawal for this associate",
+            callback=_overview_funding_callback("withdraw"),
+            button_type="secondary",
+        ),
+        QuickAction(
+            key_prefix="overview_details",
+            label="Details",
+            icon=":material/visibility:",
+            help_text="Open the shared associate drawer",
+            callback=_details_callback,
+        ),
+        QuickAction(
+            key_prefix="overview_management",
+            label="Go to Management",
+            icon=":material/switch_access_shortcut:",
+            help_text="Jump to the Management tab with this associate highlighted",
+            callback=_go_to_management,
+        ),
     )
+
+
+def _close_overview_funding_dialog() -> None:
+    """Clear dialog state after submission or cancel."""
+    close_dialog(OVERVIEW_FUNDING_DIALOG_KEY)
+    st.session_state.pop(OVERVIEW_DIALOG_PAYLOAD_KEY, None)
+    for key in (
+        "overview_funding_amount",
+        "overview_funding_currency",
+        "overview_funding_bookmaker",
+        "overview_funding_note",
+    ):
+        st.session_state.pop(key, None)
+
+
+def _render_overview_funding_dialog(
+    repository: AssociateHubRepository,
+    funding_service: FundingTransactionService,
+) -> None:
+    """Render the funding dialog when triggered from Overview quick actions."""
+    payload = st.session_state.get(OVERVIEW_DIALOG_PAYLOAD_KEY)
+    dialog_open = st.session_state.get(f"{OVERVIEW_FUNDING_DIALOG_KEY}__open")
+    if payload and not dialog_open:
+        st.session_state.pop(OVERVIEW_DIALOG_PAYLOAD_KEY, None)
+        payload = None
+    if not payload:
+        return
+    if not dialog_open:
+        return
+
+    associate_id = payload.get("associate_id")
+    if not associate_id:
+        st.error("Associate context missing for funding dialog.")
+        _close_overview_funding_dialog()
+        return
+
+    action = (payload.get("action") or "deposit").lower()
+    action_label = "Deposit" if action == "deposit" else "Withdrawal"
+    alias = payload.get("associate_alias", "Associate")
+    default_currency = (payload.get("home_currency") or "EUR").upper()
+
+    try:
+        bookmaker_summaries = repository.list_bookmakers_for_associate(associate_id)
+    except Exception as exc:
+        bookmaker_summaries = []
+        st.warning(f"Failed to load bookmaker options: {exc}")
+
+    bookmaker_options: List[Optional[int]] = [None]
+    bookmaker_labels: Dict[Optional[int], str] = {None: "Associate-level"}
+    for summary in bookmaker_summaries:
+        bookmaker_options.append(summary.bookmaker_id)
+        bookmaker_labels[summary.bookmaker_id] = summary.bookmaker_name
+
+    def _render_form() -> None:
+        st.markdown(f"### {action_label} – {alias}")
+        st.caption("Amounts validate in native currency; submissions update ND/TB/I'' immediately.")
+        with st.form("overview_funding_form"):
+            amount_value = st.text_input(
+                f"{action_label} Amount*",
+                key="overview_funding_amount",
+                placeholder="500.00",
+            )
+            currency_index = (
+                VALID_CURRENCIES.index(default_currency)
+                if default_currency in VALID_CURRENCIES
+                else 0
+            )
+            currency_value = st.selectbox(
+                "Currency*",
+                options=VALID_CURRENCIES,
+                index=currency_index,
+                key="overview_funding_currency",
+            )
+            bookmaker_value = st.selectbox(
+                "Bookmaker (optional)",
+                options=bookmaker_options,
+                format_func=lambda value: bookmaker_labels.get(value, "Associate-level"),
+                key="overview_funding_bookmaker",
+            )
+            note_value = st.text_area(
+                "Note",
+                key="overview_funding_note",
+                placeholder="Optional audit note",
+                height=80,
+            )
+            submitted = st.form_submit_button(
+                f"Record {action_label}",
+                type="primary",
+                use_container_width=True,
+            )
+
+        if submitted:
+            try:
+                ledger_id, metrics = submit_overview_funding_transaction(
+                    funding_service=funding_service,
+                    repository=repository,
+                    associate_id=associate_id,
+                    action=action,
+                    amount_value=amount_value,
+                    currency_value=currency_value,
+                    bookmaker_id=bookmaker_value,
+                    note_value=note_value,
+                    operator_name=_resolve_operator_identity(),
+                )
+            except FundingDialogValidationError as exc:
+                st.error(str(exc))
+                return
+            except FundingTransactionError as exc:
+                st.error(f"Funding operation failed: {exc}")
+                return
+
+            st.success(f"{action_label} recorded successfully (Ledger #{ledger_id}).")
+            st.toast(
+                f"Ledger #{ledger_id} posted for {alias}.",
+                icon=":material/check_circle:",
+            )
+            _store_metric_override(metrics)
+            _close_overview_funding_dialog()
+            safe_rerun("overview_funding_success")
+            return
+
+        if st.button(
+            ":material/close: Cancel",
+            key="overview_funding_cancel",
+            type="secondary",
+            use_container_width=True,
+        ):
+            _close_overview_funding_dialog()
+
+    dialog_title = f"{action_label} – {alias}"
+    supports_dialog = callable(getattr(st, "dialog", None))
+    if supports_dialog:
+        @st.dialog(dialog_title)
+        def _modal() -> None:
+            _render_form()
+
+        _modal()
+    else:
+        with st.sidebar:
+            st.markdown(f"## {dialog_title}")
+            _render_form()
 
 
 def _render_history_placeholder() -> None:
@@ -929,6 +1280,63 @@ def _render_history_placeholder() -> None:
     st.info(
         "Balance History will arrive in Story 13.3. The selected associate "
         "state is preserved for future charts and exports."
+    )
+
+
+def _render_overview_tab(
+    repository: AssociateHubRepository,
+    funding_service: FundingTransactionService,
+) -> None:
+    """Render the Overview tab with dashboard metrics and quick actions."""
+    st.title(":material/dashboard: Overview")
+    st.caption(
+        "Monitor ND/YF/TB/I'' at a glance and launch read-only detail views or "
+        "funding flows without leaving the hub."
+    )
+
+    filter_state, should_refresh = render_filters(
+        repository,
+        widget_suffix="_overview",
+    )
+    if should_refresh:
+        safe_rerun("overview_filters_refresh")
+        return
+
+    _render_overview_funding_dialog(repository, funding_service)
+
+    try:
+        associates = _list_associates_with_metrics(
+            repository,
+            search=filter_state.get("search"),
+            admin_filter=filter_state.get("admin_filter"),
+            associate_status_filter=filter_state.get("associate_status_filter"),
+            bookmaker_status_filter=filter_state.get("bookmaker_status_filter"),
+            risk_filter=filter_state.get("risk_filter"),
+            currency_filter=filter_state.get("currency_filter"),
+            sort_by=filter_state.get("sort_by", "alias_asc"),
+            limit=500,
+        )
+    except Exception as exc:
+        st.error(f"Failed to load associates for Overview: {exc}")
+        return
+
+    associates = _apply_metric_overrides(associates)
+    if not associates:
+        render_empty_state(filter_state)
+        return
+
+    highlight_id = st.session_state.get(SELECTED_ASSOCIATE_KEY)
+    render_hub_dashboard(associates)
+    if highlight_id:
+        st.caption(
+            ":material/push_pin: Highlighting the associate selected from Management."
+        )
+
+    render_associate_listing(
+        associates,
+        quick_actions=_build_overview_quick_actions(),
+        highlight_associate_id=highlight_id,
+        show_bookmakers=False,
     )
 
 
@@ -944,22 +1352,50 @@ def main() -> None:
         st.error(f"Failed to initialise services: {exc}")
         return
 
-    desired_tab = st.session_state.pop(PENDING_TAB_KEY, None)
+    pending_tab = st.session_state.pop(PENDING_TAB_KEY, None)
     _handle_pending_bookmaker_confirmation(repository)
 
     tab_labels = ["Management", "Overview", "Balance History"]
-    if desired_tab is not None:
-        requested = tab_labels[min(max(desired_tab, 0), len(tab_labels) - 1)]
-        st.toast(f"{requested} tab requested; please click the tab above.")
-    tabs = st.tabs(tab_labels)
+    active_tab_index = int(st.session_state.get(ACTIVE_TAB_KEY, MANAGEMENT_TAB_INDEX))
+    toast_message: Optional[str] = None
+    target_index: Optional[int] = None
+    if isinstance(pending_tab, dict):
+        target_index = pending_tab.get("tab")
+        toast_message = pending_tab.get("message")
+    elif pending_tab is not None:
+        target_index = pending_tab
 
-    with tabs[MANAGEMENT_TAB_INDEX]:
+    if target_index is not None:
+        try:
+            normalized_index = int(target_index)
+        except (TypeError, ValueError):
+            normalized_index = MANAGEMENT_TAB_INDEX
+        normalized_index = max(0, min(len(tab_labels) - 1, normalized_index))
+        active_tab_index = normalized_index
+        st.session_state[ACTIVE_TAB_KEY] = active_tab_index
+        st.toast(
+            toast_message or f"{tab_labels[active_tab_index]} tab opened.",
+            icon=":material/check_circle:",
+        )
+
+    tab_choice = st.radio(
+        "Associates Hub Tabs",
+        tab_labels,
+        index=active_tab_index,
+        key="associates_hub_tab_selector",
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    selected_index = tab_labels.index(tab_choice)
+    if selected_index != active_tab_index:
+        active_tab_index = selected_index
+        st.session_state[ACTIVE_TAB_KEY] = active_tab_index
+
+    if active_tab_index == MANAGEMENT_TAB_INDEX:
         _render_management_tab(repository)
-
-    with tabs[OVERVIEW_TAB_INDEX]:
-        _render_overview_placeholder()
-
-    with tabs[HISTORY_TAB_INDEX]:
+    elif active_tab_index == OVERVIEW_TAB_INDEX:
+        _render_overview_tab(repository, funding_service)
+    else:
         _render_history_placeholder()
 
     render_detail_drawer(repository, funding_service, balance_service)

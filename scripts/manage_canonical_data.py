@@ -25,7 +25,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.core.database import get_db_connection
-from src.utils.datetime_helpers import utc_now_iso
+from src.domain.market_taxonomy import get_all_canonical_market_definitions
 
 
 def seed_canonical_markets(db: sqlite3.Connection) -> int:
@@ -34,64 +34,8 @@ def seed_canonical_markets(db: sqlite3.Connection) -> int:
     Returns:
         Number of markets inserted
     """
-    markets = [
-        # Tier 1: Most Common (Football)
-        ('MATCH_WINNER', 'Match Winner / 1X2 / Moneyline'),
-        ('DRAW_NO_BET', 'Draw No Bet'),
-        ('DOUBLE_CHANCE', 'Double Chance (1X, X2, 12)'),
-        ('TOTAL_GOALS_OVER_UNDER', 'Total Goals Over/Under'),
-        ('BOTH_TEAMS_TO_SCORE', 'Both Teams to Score (BTTS)'),
-        ('TEAM_TOTAL_GOALS', 'Team Total Goals Over/Under'),
-        ('ASIAN_HANDICAP', 'Asian Handicap'),
-        ('EUROPEAN_HANDICAP', 'European Handicap / 3-Way Handicap'),
-        ('HALF_TIME_RESULT', 'Half Time Result (1X2)'),
-        ('HALF_TIME_FULL_TIME', 'Half Time / Full Time'),
-        ('SECOND_HALF_WINNER', 'Second Half Winner'),
-
-        # Tier 2: Popular
-        ('FIRST_GOAL_SCORER', 'First Goal Scorer'),
-        ('LAST_GOAL_SCORER', 'Last Goal Scorer'),
-        ('ANYTIME_GOAL_SCORER', 'Anytime Goal Scorer'),
-        ('FIRST_HALF_GOALS_OU', 'First Half Goals Over/Under'),
-        ('SECOND_HALF_GOALS_OU', 'Second Half Goals Over/Under'),
-        ('CORRECT_SCORE', 'Correct Score'),
-        ('WINNING_MARGIN', 'Winning Margin'),
-        ('TOTAL_CORNERS', 'Total Corners Over/Under'),
-        ('TOTAL_CARDS', 'Total Cards Over/Under'),
-        ('CLEAN_SHEET', 'To Keep a Clean Sheet'),
-        ('TO_WIN_TO_NIL', 'To Win to Nil'),
-
-        # Tier 3: Niche (Football)
-        ('CORNER_HANDICAP', 'Corner Handicap'),
-        ('FIRST_CORNER', 'First Corner'),
-        ('CORNER_MATCH_BET', 'Corner Match Bet'),
-        ('TOTAL_BOOKINGS', 'Total Booking Points'),
-        ('PLAYER_TO_BE_BOOKED', 'Player to be Booked'),
-        ('SENDING_OFF', 'Sending Off / Red Card'),
-        ('ODD_EVEN_GOALS', 'Odd/Even Total Goals'),
-        ('GOALS_IN_BOTH_HALVES', 'Goals Scored in Both Halves'),
-        ('TEAM_TO_SCORE_FIRST', 'Team to Score First'),
-        ('TEAM_TO_SCORE_LAST', 'Team to Score Last'),
-
-        # Other Sports
-        ('TENNIS_MATCH_WINNER', 'Tennis - Match Winner'),
-        ('TENNIS_SET_BETTING', 'Tennis - Correct Score in Sets'),
-        ('TENNIS_TOTAL_GAMES', 'Tennis - Total Games Over/Under'),
-        ('BASKETBALL_MONEYLINE', 'Basketball - Moneyline'),
-        ('BASKETBALL_HANDICAP', 'Basketball - Point Spread'),
-        ('BASKETBALL_TOTAL_POINTS', 'Basketball - Total Points Over/Under'),
-        ('NFL_MONEYLINE', 'NFL - Moneyline'),
-        ('NFL_SPREAD', 'NFL - Point Spread'),
-        ('NFL_TOTAL_POINTS', 'NFL - Total Points Over/Under'),
-        ('BASEBALL_MONEYLINE', 'Baseball - Moneyline'),
-        ('BASEBALL_RUN_LINE', 'Baseball - Run Line'),
-        ('HOCKEY_MONEYLINE', 'Hockey - Moneyline'),
-        ('HOCKEY_PUCK_LINE', 'Hockey - Puck Line'),
-
-        # Catch-all
-        ('OTHER', 'Other / Unclassified Market'),
-        ('CUSTOM', 'Custom Market'),
-    ]
+    definitions = get_all_canonical_market_definitions()
+    markets = list(definitions.items())
 
     inserted = 0
     for market_code, description in markets:

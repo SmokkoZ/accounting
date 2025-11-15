@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.core.database import get_db_connection
 from src.utils.logging_config import get_logger
@@ -136,7 +136,9 @@ class AssociateHubRepository:
         associate_status_filter: Optional[List[bool]] = None,
         bookmaker_status_filter: Optional[List[bool]] = None,
         currency_filter: Optional[List[str]] = None,
+        risk_filter: Optional[List[str]] = None,
         sort_by: str = "alias_asc",
+        associate_ids: Optional[Sequence[int]] = None,
         limit: Optional[int] = None,
         offset: int = 0
     ) -> List[AssociateMetrics]:
@@ -227,6 +229,24 @@ class AssociateHubRepository:
         """
         
         params: List[Any] = []
+        delta_expr = (
+            "(COALESCE(holdings.current_holding_eur, 0) - "
+            "(COALESCE(deposits.net_deposits_eur, 0) + COALESCE(shares.fair_share_eur, 0)))"
+        )
+        nd_expr = "COALESCE(deposits.net_deposits_eur, 0)"
+        balanced_threshold = float(self.BALANCED_THRESHOLD_EUR)
+        status_case_expr = (
+            "CASE "
+            f"WHEN ABS({delta_expr}) <= {balanced_threshold} THEN 'balanced' "
+            f"WHEN {delta_expr} > 0 THEN 'overholding' "
+            "ELSE 'short' END"
+        )
+        normalized_risk_filter: List[str] = []
+        if risk_filter:
+            for value in risk_filter:
+                slug = (value or "").strip().lower()
+                if slug in {"balanced", "overholding", "short"} and slug not in normalized_risk_filter:
+                    normalized_risk_filter.append(slug)
         
         # Add filters
         if search:
@@ -266,8 +286,13 @@ class AssociateHubRepository:
             
         if currency_filter:
             currency_placeholders = ",".join("?" * len(currency_filter))
-            query += f" AND a.home_currency IN ({currency_placeholders})"
-            params.extend(currency_filter)
+            query += f" AND UPPER(a.home_currency) IN ({currency_placeholders})"
+            params.extend(code.upper() for code in currency_filter)
+
+        if associate_ids:
+            placeholders = ",".join("?" * len(associate_ids))
+            query += f" AND a.id IN ({placeholders})"
+            params.extend(int(value) for value in associate_ids)
         
         query += (
             " GROUP BY a.id, a.display_alias, a.home_currency, a.is_admin, a.is_active, "
@@ -276,13 +301,20 @@ class AssociateHubRepository:
             "deposits.net_deposits_eur, holdings.current_holding_eur, "
             "pending.pending_balance_eur"
         )
+
+        if normalized_risk_filter:
+            placeholders = ",".join("?" * len(normalized_risk_filter))
+            query += f" HAVING {status_case_expr} IN ({placeholders})"
+            params.extend(normalized_risk_filter)
         
         # Add sorting
         sort_map = {
             "alias_asc": "a.display_alias ASC",
-            "alias_desc": "a.display_alias DESC", 
-            "delta_desc": "(COALESCE(holdings.current_holding_eur, 0) - COALESCE(deposits.net_deposits_eur, 0)) DESC",
-            "delta_asc": "(COALESCE(holdings.current_holding_eur, 0) - COALESCE(deposits.net_deposits_eur, 0)) ASC",
+            "alias_desc": "a.display_alias DESC",
+            "nd_desc": f"{nd_expr} DESC",
+            "nd_asc": f"{nd_expr} ASC",
+            "delta_desc": f"{delta_expr} DESC",
+            "delta_asc": f"{delta_expr} ASC",
             "activity_desc": "MAX(COALESCE(bh.check_date_utc, le.created_at_utc)) DESC",
             "activity_asc": "MAX(COALESCE(bh.check_date_utc, le.created_at_utc)) ASC",
             "balance_desc": "COALESCE(holdings.current_holding_eur, 0) DESC",
@@ -359,6 +391,16 @@ class AssociateHubRepository:
             metrics.append(metric)
 
         return metrics
+
+    def get_associate_metrics(self, associate_id: int) -> Optional[AssociateMetrics]:
+        """
+        Fetch the latest metrics for a single associate.
+        """
+        results = self.list_associates_with_metrics(
+            associate_ids=[associate_id],
+            limit=1,
+        )
+        return results[0] if results else None
 
     def list_bookmakers_for_associate(self, associate_id: int) -> List[BookmakerSummary]:
         """

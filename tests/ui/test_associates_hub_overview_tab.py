@@ -18,23 +18,25 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def test_management_tab_smoke():
-    """Ensure Management tab is default and no money-movement controls render."""
+def test_overview_tab_quick_actions_render_without_telegram_panels():
+    """Ensure Overview tab surfaces quick actions and omits Telegram funding panels."""
 
     def app():
-        from pathlib import Path as _Path
+        from decimal import Decimal as _Decimal
         import importlib.util as _importlib_util
+        from pathlib import Path as _Path
         import sys as _sys
         from unittest.mock import Mock as _Mock
 
-        from decimal import Decimal as _Decimal
         from src.repositories.associate_hub_repository import (
             AssociateMetrics as _AssociateMetrics,
             BookmakerSummary as _BookmakerSummary,
         )
 
         module_path = _Path("src/ui/pages/7_associates_hub.py")
-        spec = _importlib_util.spec_from_file_location("associates_hub_smoke", module_path)
+        spec = _importlib_util.spec_from_file_location(
+            "associates_hub_overview_test", module_path
+        )
         page = _importlib_util.module_from_spec(spec)
         assert spec.loader is not None
         _sys.modules.setdefault("xlsxwriter", _Mock())
@@ -98,6 +100,9 @@ def test_management_tab_smoke():
             def list_bookmakers_for_associate(self, associate_id: int):
                 return self._bookmakers.get(associate_id, [])
 
+            def get_associate_metrics(self, associate_id: int):
+                return self._associates[0]
+
         fake_repo = FakeRepository()
         filter_state = {
             "search": "",
@@ -111,20 +116,19 @@ def test_management_tab_smoke():
         }
 
         page.AssociateHubRepository = lambda: fake_repo  # type: ignore[attr-defined]
-        page.FundingTransactionService = lambda: object()  # type: ignore[attr-defined]
+        page.FundingTransactionService = lambda: _Mock(record_transaction=_Mock())  # type: ignore[attr-defined]
         page.BookmakerBalanceService = lambda: object()  # type: ignore[attr-defined]
         page.render_filters = lambda repo, **kwargs: (filter_state, False)  # type: ignore[attr-defined]
         page.render_detail_drawer = lambda *args, **kwargs: None  # type: ignore[attr-defined]
-        page._render_overview_tab = lambda *args, **kwargs: None  # type: ignore[attr-defined]
 
         page.main()  # type: ignore[attr-defined]
 
     at = AppTest.from_function(app)
     at.run()
 
-    tab_labels = [tab.label for tab in at.tabs]
-    assert tab_labels == ["Management", "Overview", "Balance History"]
-
-    money_words = ("Deposit", "Withdrawal", "Balance Adjustment")
-    for button in at.button:
-        assert not any(word in button.label for word in money_words)
+    labels = [button.label for button in at.button]
+    assert any("Deposit" in label for label in labels)
+    assert any("Go to Management" in label for label in labels)
+    assert not any(
+        "Pending Funding (Telegram)" in markdown.value for markdown in at.markdown
+    )

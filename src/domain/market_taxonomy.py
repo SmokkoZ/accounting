@@ -13,6 +13,63 @@ import re
 import unicodedata
 
 
+# Base canonical markets used for seeding (multi-sport + general two-way soccer)
+BASE_CANONICAL_MARKETS: Dict[str, str] = {
+    # Core football/soccer markets
+    "MATCH_WINNER": "Match Winner / 1X2 / Moneyline",
+    "DRAW_NO_BET": "Draw No Bet",
+    "DOUBLE_CHANCE": "Double Chance (1X, X2, 12)",
+    "TOTAL_GOALS_OVER_UNDER": "Total Goals Over/Under",
+    "BOTH_TEAMS_TO_SCORE": "Both Teams to Score (BTTS)",
+    "TEAM_TOTAL_GOALS": "Team Total Goals Over/Under",
+    "ASIAN_HANDICAP": "Asian Handicap",
+    "EUROPEAN_HANDICAP": "European Handicap / 3-Way Handicap",
+    "HALF_TIME_RESULT": "Half Time Result (1X2)",
+    "HALF_TIME_FULL_TIME": "Half Time / Full Time",
+    "SECOND_HALF_WINNER": "Second Half Winner",
+    # Popular football props
+    "FIRST_GOAL_SCORER": "First Goal Scorer",
+    "LAST_GOAL_SCORER": "Last Goal Scorer",
+    "ANYTIME_GOAL_SCORER": "Anytime Goal Scorer",
+    "FIRST_HALF_GOALS_OU": "First Half Goals Over/Under",
+    "SECOND_HALF_GOALS_OU": "Second Half Goals Over/Under",
+    "CORRECT_SCORE": "Correct Score",
+    "WINNING_MARGIN": "Winning Margin",
+    "TOTAL_CORNERS": "Total Corners Over/Under",
+    "TOTAL_CARDS": "Total Cards Over/Under",
+    "CLEAN_SHEET": "To Keep a Clean Sheet",
+    "TO_WIN_TO_NIL": "To Win to Nil",
+    # Niche football bets
+    "CORNER_HANDICAP": "Corner Handicap",
+    "FIRST_CORNER": "First Corner",
+    "CORNER_MATCH_BET": "Corner Match Bet",
+    "TOTAL_BOOKINGS": "Total Booking Points",
+    "PLAYER_TO_BE_BOOKED": "Player to be Booked",
+    "SENDING_OFF": "Sending Off / Red Card",
+    "ODD_EVEN_GOALS": "Odd/Even Total Goals",
+    "GOALS_IN_BOTH_HALVES": "Goals Scored in Both Halves",
+    "TEAM_TO_SCORE_FIRST": "Team to Score First",
+    "TEAM_TO_SCORE_LAST": "Team to Score Last",
+    # Other sports (still two-way focus)
+    "TENNIS_MATCH_WINNER": "Tennis - Match Winner",
+    "TENNIS_SET_BETTING": "Tennis - Correct Score in Sets",
+    "TENNIS_TOTAL_GAMES": "Tennis - Total Games Over/Under",
+    "BASKETBALL_MONEYLINE": "Basketball - Moneyline",
+    "BASKETBALL_HANDICAP": "Basketball - Point Spread",
+    "BASKETBALL_TOTAL_POINTS": "Basketball - Total Points Over/Under",
+    "NFL_MONEYLINE": "NFL - Moneyline",
+    "NFL_SPREAD": "NFL - Point Spread",
+    "NFL_TOTAL_POINTS": "NFL - Total Points Over/Under",
+    "BASEBALL_MONEYLINE": "Baseball - Moneyline",
+    "BASEBALL_RUN_LINE": "Baseball - Run Line",
+    "HOCKEY_MONEYLINE": "Hockey - Moneyline",
+    "HOCKEY_PUCK_LINE": "Hockey - Puck Line",
+    # Catch-all
+    "OTHER": "Other / Unclassified Market",
+    "CUSTOM": "Custom Market",
+}
+
+
 # Canonical market codes (two-way focus)
 CANONICAL_MARKETS: Dict[str, str] = {
     # Soccer Over/Under
@@ -76,6 +133,13 @@ CANONICAL_MARKETS: Dict[str, str] = {
 }
 
 
+def get_all_canonical_market_definitions() -> Dict[str, str]:
+    """Return primary market definitions merged with two-way taxonomy entries."""
+    definitions: Dict[str, str] = dict(BASE_CANONICAL_MARKETS)
+    definitions.update(CANONICAL_MARKETS)
+    return definitions
+
+
 # Period normalization
 def _strip_accents(text: str) -> str:
     """Return ASCII-only uppercase string without diacritics."""
@@ -130,6 +194,18 @@ PERIOD_SYNONYMS: Dict[str, str] = {
     "SECONDO TEMPO": "SECOND_HALF",
     "2 TEMPO": "SECOND_HALF",
     "2T": "SECOND_HALF",
+    # Romanian
+    "MECI": "FULL_MATCH",
+    "MECI INTREG": "FULL_MATCH",
+    "MECI ÎNTREG": "FULL_MATCH",
+    "PRIMA REPRIZA": "FIRST_HALF",
+    "REPRIZA 1": "FIRST_HALF",
+    "1 REPRIZA": "FIRST_HALF",
+    "REPRIZA I": "FIRST_HALF",
+    "A DOUA REPRIZA": "SECOND_HALF",
+    "REPRIZA 2": "SECOND_HALF",
+    "2 REPRIZA": "SECOND_HALF",
+    "REPRIZA II": "SECOND_HALF",
 }
 
 
@@ -430,16 +506,19 @@ def find_market_code_from_label(
     up_simplified = re.sub(r"[0-9]+[\.,]?[0-9]*", " ", up)
 
     def has_ou() -> bool:
-        return ("OVER/UNDER" in up_simplified) or ("UNDER/OVER" in up_simplified) or ("O/U" in up_simplified)
+        return any(
+            token in up_simplified
+            for token in ["OVER/UNDER", "UNDER/OVER", "O/U", "PESTE/SUB", "SUB/PESTE"]
+        )
 
     def any_in(s: str, candidates: List[str]) -> bool:
         return any(c in s for c in candidates)
 
     def has_team_indicator(*, home: bool) -> bool:
         base_tokens = (
-            ["HOME", "TEAM A", "CASA", "SQUADRA CASA"]
+            ["HOME", "TEAM A", "CASA", "SQUADRA CASA", "ACASA", "GAZDA", "ECHIPA GAZDA"]
             if home
-            else ["AWAY", "TEAM B", "OSPITE", "TRASFERTA", "SQUADRA OSPITE"]
+            else ["AWAY", "TEAM B", "OSPITE", "TRASFERTA", "SQUADRA OSPITE", "DEPLASARE", "OASPETE", "ECHIPA OASPETE"]
         )
         dynamic_tokens = home_tokens if home else away_tokens
         tokens = base_tokens + dynamic_tokens
@@ -453,19 +532,21 @@ def find_market_code_from_label(
                 "UNDER",
                 " PIU",
                 " PIU'",
-                " PIÙ",
+                " PI\u00D9",
                 " MENO",
                 " OR MORE",
                 " OR LESS",
                 " +",
                 " -",
+                " PESTE",
+                " SUB",
             ],
         )
 
     def has_even_odd_tokens() -> bool:
         return any_in(up_simplified, ["PARI", "DISPARI", "ODD", "EVEN"])
 
-    goals_keywords = ["GOALS", "GOAL", "GOL", "GOLS"]
+    goals_keywords = ["GOALS", "GOAL", "GOL", "GOLS", "GOLURI"]
 
     # Goals O/U (total and team)
     if has_ou() and any_in(up_simplified, goals_keywords):
@@ -475,7 +556,7 @@ def find_market_code_from_label(
             return "AWAY_TEAM_TOTAL_GOALS_OVER_UNDER", implied_period
         return "TOTAL_GOALS_OVER_UNDER", implied_period
 
-    corners_keywords = ["CORNERS", "CORNER", "CALCI D'ANGOLO", "ANGOLI"]
+    corners_keywords = ["CORNERS", "CORNER", "CALCI D'ANGOLO", "ANGOLI", "CORNERE", "LOVITURI DE COLT"]
 
     # Corners O/U (total + team)
     if has_ou() and any_in(up_simplified, corners_keywords):
@@ -501,11 +582,11 @@ def find_market_code_from_label(
         return "TOTAL_CORNERS_OVER_UNDER", implied_period
 
     # Cards O/U
-    if has_ou() and any_in(up_simplified, ["CARDS", "CARD", "CARTELLINI", "AMMONIZIONI", "BOOKINGS"]):
+    if has_ou() and any_in(up_simplified, ["CARDS", "CARD", "CARTELLINI", "AMMONIZIONI", "BOOKINGS", "CARTONASE", "CARTONAS"]):
         return "TOTAL_CARDS_OVER_UNDER", implied_period
 
     # Shots on target O/U (total + team detection)
-    shots_on_target_keywords = ["SHOTS ON TARGET", "SOT", "TIRI IN PORTA"]
+    shots_on_target_keywords = ["SHOTS ON TARGET", "SOT", "TIRI IN PORTA", "SUTURI PE POARTA"]
     if (has_ou() or has_threshold_language()) and any_in(up_simplified, shots_on_target_keywords):
         home_flag = has_team_indicator(home=True)
         away_flag = has_team_indicator(home=False)
@@ -525,7 +606,7 @@ def find_market_code_from_label(
             return "AWAY_TEAM_TOTAL_SHOTS_ON_TARGET_OVER_UNDER", implied_period
 
     # Shots O/U (generic totals + team)
-    shots_keywords = ["SHOTS", "TIRI"]
+    shots_keywords = ["SHOTS", "TIRI", "SUTURI"]
     if (has_ou() or has_threshold_language()) and any_in(up_simplified, shots_keywords):
         home_flag = has_team_indicator(home=True)
         away_flag = has_team_indicator(home=False)
@@ -545,7 +626,7 @@ def find_market_code_from_label(
             return "AWAY_TEAM_TOTAL_SHOTS_OVER_UNDER", implied_period
 
     # --- Team-specific CARDS O/U (detect even without explicit 'O/U' if threshold language appears)
-    cards_keywords = ["CARDS", "CARD", "CARTELLINI", "AMMONIZIONI", "BOOKINGS"]
+    cards_keywords = ["CARDS", "CARD", "CARTELLINI", "AMMONIZIONI", "BOOKINGS", "CARTONASE", "CARTONAS"]
     if any_in(up_simplified, cards_keywords) and has_threshold_language():
         if has_team_indicator(home=True) and not has_team_indicator(home=False):
             return "HOME_TEAM_TOTAL_CARDS_OVER_UNDER", implied_period
@@ -564,7 +645,7 @@ def find_market_code_from_label(
             return "TOTAL_GOALS_EVEN_ODD", implied_period
 
     # OFFSIDES O/U (total + team)
-    offsides_keywords = ["OFFSIDES", "FUORIGIOCO"]
+    offsides_keywords = ["OFFSIDES", "FUORIGIOCO", "OFFSIDE", "OFSAID", "OFSAIT"]
     if has_ou() and any_in(up_simplified, offsides_keywords):
         if has_team_indicator(home=True) and not has_team_indicator(home=False):
             return "HOME_TEAM_TOTAL_OFFSIDES_OVER_UNDER", implied_period
@@ -573,7 +654,7 @@ def find_market_code_from_label(
         return "TOTAL_OFFSIDES_OVER_UNDER", implied_period
 
     # FOULS O/U (total + team)
-    fouls_keywords = ["FOULS", "FALLI"]
+    fouls_keywords = ["FOULS", "FALLI", "FAULT", "FAULTURI"]
     if has_ou() and any_in(up_simplified, fouls_keywords):
         if has_team_indicator(home=True) and not has_team_indicator(home=False):
             return "HOME_TEAM_TOTAL_FOULS_OVER_UNDER", implied_period
@@ -582,7 +663,7 @@ def find_market_code_from_label(
         return "TOTAL_FOULS_OVER_UNDER", implied_period
 
     # Team "to score" / "no goal" using explicit team name or side wording
-    if any_in(search_text, [" TO SCORE", " SEGNA "]):
+    if any_in(search_text, [" TO SCORE", " SEGNA ", " MARCHEAZA", " INSCRIE "]):
         home_flag = has_team_indicator(home=True)
         away_flag = has_team_indicator(home=False)
         if home_flag and not away_flag:
@@ -592,7 +673,7 @@ def find_market_code_from_label(
 
     if any_in(
         up_simplified,
-        [" NO GOAL", " NO GOL", " DOES NOT SCORE", " DOESN'T SCORE", " DOESNT SCORE"],
+        [" NO GOAL", " NO GOL", " DOES NOT SCORE", " DOESN'T SCORE", " DOESNT SCORE", " NU MARCHEAZA", " NU INSCRIE"],
     ):
         home_flag = has_team_indicator(home=True)
         away_flag = has_team_indicator(home=False)
@@ -602,25 +683,25 @@ def find_market_code_from_label(
             return "AWAY_TEAM_TO_SCORE", implied_period
 
     # Team Yes/No props (no O/U)
-    if any_in(up_simplified, ["HOME TEAM TO SCORE", "TEAM A TO SCORE", "SEGNA CASA"]):
+    if any_in(up_simplified, ["HOME TEAM TO SCORE", "TEAM A TO SCORE", "SEGNA CASA", "ECHIPA GAZDA MARCHEAZA", "GAZDA MARCHEAZA", "ECHIPA GAZDA INSCRIE", "GAZDA INSCRIE"]):
         return "HOME_TEAM_TO_SCORE", implied_period
-    if any_in(up_simplified, ["AWAY TEAM TO SCORE", "TEAM B TO SCORE", "SEGNA OSPITE"]):
+    if any_in(up_simplified, ["AWAY TEAM TO SCORE", "TEAM B TO SCORE", "SEGNA OSPITE", "ECHIPA OASPETE MARCHEAZA", "OASPETE MARCHEAZA", "ECHIPA OASPETE INSCRIE", "OASPETE INSCRIE"]):
         return "AWAY_TEAM_TO_SCORE", implied_period
-    if any_in(up_simplified, ["HOME CLEAN SHEET", "PORTA INVIOLATA CASA"]):
+    if any_in(up_simplified, ["HOME CLEAN SHEET", "PORTA INVIOLATA CASA", "GAZDA NU PRIMESTE GOL", "ECHIPA GAZDA NU PRIMESTE GOL"]):
         return "HOME_TEAM_CLEAN_SHEET", implied_period
-    if any_in(up_simplified, ["AWAY CLEAN SHEET", "PORTA INVIOLATA OSPITE"]):
+    if any_in(up_simplified, ["AWAY CLEAN SHEET", "PORTA INVIOLATA OSPITE", "OASPETE NU PRIMESTE GOL", "ECHIPA OASPETE NU PRIMESTE GOL"]):
         return "AWAY_TEAM_CLEAN_SHEET", implied_period
-    if any_in(up_simplified, ["HOME RED CARD", "CARTELLINO ROSSO CASA"]):
+    if any_in(up_simplified, ["HOME RED CARD", "CARTELLINO ROSSO CASA", "GAZDA CARTONAS ROSU", "ECHIPA GAZDA CARTONAS ROSU"]):
         return "HOME_TEAM_RED_CARD", implied_period
-    if any_in(up_simplified, ["AWAY RED CARD", "CARTELLINO ROSSO OSPITE"]):
+    if any_in(up_simplified, ["AWAY RED CARD", "CARTELLINO ROSSO OSPITE", "OASPETE CARTONAS ROSU", "ECHIPA OASPETE CARTONAS ROSU"]):
         return "AWAY_TEAM_RED_CARD", implied_period
 
     # Yes/No popular markets (without explicit O/U)
-    if any_in(up_simplified, ["CARTELLINO ROSSO", "ESPULSIONE", "RED CARD"]):
+    if any_in(up_simplified, ["CARTELLINO ROSSO", "ESPULSIONE", "RED CARD", "CARTONAS ROSU", "ELIMINARE"]):
         return "RED_CARD_AWARDED", implied_period
-    if any_in(up_simplified, ["CALCIO DI RIGORE", "RIGORE", "PENALTY IN MATCH", "PENALTY AWARDED"]):
+    if any_in(up_simplified, ["CALCIO DI RIGORE", "RIGORE", "PENALTY IN MATCH", "PENALTY AWARDED", "PENALTY", "PENALTI"]):
         return "PENALTY_AWARDED", implied_period
-    if any_in(up_simplified, ["BTTS", "BOTH TEAMS TO SCORE", "ENTRAMBE LE SQUADRE SEGNANO", "GOAL/NOGOAL", "GOL/NOGOL"]):
+    if any_in(up_simplified, ["BTTS", "BOTH TEAMS TO SCORE", "ENTRAMBE LE SQUADRE SEGNANO", "GOAL/NOGOAL", "GOL/NOGOL", "AMBELE MARCHEAZA", "AMBELE ECHIPE MARCHEAZA"]):
         return "BOTH_TEAMS_TO_SCORE", implied_period
 
     # Team two-way
