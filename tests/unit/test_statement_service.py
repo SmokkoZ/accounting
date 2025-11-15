@@ -6,9 +6,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from io import BytesIO
 import sqlite3
 from unittest.mock import MagicMock
 
+from openpyxl import load_workbook
 import pytest
 
 from src.services.statement_service import (
@@ -257,40 +259,97 @@ def test_calculate_funding_totals_preserves_signed_withdrawals():
     conn.close()
 
 
-def test_build_statement_csv_rows_includes_identity_rows(service: StatementService):
+def test_export_statement_excel_creates_formatted_layout(
+    monkeypatch: pytest.MonkeyPatch,
+):
     calc = StatementCalculations(
         associate_id=2,
         net_deposits_eur=Decimal("500.00"),
-        should_hold_eur=Decimal("600.00"),
-        current_holding_eur=Decimal("550.00"),
-        fair_share_eur=Decimal("100.00"),
-        profit_before_payout_eur=Decimal("100.00"),
-        raw_profit_eur=Decimal("100.00"),
-        delta_eur=Decimal("-50.00"),
+        should_hold_eur=Decimal("650.00"),
+        current_holding_eur=Decimal("2168.91"),
+        fair_share_eur=Decimal("150.00"),
+        profit_before_payout_eur=Decimal("150.00"),
+        raw_profit_eur=Decimal("120.00"),
+        delta_eur=Decimal("1518.91"),
         total_deposits_eur=Decimal("700.00"),
         total_withdrawals_eur=Decimal("200.00"),
-        bookmakers=[],
-        associate_name="Demo",
+        bookmakers=[
+            BookmakerStatementRow(
+                bookmaker_name="Ladbrokes",
+                balance_eur=Decimal("-99.94"),
+                deposits_eur=Decimal("0.00"),
+                withdrawals_eur=Decimal("0.00"),
+                balance_native=Decimal("-171.00"),
+                native_currency="AUD",
+            ),
+            BookmakerStatementRow(
+                bookmaker_name="Sportsbet",
+                balance_eur=Decimal("2268.85"),
+                deposits_eur=Decimal("0.00"),
+                withdrawals_eur=Decimal("0.00"),
+                balance_native=Decimal("4009.00"),
+                native_currency="AUD",
+            ),
+        ],
+        associate_name="Demo Associate",
         home_currency="EUR",
         cutoff_date="2025-10-31T23:59:59Z",
         generated_at="2025-11-01T00:00:00Z",
     )
-
-    rows = service._build_statement_csv_rows(
-        calc,
-        export_time="2025-11-15T00:00:00Z",
-        multibook_delta=Decimal("25.00"),
+    service = StatementService()
+    monkeypatch.setattr(
+        "src.services.statement_service.utc_now_iso",
+        lambda: "2025-11-15T00:00:00Z",
     )
-    labels = [row[0] for row in rows if row]
-    assert "Net Deposits (ND)" in labels
-    assert "Exit Payout (-I'')" in labels
-    assert ["Identity Version", SETTLEMENT_MODEL_VERSION] in rows
-    identity_map = {row[0]: row[1] for row in rows if len(row) >= 2}
-    assert identity_map["Net Deposits (ND)"] == "500.00"
-    assert identity_map["Exit Payout (-I'')"] == "50.00"
-    footers = [row for row in rows if row and row[0] == "Footnote"]
-    assert footers
-    assert footers[-1][1] == SETTLEMENT_MODEL_FOOTNOTE
+    monkeypatch.setattr(
+        StatementService,
+        "_calculate_multibook_delta",
+        lambda self, associate_id, cutoff_date: Decimal("25.00"),
+    )
+    payload = service.export_statement_excel(
+        associate_id=calc.associate_id,
+        cutoff_date=calc.cutoff_date,
+        calculations=calc,
+    )
+    assert payload.filename == "demo-associate_EUR_31-10-2025_statement.xlsx"
+
+    workbook = load_workbook(BytesIO(payload.content), data_only=True)
+    sheet = workbook["Statement"]
+
+    assert sheet["A1"].value == "Associate:"
+    assert sheet["B1"].value == "Demo Associate"
+    assert sheet["A2"].value == "As of (UTC):"
+    assert sheet["B2"].value == calc.cutoff_date
+    assert sheet["A3"].value == "Generated:"
+    assert sheet["B3"].value == "2025-11-15T00:00:00Z"
+
+    assert sheet["A5"].value == "Bookmaker"
+    assert sheet["B6"].value == pytest.approx(-171.0)
+    assert sheet["D6"].value == pytest.approx(-99.94)
+    assert sheet["A6"].value == "Ladbrokes"
+    assert sheet["A7"].value == "Sportsbet"
+
+    assert sheet["A8"].value == "Total"
+    assert sheet["B8"].value == pytest.approx(3838.0)
+    assert sheet["D8"].value == pytest.approx(2168.91)
+
+    assert sheet["A10"].value == "Summary (All amounts in EUR)"
+    assert sheet["A11"].value == "Total Balance"
+    assert sheet["B11"].value == pytest.approx(3838.0)
+    assert sheet["C11"].value == "EUR"
+    assert sheet["D11"].value == pytest.approx(2168.91)
+    assert sheet["A12"].value == "Net Deposits (ND)"
+    assert sheet["B12"].value == pytest.approx(884.78, rel=1e-3)
+    assert sheet["C12"].value == "EUR"
+    assert sheet["D12"].value == pytest.approx(500.0)
+    assert sheet["A13"].value == "Imbalance (Total Balance − Yield Funds)"
+    assert sheet["B13"].value == pytest.approx(2687.79, rel=1e-3)
+    assert sheet["C13"].value == "EUR"
+    assert sheet["D13"].value == pytest.approx(1518.91)
+    assert sheet["A14"].value == "Fair Share (FS)"
+    assert sheet["B14"].value == pytest.approx(265.43, rel=1e-3)
+    assert sheet["C14"].value == "EUR"
+    assert sheet["D14"].value == pytest.approx(150.0)
 
 
 def test_build_roi_csv_rows_include_version_and_footnote(service: StatementService):

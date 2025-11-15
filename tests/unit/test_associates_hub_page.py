@@ -29,6 +29,7 @@ def associates_hub_module():
 
     module_path = Path("src/ui/pages/7_associates_hub.py")
     sys.modules.setdefault("xlsxwriter", Mock())
+    sys.modules.setdefault("xlsxwriter.utility", Mock())
     spec = importlib.util.spec_from_file_location(
         "associates_hub_page", module_path
     )
@@ -77,19 +78,18 @@ def test_build_associate_dataframe(associates_hub_module):
         "max_surebet_stake_eur",
         "max_bookmaker_exposure_eur",
         "preferred_balance_chat_id",
-        "nd_eur",
-        "yf_eur",
-        "tb_eur",
-        "imbalance_eur",
+        "net_deposits_native",
+        "yield_funds_native",
+        "total_balance_native",
+        "imbalance_native",
         "bookmaker_count",
-        "last_activity",
         "action",
     ]
     row = df.iloc[0].to_dict()
     assert row["display_alias"] == "Alice"
-    assert row["nd_eur"] == pytest.approx(1000.0)
-    assert row["yf_eur"] == pytest.approx(950.0)
-    assert row["tb_eur"] == pytest.approx(960.0)
+    assert row["net_deposits_native"] == pytest.approx(1000.0)
+    assert row["yield_funds_native"] == pytest.approx(950.0)
+    assert row["total_balance_native"] == pytest.approx(960.0)
     assert row["action"] == ""
 
 
@@ -102,6 +102,7 @@ def test_build_bookmaker_dataframe(associates_hub_module):
         is_active=True,
         parsing_profile=None,
         native_currency="USD",
+        account_currency="AUD",
         modeled_balance_eur=Decimal("300.00"),
         reported_balance_eur=Decimal("320.00"),
         delta_eur=Decimal("20.00"),
@@ -123,6 +124,7 @@ def test_build_bookmaker_dataframe(associates_hub_module):
     assert "active_balance_native" in df.columns
     row = df.iloc[0]
     assert row["associate_alias"] == "Alpha"
+    assert row["account_currency"] == "AUD"
     assert row["active_balance_native"] == pytest.approx(480.0)
     assert row["active_balance_eur"] == pytest.approx(320.0)
     assert row["pending_balance_native"] == pytest.approx(22.5)
@@ -155,6 +157,7 @@ def test_bookmaker_reassignment_requires_confirmation(
         }
     }
     associate_lookup = {1: "Alpha", 2: "Beta"}
+    associate_currency_lookup = {1: "EUR", 2: "EUR"}
     queued: Dict[str, Any] = {}
 
     for method in ("info", "warning", "error", "success"):
@@ -180,6 +183,7 @@ def test_bookmaker_reassignment_requires_confirmation(
         state,
         metadata=metadata,
         associate_lookup=associate_lookup,
+        associate_currency_lookup=associate_currency_lookup,
     )
 
     assert "payload" in queued

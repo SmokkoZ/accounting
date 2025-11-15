@@ -281,7 +281,7 @@ class TestAssociateHubRepository:
                 'bookmaker_name': 'Bookmaker A',
                 'is_active': 1,
                 'parsing_profile': None,
-                'account_currency': 'USD',
+                'account_currency': 'AUD',
                 'bookmaker_chat_id': '-100',
                 'coverage_chat_id': '-200',
                 'region': 'EU',
@@ -292,7 +292,7 @@ class TestAssociateHubRepository:
                 'modeled_balance_eur': '500.00',
                 'reported_balance_eur': '520.00',
                 'balance_native': '800.00',
-                'check_native_currency': 'AUD',
+                'check_native_currency': 'USD',
                 'fx_rate_used': '1.60',
                 'pending_balance_eur': '50.00',
                 'last_balance_check_utc': '2025-01-01T10:00:00Z'
@@ -316,7 +316,8 @@ class TestAssociateHubRepository:
         assert bookmaker.parsing_profile is None
         assert bookmaker.associate_id == 1
         assert bookmaker.associate_alias == 'Tester'
-        assert bookmaker.native_currency == 'AUD'
+        assert bookmaker.native_currency == 'USD'
+        assert bookmaker.account_currency == 'AUD'
         assert bookmaker.modeled_balance_eur == Decimal('500.00')
         assert bookmaker.reported_balance_eur == Decimal('520.00')
         assert bookmaker.delta_eur == Decimal('20.00')
@@ -379,7 +380,7 @@ class TestAssociateHubRepository:
         assert params[9] == "note"
         assert params[11] == 1
         
-        # Repository uses context manager for transactions, no explicit commit needed
+        mock_db.commit.assert_called_once()
     
     def test_database_error_handling(self, repository, mock_db):
         """Test handling of database errors."""

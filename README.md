@@ -167,13 +167,13 @@ LOG_LEVEL=INFO
 - Standardize ND computation: store WITHDRAWAL as negative and DEPOSIT as positive; compute ND by summing signed amounts (no double-negation).
 - Keep imbalance: I'' = TB - YF where TB is total bookmaker holdings; reconciliation still targets I'' -> 0.
 - Add 'Settle Associate Now' flow: computes I'' at a cutoff and posts a single balancing DEPOSIT/WITHDRAWAL to zero it; Excel exports at exit include an 'Exit Payout' row (-I'').
-- Workbooks: include YF in summaries plus a version footnote (e.g., Model: YF-v1 -- YF=ND+FS; I''=TB-YF; values exclude operator fees/taxes).
+- Workbooks: the Statement Excel now uses a compact Associate/As-of/Generated header, a single contiguous bookmaker table (native + CCY + EUR), and a EUR-only summary block that lists ND/FS/Yield Funds/Total Balance/Imbalance/Exit Payout/UTILE/Multibook Delta. The ROI Excel continues to surface the model version alongside its calculations for downstream automation.
 - Backward compatibility: no schema changes; existing math reused; older references to 'Should Hold' now map to YF. Where docs state RAW_PROFIT_EUR = SHOULD_HOLD - NET_DEPOSITS, this equals FS under YF (YF - ND = FS).
 
 #### Excel Identity Notes (YF-v1)
 
-- export_statement_excel and export_surebet_roi_excel prepend an Identity Version row showing YF-v1 so downstream automation can detect copy updates without schema changes.
-- Each workbook ends with a footnote: Model: YF-v1 -- YF = ND + FS; I'' = TB - YF. Legacy 'Should Hold' values map to YF; exports remain backward compatible.
+- `export_surebet_roi_excel` prepends an Identity Version row showing YF-v1 so downstream automation can detect copy updates without schema changes, while `export_statement_excel` now relies on the streamlined header block instead.
+- ROI workbooks still end with a footnote: Model: YF-v1 -- YF = ND + FS; I'' = TB - YF. Statement workbooks intentionally drop the legend/footnote to keep the layout clean for partners.
 - ND/FS/YF/TB/I'' rows remain append-only; historical exports are untouched and legacy columns keep their ordering.
 
 ## Contributing

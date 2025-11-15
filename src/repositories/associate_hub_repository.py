@@ -107,6 +107,7 @@ class BookmakerSummary:
     associate_alias: Optional[str] = None
     active_balance_native: Optional[Decimal] = None
     pending_balance_native: Optional[Decimal] = None
+    account_currency: str = "EUR"
 
 
 class AssociateHubRepository:
@@ -517,9 +518,14 @@ class AssociateHubRepository:
             pending_balance = _to_decimal(row.get("pending_balance_eur")) or Decimal("0.00")
             fx_rate = _to_decimal_raw(row.get("fx_rate_used"))
             balance_native = _to_decimal(row.get("balance_native"))
+            account_currency = (
+                (row.get("account_currency") or row.get("associate_home_currency") or "EUR")
+                .strip()
+                .upper()
+            )
             native_currency = (
                 (row.get("check_native_currency")
-                 or row.get("account_currency")
+                 or account_currency
                  or row.get("associate_home_currency")
                  or "EUR")
                 .strip()
@@ -540,6 +546,7 @@ class AssociateHubRepository:
                 is_active=bool(row["is_active"]),
                 parsing_profile=row["parsing_profile"],
                 native_currency=native_currency,
+                account_currency=account_currency,
                 modeled_balance_eur=modeled_balance,
                 reported_balance_eur=reported_balance,
                 delta_eur=delta_eur.quantize(TWO_PLACES, rounding=ROUND_HALF_UP) if delta_eur else None,
@@ -871,6 +878,8 @@ class AssociateHubRepository:
         
         if cursor.rowcount == 0:
             raise ValueError(f"Bookmaker not found: {bookmaker_id}")
+
+        self.db.commit()
         
         logger.info(
             "bookmaker_updated",

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import altair as alt
@@ -27,6 +27,7 @@ from src.services.balance_history_service import (
     BalanceHistoryService,
 )
 from src.services.bookmaker_balance_service import BookmakerBalanceService
+from src.services.fx_manager import get_latest_fx_rate
 from src.services.funding_transaction_service import (
     FundingTransaction,
     FundingTransactionError,
@@ -49,7 +50,10 @@ from src.ui.utils.formatters import format_currency_amount, format_utc_datetime_
 from src.ui.utils.state_management import safe_rerun
 from src.ui.utils.validators import VALID_CURRENCIES
 from src.ui.helpers.dialogs import close_dialog
+from src.utils.logging_config import get_logger
 
+
+logger = get_logger(__name__)
 
 PENDING_TAB_KEY = "associates_hub_pending_tab"
 ACTIVE_TAB_KEY = "associates_hub_active_tab"
@@ -60,6 +64,7 @@ SELECTED_ASSOCIATE_KEY = "associates_hub_selected_associate"
 BOOKMAKER_SCOPE_KEY = "associates_hub_bookmaker_scope"
 BOOKMAKER_REASSIGN_PAYLOAD_KEY = "associates_hub_reassign_payload"
 BOOKMAKER_REASSIGN_DIALOG_KEY = "associates_hub_reassign_dialog"
+BOOKMAKER_NOTICE_KEY = "associates_hub_bookmaker_notice"
 HISTORY_ASSOCIATE_FILTER_KEY = "associates_hub_history_associate_id"
 HISTORY_BOOKMAKER_FILTER_KEY = "associates_hub_history_bookmaker_id"
 HISTORY_RANGE_KEY = "associates_hub_history_range"
@@ -83,6 +88,21 @@ HISTORY_RANGE_OPTIONS = {
     "Custom": None,
 }
 DEFAULT_HISTORY_PAGE_SIZE = 50
+ASSOC_HIDDEN_COLUMNS: Tuple[str, ...] = (
+    "max_surebet_stake_eur",
+    "max_bookmaker_exposure_eur",
+    "action",
+)
+BOOKMAKER_HIDDEN_COLUMNS: Tuple[str, ...] = (
+    "parsing_profile",
+    "risk_level",
+    "region",
+    "last_balance_check",
+    "action",
+)
+
+TWO_PLACES = Decimal("0.01")
+FX_RATE_CACHE: Dict[str, Optional[Decimal]] = {}
 
 
 def _queue_tab_switch(tab_index: int, message: str) -> None:
@@ -278,6 +298,53 @@ def _decimal_to_float(value: Optional[Decimal]) -> Optional[float]:
         return None
 
 
+def _resolve_fx_rate(currency: str) -> Optional[Decimal]:
+    """Return cached FX rate (EUR per unit) for the associate's currency."""
+    code = (currency or "EUR").upper()
+    if code in FX_RATE_CACHE:
+        return FX_RATE_CACHE[code]
+    if code == "EUR":
+        FX_RATE_CACHE[code] = Decimal("1.0")
+        return FX_RATE_CACHE[code]
+    try:
+        latest = get_latest_fx_rate(code)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "associates_hub_fx_lookup_failed",
+            currency=code,
+            error=str(exc),
+        )
+        FX_RATE_CACHE[code] = None
+        return None
+    if not latest:
+        logger.warning("associates_hub_fx_rate_missing", currency=code)
+        FX_RATE_CACHE[code] = None
+        return None
+    rate = Decimal(str(latest[0]))
+    FX_RATE_CACHE[code] = rate
+    return rate
+
+
+def _convert_eur_to_native_decimal(
+    value: Optional[Decimal], currency: str
+) -> Optional[Decimal]:
+    """Convert EUR totals to the associate's native currency."""
+    if value is None:
+        return None
+    fx_rate = _resolve_fx_rate(currency)
+    if not fx_rate or fx_rate == Decimal("0"):
+        return value
+    try:
+        return (value / fx_rate).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ZeroDivisionError):  # pragma: no cover - defensive
+        return value
+
+
+def _native_float(value: Optional[Decimal], currency: str) -> Optional[float]:
+    """Helper to deliver floats for Streamlit tables in native currency."""
+    return _decimal_to_float(_convert_eur_to_native_decimal(value, currency))
+
+
 def _apply_metric_overrides(
     associates: List[AssociateMetrics],
 ) -> List[AssociateMetrics]:
@@ -381,6 +448,7 @@ def _build_associate_dataframe(
     """Convert associate metrics to a pandas DataFrame for the editor."""
     records: List[Dict[str, Any]] = []
     for metric in items:
+        currency = metric.home_currency or "EUR"
         records.append(
             {
                 "id": metric.associate_id,
@@ -397,12 +465,13 @@ def _build_associate_dataframe(
                     metric.max_bookmaker_exposure_eur
                 ),
                 "preferred_balance_chat_id": metric.preferred_balance_chat_id or "",
-                "nd_eur": _decimal_to_float(metric.net_deposits_eur),
-                "yf_eur": _decimal_to_float(metric.should_hold_eur),
-                "tb_eur": _decimal_to_float(metric.current_holding_eur),
-                "imbalance_eur": _decimal_to_float(metric.delta_eur),
+                "net_deposits_native": _native_float(metric.net_deposits_eur, currency),
+                "yield_funds_native": _native_float(metric.should_hold_eur, currency),
+                "total_balance_native": _native_float(
+                    metric.current_holding_eur, currency
+                ),
+                "imbalance_native": _native_float(metric.delta_eur, currency),
                 "bookmaker_count": metric.bookmaker_count,
-                "last_activity": metric.last_activity_utc or "Never",
                 "action": "",
             }
         )
@@ -419,12 +488,11 @@ def _build_associate_dataframe(
                 "max_surebet_stake_eur",
                 "max_bookmaker_exposure_eur",
                 "preferred_balance_chat_id",
-                "nd_eur",
-                "yf_eur",
-                "tb_eur",
-                "imbalance_eur",
+                "net_deposits_native",
+                "yield_funds_native",
+                "total_balance_native",
+                "imbalance_native",
                 "bookmaker_count",
-                "last_activity",
                 "action",
             ]
         )
@@ -455,7 +523,7 @@ def _build_bookmaker_dataframe(
                 "associate_id": summary.associate_id,
                 "associate_alias": associate_alias,
                 "bookmaker_name": summary.bookmaker_name,
-                "account_currency": summary.native_currency,
+                "account_currency": getattr(summary, "account_currency", summary.native_currency),
                 "is_active": summary.is_active,
                 "parsing_profile": summary.parsing_profile or "",
                 "bookmaker_chat_id": summary.bookmaker_chat_id or "",
@@ -528,13 +596,17 @@ def _normalize_associate_payload(row: Dict[str, Any]) -> AssociateRow:
     )
 
 
-def _normalize_bookmaker_payload(row: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_bookmaker_payload(
+    row: Dict[str, Any],
+    associate_currency_lookup: Optional[Dict[int, str]] = None,
+) -> Dict[str, Any]:
     """Return sanitized bookmaker row values."""
+    raw_account_currency = (row.get("account_currency") or "").strip().upper()
     payload = {
         "id": row.get("id"),
         "associate_id": row.get("associate_id"),
         "bookmaker_name": (row.get("bookmaker_name") or "").strip(),
-        "account_currency": (row.get("account_currency") or "EUR").strip().upper(),
+        "account_currency": "",
         "is_active": bool(row.get("is_active", True)),
         "parsing_profile": (row.get("parsing_profile") or "").strip() or None,
         "bookmaker_chat_id": (row.get("bookmaker_chat_id") or "").strip() or None,
@@ -550,6 +622,10 @@ def _normalize_bookmaker_payload(row: Dict[str, Any]) -> Dict[str, Any]:
             payload["associate_id"] = None
     except (TypeError, ValueError):
         payload["associate_id"] = None
+    default_currency = "EUR"
+    if associate_currency_lookup and payload["associate_id"]:
+        default_currency = associate_currency_lookup.get(payload["associate_id"], default_currency)
+    payload["account_currency"] = raw_account_currency or default_currency
     return payload
 
 
@@ -564,7 +640,10 @@ def _render_selection_picker(
         associate_id = int(row.get("id") or 0)
         if not associate_id:
             continue
-        label = f"{row.get('display_alias', 'Associate')} (ID {associate_id})"
+        currency = (row.get("home_currency") or "EUR").strip().upper()
+        label = (
+            f"{row.get('display_alias', 'Associate')} · {currency} · ID {associate_id}"
+        )
         options.setdefault(label, associate_id)
 
     default_labels = [
@@ -737,6 +816,12 @@ def _persist_associate_changes(
 
     applied = 0
     errors: List[str] = []
+    change_summaries: List[str] = []
+    change_summaries: List[str] = []
+    change_summaries: List[str] = []
+    change_summaries: List[str] = []
+    change_summaries: List[str] = []
+    change_summaries: List[str] = []
 
     if changes.deleted_rows:
         errors.append(
@@ -807,6 +892,7 @@ def _persist_bookmaker_changes(
     *,
     metadata: Dict[int, Dict[str, Any]],
     associate_lookup: Dict[int, str],
+    associate_currency_lookup: Dict[int, str],
 ) -> None:
     """Write bookmaker updates/inserts."""
     if not state:
@@ -825,12 +911,14 @@ def _persist_bookmaker_changes(
 
     applied = 0
     errors: List[str] = []
+    change_summaries: List[str] = []
 
     for row_idx, edited in changes.edited_rows.items():
         if row_idx >= len(edited_df):
             continue
         payload = _normalize_bookmaker_payload(
-            edited_df.iloc[row_idx].to_dict()
+            edited_df.iloc[row_idx].to_dict(),
+            associate_currency_lookup,
         )
         bookmaker_id = payload.get("id")
         if not bookmaker_id:
@@ -882,11 +970,14 @@ def _persist_bookmaker_changes(
                 internal_notes=payload.get("internal_notes"),
             )
             applied += 1
+            change_summaries.append(
+                f"{payload['bookmaker_name']} -> {payload['account_currency']}"
+            )
         except Exception as exc:
             errors.append(str(exc))
 
     for row in changes.added_rows:
-        payload = _normalize_bookmaker_payload(row)
+        payload = _normalize_bookmaker_payload(row, associate_currency_lookup)
         if not payload["bookmaker_name"]:
             errors.append("Bookmaker name is required.")
             continue
@@ -907,15 +998,24 @@ def _persist_bookmaker_changes(
                 internal_notes=payload.get("internal_notes"),
             )
             applied += 1
+            change_summaries.append(
+                f"{payload['bookmaker_name']} -> {payload['account_currency']}"
+            )
         except Exception as exc:
             errors.append(str(exc))
 
-    if applied:
-        st.success(f"Saved {applied} bookmaker change(s).")
     if errors:
         for error in errors:
             st.error(error)
     if applied:
+        notice = f"Saved {applied} bookmaker change(s)."
+        if change_summaries:
+            summary_preview = ", ".join(change_summaries[:5])
+            if len(change_summaries) > 5:
+                summary_preview += ", ..."
+            notice = f"{notice} Updated: {summary_preview}."
+        st.session_state[BOOKMAKER_NOTICE_KEY] = notice
+        st.session_state.pop(BOOKMAKER_EDITOR_KEY, None)
         safe_rerun("bookmakers_saved")
 
 
@@ -949,6 +1049,8 @@ def _render_associate_table(
         help="Limited by filters and pagination controls above.",
     )
 
+    display_df = df.drop(columns=ASSOC_HIDDEN_COLUMNS, errors="ignore")
+
     column_config = {
         "display_alias": st.column_config.TextColumn(
             "Display Alias",
@@ -968,70 +1070,52 @@ def _render_associate_table(
             "Internal Notes",
             width="medium",
         ),
-        "max_surebet_stake_eur": st.column_config.NumberColumn(
-            "Max Stake (EUR)",
-            help="Optional surebet stake ceiling.",
-            step=100.0,
-            format="%.2f",
-        ),
-        "max_bookmaker_exposure_eur": st.column_config.NumberColumn(
-            "Max Exposure (EUR)",
-            help="Optional total bookmaker exposure limit.",
-            step=500.0,
-            format="%.2f",
-        ),
         "preferred_balance_chat_id": st.column_config.TextColumn(
             "Preferred Balance Chat",
             help="Destination for balance reports.",
         ),
-        "nd_eur": st.column_config.NumberColumn(
-            "ND (EUR)",
+        "net_deposits_native": st.column_config.NumberColumn(
+            "Net Deposits",
             disabled=True,
             format="%.2f",
+            help="Deposits minus withdrawals shown in the associate's native currency.",
         ),
-        "yf_eur": st.column_config.NumberColumn(
-            "YF (EUR)",
+        "yield_funds_native": st.column_config.NumberColumn(
+            "Yield Funds",
             disabled=True,
             format="%.2f",
+            help="Target holding (YF) expressed in the associate's native currency.",
         ),
-        "tb_eur": st.column_config.NumberColumn(
-            "TB (EUR)",
+        "total_balance_native": st.column_config.NumberColumn(
+            "Total Balance",
             disabled=True,
             format="%.2f",
+            help="Latest aggregate balance snapshot translated to the associate's currency.",
         ),
-        "imbalance_eur": st.column_config.NumberColumn(
-            "I'' (EUR)",
+        "imbalance_native": st.column_config.NumberColumn(
+            "Imbalance",
             disabled=True,
             format="%.2f",
+            help="Difference between total balance and YF in native currency.",
         ),
         "bookmaker_count": st.column_config.NumberColumn(
             "Bookmakers",
             disabled=True,
         ),
-        "last_activity": st.column_config.TextColumn(
-            "Last Activity",
-            disabled=True,
-        ),
-        "action": st.column_config.SelectboxColumn(
-            "Action",
-            options=[
-                "",
-                "Details",
-                "Go to Overview",
-                "View history",
-            ],
-            help="Choose a quick action per associate.",
-        ),
     }
 
     edited_df = st.data_editor(
-        df,
+        display_df,
         key=ASSOC_EDITOR_KEY,
         column_config=column_config,
+        column_order=list(display_df.columns),
         num_rows="dynamic",
         hide_index=True,
         width='stretch',
     )
+    for hidden in ASSOC_HIDDEN_COLUMNS:
+        if hidden in df.columns:
+            edited_df[hidden] = df[hidden].reindex(edited_df.index)
     raw_state = st.session_state.get(ASSOC_EDITOR_KEY)
     try:
         state = dict(raw_state) if raw_state is not None else None
@@ -1068,8 +1152,13 @@ def _render_bookmaker_table(
     repository: AssociateHubRepository,
     selected_ids: Sequence[int],
     associate_lookup: Dict[int, str],
+    associate_currency_lookup: Dict[int, str],
 ) -> None:
     """Render bookmaker management table."""
+    notice = st.session_state.pop(BOOKMAKER_NOTICE_KEY, None)
+    if notice:
+        st.success(notice)
+
     scope = st.radio(
         "Bookmaker scope",
         options=("Selected associate(s)", "All"),
@@ -1108,9 +1197,15 @@ def _render_bookmaker_table(
         df["associate_alias"] = df.apply(_alias, axis=1)
 
         if "active_balance_native" in df.columns:
-            df["active_balance_native"] = df["active_balance_native"].fillna(df["active_balance_eur"])
+            active_native = pd.to_numeric(df["active_balance_native"], errors="coerce")
+            active_eur = pd.to_numeric(df.get("active_balance_eur"), errors="coerce")
+            df["active_balance_native"] = active_native.fillna(active_eur)
         if "pending_balance_native" in df.columns:
-            df["pending_balance_native"] = df["pending_balance_native"].fillna(df["pending_balance_eur"])
+            pending_native = pd.to_numeric(df["pending_balance_native"], errors="coerce")
+            pending_eur = pd.to_numeric(df.get("pending_balance_eur"), errors="coerce")
+            df["pending_balance_native"] = pending_native.fillna(pending_eur)
+
+    display_df = df.drop(columns=BOOKMAKER_HIDDEN_COLUMNS, errors="ignore")
 
     column_config = {
         "associate_id": st.column_config.NumberColumn(
@@ -1128,10 +1223,6 @@ def _render_bookmaker_table(
             options=VALID_CURRENCIES,
         ),
         "is_active": st.column_config.CheckboxColumn("Active"),
-        "parsing_profile": st.column_config.TextColumn(
-            "Parsing Profile",
-            help="JSON profile for OCR/parsing.",
-        ),
         "bookmaker_chat_id": st.column_config.TextColumn(
             "Bookmaker Chat",
             help="Telegram chat for statements/pings.",
@@ -1140,8 +1231,6 @@ def _render_bookmaker_table(
             "Coverage Chat",
             help="Coverage/multibook chat destination.",
         ),
-        "region": st.column_config.TextColumn("Region"),
-        "risk_level": st.column_config.TextColumn("Risk"),
         "internal_notes": st.column_config.TextColumn("Internal notes"),
         "active_balance_native": st.column_config.NumberColumn(
             "Active Balance (Native)",
@@ -1165,25 +1254,20 @@ def _render_bookmaker_table(
             disabled=True,
             format="%.2f",
         ),
-        "last_balance_check": st.column_config.TextColumn(
-            "Last balance check",
-            disabled=True,
-        ),
-        "action": st.column_config.SelectboxColumn(
-            "Action",
-            options=["", "View history"],
-            help="Jump to Balance History with this bookmaker in focus.",
-        ),
     }
 
     edited_df = st.data_editor(
-        df,
+        display_df,
         key=BOOKMAKER_EDITOR_KEY,
         column_config=column_config,
+        column_order=list(display_df.columns),
         num_rows="dynamic",
         hide_index=True,
         width='stretch',
     )
+    for hidden in BOOKMAKER_HIDDEN_COLUMNS:
+        if hidden in df.columns:
+            edited_df[hidden] = df[hidden].reindex(edited_df.index)
     state = st.session_state.get(BOOKMAKER_EDITOR_KEY)
     _handle_bookmaker_actions(state, edited_df)
 
@@ -1200,6 +1284,7 @@ def _render_bookmaker_table(
                 state,
                 metadata=metadata,
                 associate_lookup=associate_lookup,
+                associate_currency_lookup=associate_currency_lookup,
             )
     else:
         st.button(
@@ -1233,8 +1318,16 @@ def _render_management_tab(
     associate_lookup = {
         metric.associate_id: metric.associate_alias for metric in full_associates
     }
+    associate_currency_lookup = {
+        metric.associate_id: metric.home_currency or "EUR" for metric in full_associates
+    }
     st.subheader("Bookmaker Management")
-    _render_bookmaker_table(repository, selected_ids, associate_lookup)
+    _render_bookmaker_table(
+        repository,
+        selected_ids,
+        associate_lookup,
+        associate_currency_lookup,
+    )
 
 
 def _open_overview_drawer(associate_id: int, tab: str = "profile") -> None:

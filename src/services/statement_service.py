@@ -10,11 +10,12 @@ from __future__ import annotations
 import io
 import re
 from decimal import Decimal
-from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 
 import structlog
 import xlsxwriter
+from xlsxwriter.utility import xl_rowcol_to_cell
 from datetime import datetime
 
 from src.core.database import get_db_connection
@@ -569,13 +570,10 @@ class StatementService:
         calc = calculations or self.generate_statement(associate_id, cutoff_date)
         export_time = utc_now_iso()
         multibook_delta = self._calculate_multibook_delta(associate_id, cutoff_date)
-        rows = self._build_statement_csv_rows(calc, export_time, multibook_delta)
-        workbook_bytes = self._rows_to_workbook(rows, sheet_name="Statement")
-        filename = self._build_filename(
-            prefix="legacy_statement",
-            associate_alias=calc.associate_name,
-            cutoff_date=cutoff_date,
+        workbook_bytes = self._build_statement_workbook(
+            calc, export_time, multibook_delta
         )
+        filename = self._build_statement_filename(calc, cutoff_date)
         return WorkbookExportPayload(filename=filename, content=workbook_bytes, generated_at=export_time)
 
     def export_surebet_roi_excel(
@@ -650,80 +648,291 @@ class StatementService:
         buffer.seek(0)
         return buffer.getvalue()
 
-    def _build_statement_csv_rows(
+    def _build_statement_workbook(
         self,
         calc: StatementCalculations,
         export_time: str,
         multibook_delta: Decimal,
-    ) -> List[List[str]]:
-        rows: List[List[str]] = [
-            ["Associate", calc.associate_name],
-            ["As of (UTC)", calc.cutoff_date],
-            ["Generated", export_time],
-            ["Identity Version", SETTLEMENT_MODEL_VERSION],
-            [
-                "Note",
-                "Totals in EUR. Native shown for reference. FX frozen at posting time.",
-            ],
-            [],
-        ]
+    ) -> bytes:
+        """
+        Build an in-memory workbook that follows the streamlined statement spec.
+        """
+        buffer = io.BytesIO()
+        workbook = xlsxwriter.Workbook(buffer, {"in_memory": True})
+        worksheet = workbook.add_worksheet("Statement")
+        worksheet.hide_gridlines(2)
+        worksheet.set_column("A:A", 32)
+        worksheet.set_column("B:B", 20)
+        worksheet.set_column("C:C", 10)
+        worksheet.set_column("D:D", 22)
 
-        header = [
-            "Bookmaker",
-            "Balance Native",
-            "",
-            "CCY",
-            "Balance EUR",
-            "CCY_EUR",
-        ]
-        rows.append(header)
+        accounting_format_code = '_(* #,##0.00_);_(* (#,##0.00);_(* "-"??_);_(@_)'
+        header_label_fmt = workbook.add_format(
+            {
+                "bold": True,
+                "bg_color": "#F2F2F2",
+                "border": 1,
+                "align": "left",
+                "valign": "vcenter",
+            }
+        )
+        header_value_fmt = workbook.add_format(
+            {
+                "bg_color": "#F2F2F2",
+                "border": 1,
+                "align": "left",
+                "valign": "vcenter",
+            }
+        )
+        bookmaker_header_fmt = workbook.add_format(
+            {
+                "bold": True,
+                "bg_color": "#F2F2F2",
+                "border": 1,
+                "align": "left",
+                "valign": "vcenter",
+            }
+        )
+        bookmaker_text_fmt = workbook.add_format(
+            {"border": 1, "align": "left", "valign": "vcenter"}
+        )
+        bookmaker_currency_fmt = workbook.add_format(
+            {
+                "border": 1,
+                "align": "right",
+                "valign": "vcenter",
+                "num_format": accounting_format_code,
+            }
+        )
+        bookmaker_ccy_fmt = workbook.add_format(
+            {"border": 1, "align": "center", "valign": "vcenter"}
+        )
+        bookmaker_total_label_fmt = workbook.add_format(
+            {"border": 1, "align": "left", "valign": "vcenter", "bold": True}
+        )
+        bookmaker_total_value_fmt = workbook.add_format(
+            {
+                "border": 1,
+                "align": "right",
+                "valign": "vcenter",
+                "bold": True,
+                "num_format": accounting_format_code,
+            }
+        )
+        bookmaker_total_blank_fmt = workbook.add_format({"border": 1})
+        summary_label_fmt = workbook.add_format({"border": 1, "align": "left"})
+        summary_label_bold_fmt = workbook.add_format(
+            {"border": 1, "align": "left", "bold": True}
+        )
+        summary_native_fmt = workbook.add_format(
+            {"border": 1, "align": "right", "num_format": accounting_format_code}
+        )
+        summary_currency_fmt = workbook.add_format({"border": 1, "align": "center"})
+        summary_value_fmt = workbook.add_format(
+            {"border": 1, "align": "right", "num_format": accounting_format_code}
+        )
+        summary_value_bold_fmt = workbook.add_format(
+            {
+                "border": 1,
+                "align": "right",
+                "num_format": accounting_format_code,
+                "bold": True,
+            }
+        )
+        summary_heading_fmt = workbook.add_format(
+            {"bold": True, "font_size": 12, "align": "left"}
+        )
+        positive_fmt = workbook.add_format({"font_color": "#0A8A0A"})
+        negative_fmt = workbook.add_format({"font_color": "#B00020"})
 
-        if calc.bookmakers:
+        header_rows = [
+            ("Associate", calc.associate_name),
+            ("As of (UTC)", calc.cutoff_date),
+            ("Generated", export_time),
+        ]
+        for row_idx, (label, value) in enumerate(header_rows):
+            worksheet.write(row_idx, 0, f"{label}:", header_label_fmt)
+            worksheet.write(row_idx, 1, value, header_value_fmt)
+
+        table_header_row = len(header_rows) + 1
+        headers = ["Bookmaker", "Native Balance", "CCY", "Balance (EUR)"]
+        for col_idx, label in enumerate(headers):
+            worksheet.write(table_header_row, col_idx, label, bookmaker_header_fmt)
+
+        data_start_row = table_header_row + 1
+        current_row = data_start_row
+        has_bookmakers = bool(calc.bookmakers)
+        total_native_dec = Decimal("0.00")
+        total_eur_dec = Decimal("0.00")
+        if has_bookmakers:
             for bookmaker in calc.bookmakers:
-                rows.append(
-                    [
-                        self._normalize_bookmaker_name(bookmaker.bookmaker_name),
-                        self._format_decimal(bookmaker.balance_native),
-                        "",
-                        bookmaker.native_currency or "",
-                        self._format_decimal(bookmaker.balance_eur),
-                        "EURO",
-                    ]
+                total_native_dec += bookmaker.balance_native
+                total_eur_dec += bookmaker.balance_eur
+                worksheet.write(
+                    current_row,
+                    0,
+                    self._normalize_bookmaker_name(bookmaker.bookmaker_name) or "",
+                    bookmaker_text_fmt,
                 )
+                worksheet.write_number(
+                    current_row,
+                    1,
+                    self._decimal_to_float(bookmaker.balance_native),
+                    bookmaker_currency_fmt,
+                )
+                worksheet.write(
+                    current_row,
+                    2,
+                    bookmaker.native_currency or "",
+                    bookmaker_ccy_fmt,
+                )
+                worksheet.write_number(
+                    current_row,
+                    3,
+                    self._decimal_to_float(bookmaker.balance_eur),
+                    bookmaker_currency_fmt,
+                )
+                current_row += 1
         else:
-            rows.append(
-                [
-                    "No bookmaker balances available",
-                    "",
-                    "",
-                    "",
-                    self._format_decimal(Decimal("0")),
-                    "EURO",
-                ]
+            worksheet.write(
+                current_row,
+                0,
+                "No bookmaker balances available",
+                bookmaker_text_fmt,
+            )
+            worksheet.write_blank(current_row, 1, None, bookmaker_text_fmt)
+            worksheet.write_blank(current_row, 2, None, bookmaker_text_fmt)
+            worksheet.write_number(current_row, 3, 0.0, bookmaker_currency_fmt)
+            current_row += 1
+
+        total_row = current_row
+        worksheet.write(total_row, 0, "Total", bookmaker_total_label_fmt)
+        if has_bookmakers:
+            native_start_cell = xl_rowcol_to_cell(data_start_row, 1)
+            native_end_cell = xl_rowcol_to_cell(current_row - 1, 1)
+            worksheet.write_formula(
+                total_row,
+                1,
+                f"=SUM({native_start_cell}:{native_end_cell})",
+                bookmaker_total_value_fmt,
+                self._decimal_to_float(total_native_dec),
+            )
+        else:
+            worksheet.write_number(total_row, 1, 0.0, bookmaker_total_value_fmt)
+        worksheet.write_blank(total_row, 2, None, bookmaker_total_blank_fmt)
+        if has_bookmakers:
+            total_eur = sum(
+                self._decimal_to_float(bookmaker.balance_eur)
+                for bookmaker in calc.bookmakers
+            )
+            sum_start_cell = xl_rowcol_to_cell(data_start_row, 3)
+            sum_end_cell = xl_rowcol_to_cell(current_row - 1, 3)
+            worksheet.write_formula(
+                total_row,
+                3,
+                f"=SUM({sum_start_cell}:{sum_end_cell})",
+                bookmaker_total_value_fmt,
+                total_eur,
+            )
+        else:
+            worksheet.write_number(total_row, 3, 0.0, bookmaker_total_value_fmt)
+
+        native_multiplier = Decimal("1")
+        if has_bookmakers and calc.tb_eur != Decimal("0"):
+            native_multiplier = total_native_dec / calc.tb_eur
+
+        summary_heading_row = total_row + 2
+        worksheet.merge_range(
+            summary_heading_row,
+            0,
+            summary_heading_row,
+            3,
+            "Summary (All amounts in EUR)",
+            summary_heading_fmt,
+        )
+        summary_start_row = summary_heading_row + 1
+        home_currency = (calc.home_currency or "EUR").upper()
+        summary_rows: List[Dict[str, Any]] = [
+            {
+                "label": "Total Balance",
+                "value": calc.tb_eur,
+                "native": total_native_dec if has_bookmakers else calc.tb_eur,
+                "currency": home_currency,
+                "emphasize": False,
+            },
+            {
+                "label": "Net Deposits (ND)",
+                "value": calc.net_deposits_eur,
+                "native": (calc.net_deposits_eur * native_multiplier),
+                "currency": home_currency,
+                "emphasize": False,
+            },
+            {
+                "label": "Imbalance (Total Balance − Yield Funds)",
+                "value": calc.i_double_prime_eur,
+                "native": (calc.i_double_prime_eur * native_multiplier),
+                "currency": home_currency,
+                "emphasize": True,
+            },
+            {
+                "label": "Fair Share (FS)",
+                "value": calc.fs_eur,
+                "native": (calc.fs_eur * native_multiplier),
+                "currency": home_currency,
+                "emphasize": False,
+            },
+        ]
+
+        for idx, entry in enumerate(summary_rows):
+            row_idx = summary_start_row + idx
+            label_fmt = (
+                summary_label_bold_fmt if entry.get("emphasize") else summary_label_fmt
+            )
+            value_fmt = (
+                summary_value_bold_fmt if entry.get("emphasize") else summary_value_fmt
+            )
+            worksheet.write(row_idx, 0, entry["label"], label_fmt)
+            native_value = entry.get("native")
+            if native_value is not None:
+                worksheet.write_number(
+                    row_idx,
+                    1,
+                    self._decimal_to_float(native_value),
+                    summary_native_fmt,
+                )
+            else:
+                worksheet.write_blank(row_idx, 1, None, summary_native_fmt)
+            currency_code = entry.get("currency")
+            if currency_code:
+                worksheet.write(row_idx, 2, currency_code, summary_currency_fmt)
+            else:
+                worksheet.write_blank(row_idx, 2, None, summary_currency_fmt)
+            worksheet.write_number(
+                row_idx,
+                3,
+                self._decimal_to_float(entry["value"]),
+                value_fmt,
             )
 
-        rows.append([])
-        rows.extend(
-            [
-                ["Net Deposits (ND)", self._format_decimal(calc.net_deposits_eur), "EURO"],
-                ["Fair Share (FS)", self._format_decimal(calc.fs_eur), "EURO"],
-                [
-                    "Yield Funds (YF = ND + FS)",
-                    self._format_decimal(calc.yf_eur),
-                    "EURO",
-                ],
-                ["Total Balance (TB)", self._format_decimal(calc.tb_eur), "EURO"],
-                ["Imbalance (I'' = TB - YF)", self._format_decimal(calc.i_double_prime_eur), "EURO"],
-                ["Exit Payout (-I'')", self._format_decimal(calc.exit_payout_eur), "EURO"],
-                ["Multibook Delta", self._format_decimal(multibook_delta), "EURO"],
-                ["UTILE (YF - ND)", self._format_decimal(calc.raw_profit_eur), "EURO"],
-            ]
+        summary_end_row = summary_start_row + len(summary_rows) - 1
+        worksheet.conditional_format(
+            summary_start_row,
+            3,
+            summary_end_row,
+            3,
+            {"type": "cell", "criteria": ">", "value": 0, "format": positive_fmt},
         )
-        rows.append([])
-        rows.append(
-            ["Footnote", SETTLEMENT_MODEL_FOOTNOTE, ""]
+        worksheet.conditional_format(
+            summary_start_row,
+            3,
+            summary_end_row,
+            3,
+            {"type": "cell", "criteria": "<", "value": 0, "format": negative_fmt},
         )
-        return rows
+
+        workbook.close()
+        buffer.seek(0)
+        return buffer.getvalue()
 
     def _build_roi_csv_rows(
         self,
@@ -933,6 +1142,13 @@ class StatementService:
             quantized = Decimal("0.00")
         return f"{quantized:,.2f}"
 
+    def _decimal_to_float(self, value: Optional[Decimal]) -> float:
+        """Return a rounded float for writing numeric cells."""
+        if value is None:
+            return 0.0
+        quantized = value.quantize(Decimal("0.01"))
+        return float(quantized)
+
     def _format_percentage(self, value: Optional[Decimal]) -> str:
         if value is None:
             return ""
@@ -952,6 +1168,27 @@ class StatementService:
             date_part = datetime.now().strftime("%Y-%m-%d")
         alias_slug = self._slugify(associate_alias)
         return f"{prefix}_{alias_slug}_{date_part}.xlsx"
+
+    def _build_statement_filename(
+        self, calc: StatementCalculations, cutoff_date: str
+    ) -> str:
+        alias_slug = self._slugify(calc.associate_name)
+        currency = (calc.home_currency or "EUR").upper()
+        date_part = self._format_statement_date(cutoff_date)
+        return f"{alias_slug}_{currency}_{date_part}_statement.xlsx"
+
+    def _format_statement_date(self, cutoff_date: str) -> str:
+        if not cutoff_date:
+            return datetime.now().strftime("%d-%m-%Y")
+        normalized = cutoff_date.replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(normalized)
+        except ValueError:
+            try:
+                dt = datetime.strptime(cutoff_date, "%Y-%m-%d")
+            except ValueError:
+                return cutoff_date
+        return dt.strftime("%d-%m-%Y")
 
     def _slugify(self, value: str) -> str:
         slug = re.sub(r"[^A-Za-z0-9]+", "-", (value or "").strip()).strip("-").lower()
