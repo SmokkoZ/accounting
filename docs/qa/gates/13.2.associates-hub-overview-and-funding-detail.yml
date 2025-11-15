@@ -1,0 +1,79 @@
+story: "13.2"
+epic: "13"
+decision: CONCERNS
+date: 2025-11-15
+gate_keeper: "Quinn - Test Architect"
+
+risk_score: 9
+risk_level: Medium
+risk_factors:
+  - factor: "Permission gate is a client-side checkbox only rendered on Overview"
+    probability: 3
+    impact: 3
+    score: 9
+    priority: High
+  - factor: "Funding flow lacks automated coverage for ledger updates/metric refresh"
+    probability: 3
+    impact: 3
+    score: 9
+    priority: High
+  - factor: "Deep-link/state persistence across quick actions remains untested"
+    probability: 2
+    impact: 2
+    score: 4
+    priority: Medium
+
+nfr_assessment:
+  security: CONCERNS
+  performance: PASS
+  reliability: CONCERNS
+  usability: CONCERNS
+  maintainability: PASS
+
+traceability:
+  total_requirements: 8
+  tested_requirements: 1
+  coverage_percentage: 12%
+  gaps_identified:
+    - "Permission/authorization backed only by UI checkbox; no backend validation"
+    - "No automated validation of deposit/withdraw logic or ND/YF/TB/I'' refresh"
+    - "Deep-link + session-state persistence scenario coverage still missing"
+
+quality_gate:
+  decision: CONCERNS
+  rationale: "Permission fixes reduced duplicate submissions, but funding remains guarded purely by an Overview-only checkbox and none of the critical acceptance criteria (filters, quick actions, ledger writes) have automated coverage."
+  critical_issues:
+    - "Permission gate lacks role enforcement and is unreachable from the Management tab despite guarding the shared drawer"
+    - "Ledger + state synchronization logic remains untested, so regressions could slip in silently"
+  recommendations:
+    - "Introduce backend permission validation or a shared service before calling FundingTransactionService, and expose the confirmation UI anywhere the drawer renders."
+    - "Add integration/E2E tests that submit both deposit and withdrawal from Overview quick actions and assert ledger + metric updates."
+    - "Automate deep-link/selected associate persistence so Overview and Management stay synchronized."
+  next_steps:
+    - "Decide on the product-approved permission workflow (checkbox vs. entitlement) and document it in Dev Notes."
+    - "Implement the missing automated tests prior to sign-off."
+
+test_strategy:
+  unit_tests: Required
+  integration_tests: Required
+  e2e_tests: Required
+  performance_tests: Not Required
+  security_tests: Required
+  automation_potential: High
+
+technical_debt:
+  identified_issues:
+    - "Permission handling is entirely client-side and not shareable outside this page"
+    - "Metric override/session sync has no automated guarantees and may drift"
+  severity: Medium
+  remediation_priority: High
+  estimated_effort: 16 hours
+
+success_criteria:
+  - "Overview tab replicates management filters with consistent ND/YF/TB/I'' metrics."
+  - "Funding dialogs enforce ledger-safe validation, permissions, and emit optimistic plus authoritative refreshes."
+
+sign_off:
+  qa_engineer: "Quinn - Test Architect"
+  review_date: 2025-11-15
+  approval_status: Conditional

@@ -58,8 +58,7 @@ else:
 ## Overview
 
 The frontend is a **Streamlit-based web application** running at `localhost:8501`. It provides a simple, operator-focused interface for bet ingestion, surebet management, settlement, and reconciliation.
-Please note: The `use_column_width` parameter has been deprecated and will be removed in a future release. Please utilize the `use_container_width` parameter instead;
-for `width="stretch"`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+Please note: Streamlit deprecated the `use_container_width` parameter and will remove it in a future release. Use the `width` argument instead — set `width="stretch"` wherever you previously relied on `use_container_width=True`, and `width="content"` where `use_container_width=False` preserved compact layouts.
 
 ---
 

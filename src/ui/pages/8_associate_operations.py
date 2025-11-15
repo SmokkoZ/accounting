@@ -191,7 +191,7 @@ def _render_telegram_draft_actions(draft: FundingDraft) -> None:
             ":material/check: Accept",
             key=f"telegram_accept_btn_{draft.draft_id}",
             type="primary",
-            use_container_width=True,
+            width='stretch',
             help="Create a ledger entry and remove the draft.",
         ):
             st.session_state[accept_payload_key] = {
@@ -231,7 +231,7 @@ def _render_telegram_draft_actions(draft: FundingDraft) -> None:
             ":material/close: Reject",
             key=f"telegram_reject_btn_{draft.draft_id}",
             type="secondary",
-            use_container_width=True,
+            width='stretch',
             help="Discard draft without touching the ledger.",
         ):
             st.session_state[reject_payload_key] = {"draft": draft}

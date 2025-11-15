@@ -673,14 +673,14 @@ def render_surebet_card(surebet: Dict) -> None:
             if side_a_df.empty:
                 st.caption("No bets on Side A")
             else:
-                st.dataframe(side_a_df, hide_index=True, use_container_width=True)
+                st.dataframe(side_a_df, hide_index=True, width="stretch")
         with bet_col_b:
             st.markdown("**Side B**")
             side_b_df = _build_bet_table(bets.get("B", []))
             if side_b_df.empty:
                 st.caption("No bets on Side B")
             else:
-                st.dataframe(side_b_df, hide_index=True, use_container_width=True)
+                st.dataframe(side_b_df, hide_index=True, width="stretch")
 
         with st.expander("Detailed Breakdown"):
             def _sum_pl_if_side_wins(winning_bets, losing_bets):

@@ -845,7 +845,7 @@ def render_surebet_card(surebet: Dict) -> None:
             if side_a_df.empty:
                 st.caption("No bets on Side A")
             else:
-                st.dataframe(side_a_df, hide_index=True, use_container_width=True)
+                st.dataframe(side_a_df, hide_index=True, width='stretch')
         with bet_col_b:
             st.markdown("**Side B**")
             st.caption(
@@ -862,7 +862,7 @@ def render_surebet_card(surebet: Dict) -> None:
             if side_b_df.empty:
                 st.caption("No bets on Side B")
             else:
-                st.dataframe(side_b_df, hide_index=True, use_container_width=True)
+                st.dataframe(side_b_df, hide_index=True, width='stretch')
 
         st.markdown("")
         if coverage_sent:
@@ -878,14 +878,14 @@ def render_surebet_card(surebet: Dict) -> None:
             if st.button(
                 send_label,
                 key=f"surebet_send_coverage_{surebet_id}",
-                use_container_width=True,
+                width='stretch',
             ):
                 triggered_action = send_action
         with button_cols[1]:
             if st.button(
                 "Open Settlement Page",
                 key=f"surebet_settle_{surebet_id}",
-                use_container_width=True,
+                width='stretch',
             ):
                 triggered_action = "settle"
 
@@ -999,7 +999,7 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
             if st.button(
                 "Side A WON / Side B LOST",
                 key=f"{base_outcome_key}_btn_a",
-                use_container_width=True,
+                width='stretch',
                 type="primary" if current_selection == "A_WON" else "secondary",
             ):
                 st.session_state[base_outcome_key] = "A_WON"
@@ -1008,7 +1008,7 @@ def render_settlement_surebet_card(surebet: Dict, index: int) -> None:
             if st.button(
                 "Side B WON / Side A LOST",
                 key=f"{base_outcome_key}_btn_b",
-                use_container_width=True,
+                width='stretch',
                 type="primary" if current_selection == "B_WON" else "secondary",
             ):
                 st.session_state[base_outcome_key] = "B_WON"

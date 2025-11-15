@@ -247,7 +247,7 @@ def render_action_buttons(
                 key=f"{action.key_prefix}_{associate.associate_id}",
                 help=action.help_text,
                 type=action.button_type,
-                use_container_width=True,
+                width='stretch',
             ):
                 action.callback(associate)
 

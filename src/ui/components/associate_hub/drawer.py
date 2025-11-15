@@ -27,8 +27,10 @@ from src.ui.utils.formatters import format_currency_amount
 from src.utils.datetime_helpers import utc_now_iso
 from src.utils.logging_config import get_logger
 from src.services.settlement_constants import SETTLEMENT_MODEL_VERSION
+from src.ui.components.associate_hub.permissions import has_funding_permission
 
 logger = get_logger(__name__)
+DRAWER_FUNDING_BUSY_KEY = "associates_hub_drawer_funding_busy"
 
 
 def _resolve_operator_identity() -> str:
@@ -58,7 +60,9 @@ def _parse_cutoff_or_now(raw_value: Optional[str]) -> datetime:
 def render_detail_drawer(
     repository: AssociateHubRepository,
     funding_service: FundingTransactionService,
-    balance_service: BookmakerBalanceService
+    balance_service: BookmakerBalanceService,
+    *,
+    show_telegram_actions: bool = True,
 ) -> None:
     """
     Render the main detail drawer with tabs.
@@ -116,7 +120,12 @@ def render_detail_drawer(
             render_profile_tab(repository, associate, bookmaker_id)
         
         with tab2:
-            render_balances_tab(balance_service, associate, bookmaker_id)
+            render_balances_tab(
+                balance_service,
+                associate,
+                bookmaker_id,
+                show_telegram_actions=show_telegram_actions,
+            )
         
         with tab3:
             render_transactions_tab(funding_service, associate, bookmaker_id)
@@ -329,7 +338,9 @@ def render_bookmaker_edit_form(
 def render_balances_tab(
     balance_service: BookmakerBalanceService,
     associate: Dict[str, Any],
-    bookmaker_id: Optional[int]
+    bookmaker_id: Optional[int],
+    *,
+    show_telegram_actions: bool = True,
 ) -> None:
     """
     Render balance management tab.
@@ -458,13 +469,20 @@ def render_balances_tab(
     
     for bookmaker in display_bookmakers:
         with st.expander(f" {bookmaker.bookmaker_name}", expanded=False):
-            render_bookmaker_balance_summary(balance_service, associate, bookmaker)
+            render_bookmaker_balance_summary(
+                balance_service,
+                associate,
+                bookmaker,
+                show_telegram_actions=show_telegram_actions,
+            )
 
 
 def render_bookmaker_balance_summary(
     balance_service: BookmakerBalanceService,
     associate: Dict[str, Any],
     bookmaker: BookmakerBalance,
+    *,
+    show_telegram_actions: bool = True,
 ) -> None:
     """
     Render summary for a single bookmaker balance and telegram actions.
@@ -515,20 +533,21 @@ def render_bookmaker_balance_summary(
             st.write("**Last Check:**")
             st.write("Never")
 
-    st.divider()
-    st.caption("Send the latest reported + pending balances to the registered Telegram chat.")
-    button_key = f"send_balance_{associate['id']}_{bookmaker.bookmaker_id}"
-    if st.button(
-        ":material/send: Send balance to Telegram",
-        key=button_key,
-        use_container_width=True,
-    ):
-        with st.spinner("Sending balance summary to Telegram..."):
-            _send_balance_to_telegram(
-                balance_service=balance_service,
-                associate_id=associate["id"],
-                bookmaker_id=bookmaker.bookmaker_id,
-            )
+    if show_telegram_actions:
+        st.divider()
+        st.caption("Send the latest reported + pending balances to the registered Telegram chat.")
+        button_key = f"send_balance_{associate['id']}_{bookmaker.bookmaker_id}"
+        if st.button(
+            ":material/send: Send balance to Telegram",
+            key=button_key,
+            width='stretch',
+        ):
+            with st.spinner("Sending balance summary to Telegram..."):
+                _send_balance_to_telegram(
+                    balance_service=balance_service,
+                    associate_id=associate["id"],
+                    bookmaker_id=bookmaker.bookmaker_id,
+                )
 
 
 def _send_balance_to_telegram(
@@ -646,118 +665,131 @@ def render_transactions_tab(
     """
     st.markdown("###  Funding & Transactions")
     
-    # Funding action
+    can_submit = has_funding_permission()
     funding_action = st.session_state.get("hub_funding_action", "deposit")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button(" Deposit", key="switch_deposit", width="stretch"):
-            st.session_state["hub_funding_action"] = "deposit"
-            safe_rerun()
-    
-    with col2:
-        if st.button(" Withdraw", key="switch_withdraw", width="stretch"):
-            st.session_state["hub_funding_action"] = "withdraw"
-            safe_rerun()
-    
-    # Funding form
-    action_text = "Deposit" if funding_action == "deposit" else "Withdrawal"
-    st.markdown(f"####  Record {action_text}")
-    
-    with st.form("funding_transaction_form"):
+
+    if not can_submit:
+        st.info(
+            ":material/lock: Funding actions are read-only until the Overview "
+            "permission checkbox is enabled."
+        )
+    else:
         col1, col2 = st.columns(2)
-        
         with col1:
-            amount_native = st.text_input(
-                f"{action_text} Amount*",
-                key="funding_amount",
-                placeholder="e.g., 500.00",
-                help=f"Amount to {funding_action.lower()} in associate's home currency"
-            )
-            
-            native_currency = st.text_input(
-                "Currency*",
-                value=associate["home_currency"],
-                key="funding_currency",
-                max_chars=3,
-                help="Currency for the transaction"
-            )
-        
-        with col2:
-            # Bookmaker selection (optional)
-            try:
-                bookmakers = funding_service.db.execute(
-                    "SELECT id, bookmaker_name FROM bookmakers WHERE associate_id = ? ORDER BY bookmaker_name",
-                    (associate["id"],)
-                ).fetchall()
-                
-                bookmaker_options = {None: "Associate-level"} | {
-                    b["id"]: b["bookmaker_name"] for b in bookmakers
-                }
-            except Exception:
-                bookmaker_options = {None: "Associate-level"}
-            
-            selected_bookmaker_id = st.selectbox(
-                "Bookmaker (Optional)",
-                options=list(bookmaker_options.keys()),
-                format_func=lambda x: bookmaker_options[x],
-                key="funding_bookmaker",
-                help="Optional: restrict transaction to specific bookmaker"
-            )
-            
-            note = st.text_area(
-                "Note",
-                key="funding_note",
-                placeholder="Optional notes about this transaction...",
-                help="Any additional context about this transaction",
-                height=80
-            )
-        
-        if st.form_submit_button(f" Record {action_text}", type="primary"):
-            try:
-                # Validation
-                if not amount_native.strip():
-                    st.error(" Amount is required")
-                    return
-                
-                if not validate_currency_code(native_currency):
-                    st.error(" Invalid currency code")
-                    return
-                
-                amount = validate_decimal_input(amount_native)
-                if amount is None:
-                    st.error(" Invalid amount")
-                    return
-                
-                if amount <= 0:
-                    st.error(" Amount must be positive")
-                    return
-                
-                # Create and record transaction
-                transaction = FundingTransaction(
-                    associate_id=associate["id"],
-                    bookmaker_id=selected_bookmaker_id,
-                    transaction_type=funding_action.upper(),
-                    amount_native=amount,
-                    native_currency=native_currency.upper(),
-                    note=note.strip() or None
-                )
-                
-                ledger_id = funding_service.record_transaction(transaction)
-                
-                st.success(f" {action_text} recorded successfully (ID: {ledger_id})!")
-                
-                # Clear form
-                for key in ["funding_amount", "funding_currency", "funding_bookmaker", "funding_note"]:
-                    if key in st.session_state:
-                        del st.session_state[key]
-                
+            if st.button(" Deposit", key="switch_deposit", width="stretch"):
+                st.session_state["hub_funding_action"] = "deposit"
                 safe_rerun()
-                
-            except FundingTransactionError as e:
-                st.error(f" {e}")
-            except Exception as e:
-                st.error(f" Failed to record transaction: {e}")
+
+        with col2:
+            if st.button(" Withdraw", key="switch_withdraw", width="stretch"):
+                st.session_state["hub_funding_action"] = "withdraw"
+                safe_rerun()
+
+        action_text = "Deposit" if funding_action == "deposit" else "Withdrawal"
+        st.markdown(f"####  Record {action_text}")
+
+        with st.form("funding_transaction_form"):
+            col1, col2 = st.columns(2)
+
+            with col1:
+                amount_native = st.text_input(
+                    f"{action_text} Amount*",
+                    key="funding_amount",
+                    placeholder="e.g., 500.00",
+                    help=f"Amount to {funding_action.lower()} in associate's home currency",
+                )
+
+                native_currency = st.text_input(
+                    "Currency*",
+                    value=associate["home_currency"],
+                    key="funding_currency",
+                    max_chars=3,
+                    help="Currency for the transaction",
+                )
+
+            with col2:
+                try:
+                    bookmakers = funding_service.db.execute(
+                        "SELECT id, bookmaker_name FROM bookmakers WHERE associate_id = ? ORDER BY bookmaker_name",
+                        (associate["id"],),
+                    ).fetchall()
+
+                    bookmaker_options = {None: "Associate-level"} | {
+                        b["id"]: b["bookmaker_name"] for b in bookmakers
+                    }
+                except Exception:
+                    bookmaker_options = {None: "Associate-level"}
+
+                selected_bookmaker_id = st.selectbox(
+                    "Bookmaker (Optional)",
+                    options=list(bookmaker_options.keys()),
+                    format_func=lambda x: bookmaker_options[x],
+                    key="funding_bookmaker",
+                    help="Optional: restrict transaction to specific bookmaker",
+                )
+
+                note = st.text_area(
+                    "Note",
+                    key="funding_note",
+                    placeholder="Optional notes about this transaction...",
+                    help="Any additional context about this transaction",
+                    height=80,
+                )
+
+            is_busy = bool(st.session_state.get(DRAWER_FUNDING_BUSY_KEY))
+            if st.form_submit_button(
+                f" Record {action_text}",
+                type="primary",
+                disabled=is_busy,
+            ):
+                st.session_state[DRAWER_FUNDING_BUSY_KEY] = True
+                try:
+                    if not amount_native.strip():
+                        st.error(" Amount is required")
+                        st.session_state[DRAWER_FUNDING_BUSY_KEY] = False
+                        return
+
+                    if not validate_currency_code(native_currency):
+                        st.error(" Invalid currency code")
+                        st.session_state[DRAWER_FUNDING_BUSY_KEY] = False
+                        return
+
+                    amount = validate_decimal_input(amount_native)
+                    if amount is None:
+                        st.error(" Invalid amount")
+                        st.session_state[DRAWER_FUNDING_BUSY_KEY] = False
+                        return
+
+                    if amount <= 0:
+                        st.error(" Amount must be positive")
+                        st.session_state[DRAWER_FUNDING_BUSY_KEY] = False
+                        return
+
+                    transaction = FundingTransaction(
+                        associate_id=associate["id"],
+                        bookmaker_id=selected_bookmaker_id,
+                        transaction_type=funding_action.upper(),
+                        amount_native=amount,
+                        native_currency=native_currency.upper(),
+                        note=note.strip() or None,
+                    )
+
+                    ledger_id = funding_service.record_transaction(transaction)
+
+                    st.success(f" {action_text} recorded successfully (ID: {ledger_id})!")
+
+                    for key in ["funding_amount", "funding_currency", "funding_bookmaker", "funding_note"]:
+                        st.session_state.pop(key, None)
+
+                    st.session_state[DRAWER_FUNDING_BUSY_KEY] = False
+                    safe_rerun()
+
+                except FundingTransactionError as exc:
+                    st.error(f" {exc}")
+                    st.session_state[DRAWER_FUNDING_BUSY_KEY] = False
+                except Exception as exc:  # pragma: no cover - visibility
+                    st.error(f" Failed to record transaction: {exc}")
+                    st.session_state[DRAWER_FUNDING_BUSY_KEY] = False
     
     st.divider()
     

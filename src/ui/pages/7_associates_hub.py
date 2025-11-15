@@ -9,9 +9,11 @@ management with confirmation prompts for sensitive operations.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -19,6 +21,10 @@ from src.repositories.associate_hub_repository import (
     AssociateHubRepository,
     AssociateMetrics,
     BookmakerSummary,
+)
+from src.services.balance_history_service import (
+    BalanceHistoryEntry,
+    BalanceHistoryService,
 )
 from src.services.bookmaker_balance_service import BookmakerBalanceService
 from src.services.funding_transaction_service import (
@@ -29,12 +35,17 @@ from src.services.funding_transaction_service import (
 from src.ui.components.associate_hub.drawer import render_detail_drawer
 from src.ui.components.associate_hub.filters import render_filters
 from src.ui.components.associate_hub.listing import QuickAction, render_associate_listing, render_empty_state, render_hub_dashboard
+from src.ui.components.associate_hub.permissions import (
+    FUNDING_PERMISSION_KEY,
+    has_funding_permission,
+)
 from src.ui.helpers.dialogs import open_dialog, render_confirmation_dialog
 from src.ui.helpers.editor import (
     extract_editor_changes,
     get_selected_row_ids,
 )
 from src.ui.ui_components import load_global_styles
+from src.ui.utils.formatters import format_currency_amount, format_utc_datetime_local
 from src.ui.utils.state_management import safe_rerun
 from src.ui.utils.validators import VALID_CURRENCIES
 from src.ui.helpers.dialogs import close_dialog
@@ -49,10 +60,29 @@ SELECTED_ASSOCIATE_KEY = "associates_hub_selected_associate"
 BOOKMAKER_SCOPE_KEY = "associates_hub_bookmaker_scope"
 BOOKMAKER_REASSIGN_PAYLOAD_KEY = "associates_hub_reassign_payload"
 BOOKMAKER_REASSIGN_DIALOG_KEY = "associates_hub_reassign_dialog"
+HISTORY_ASSOCIATE_FILTER_KEY = "associates_hub_history_associate_id"
+HISTORY_BOOKMAKER_FILTER_KEY = "associates_hub_history_bookmaker_id"
+HISTORY_RANGE_KEY = "associates_hub_history_range"
+HISTORY_CUSTOM_RANGE_KEY = "associates_hub_history_custom_range"
+HISTORY_PAGE_KEY = "associates_hub_history_page"
+HISTORY_PAGE_SIZE_KEY = "associates_hub_history_page_size"
 
 MANAGEMENT_TAB_INDEX = 0
 OVERVIEW_TAB_INDEX = 1
 HISTORY_TAB_INDEX = 2
+
+OVERVIEW_FUNDING_DIALOG_KEY = "associates_overview_funding_dialog"
+OVERVIEW_DIALOG_PAYLOAD_KEY = f"{OVERVIEW_FUNDING_DIALOG_KEY}__payload"
+METRIC_OVERRIDE_KEY = "associates_hub_metric_overrides"
+OVERVIEW_FUNDING_BUSY_KEY = "associates_hub_overview_funding_busy"
+DEFAULT_HISTORY_RANGE_LABEL = "Last 30 days"
+HISTORY_RANGE_OPTIONS = {
+    "Last 7 days": 7,
+    DEFAULT_HISTORY_RANGE_LABEL: 30,
+    "Last 90 days": 90,
+    "Custom": None,
+}
+DEFAULT_HISTORY_PAGE_SIZE = 50
 
 
 def _queue_tab_switch(tab_index: int, message: str) -> None:
@@ -62,6 +92,71 @@ def _queue_tab_switch(tab_index: int, message: str) -> None:
         "tab": tab_index,
         "message": message,
     }
+
+
+def _set_history_focus(
+    associate_id: Optional[int],
+    *,
+    bookmaker_id: Optional[int] = None,
+) -> None:
+    """Persist deep-link context for the Balance History tab."""
+    st.session_state[HISTORY_ASSOCIATE_FILTER_KEY] = associate_id
+    st.session_state[HISTORY_BOOKMAKER_FILTER_KEY] = bookmaker_id
+    st.session_state[HISTORY_RANGE_KEY] = DEFAULT_HISTORY_RANGE_LABEL
+    st.session_state.pop(HISTORY_CUSTOM_RANGE_KEY, None)
+    st.session_state[HISTORY_PAGE_KEY] = 0
+
+
+def _default_history_dates(days: int) -> Tuple[date, date]:
+    """Return (start, end) tuple for the provided day window."""
+    today = date.today()
+    return today - timedelta(days=days), today
+
+
+def _reset_history_filters() -> None:
+    """Restore Balance History filters to their defaults."""
+    st.session_state[HISTORY_ASSOCIATE_FILTER_KEY] = None
+    st.session_state[HISTORY_BOOKMAKER_FILTER_KEY] = None
+    st.session_state[HISTORY_RANGE_KEY] = DEFAULT_HISTORY_RANGE_LABEL
+    start, end = _default_history_dates(HISTORY_RANGE_OPTIONS[DEFAULT_HISTORY_RANGE_LABEL])
+    st.session_state[HISTORY_CUSTOM_RANGE_KEY] = (start, end)
+    st.session_state[HISTORY_PAGE_KEY] = 0
+    st.session_state[HISTORY_PAGE_SIZE_KEY] = DEFAULT_HISTORY_PAGE_SIZE
+
+
+def _select_history_option(
+    label: str,
+    options: Sequence[Dict[str, Any]],
+    state_key: str,
+) -> Any:
+    """Render a selectbox backed by session state values."""
+    if not options:
+        raise ValueError("History option list must not be empty.")
+    stored_value = st.session_state.get(state_key, options[0]["value"])
+    index_lookup = {option["value"]: idx for idx, option in enumerate(options)}
+    selected_index = index_lookup.get(stored_value, 0)
+    selected_index = max(0, min(len(options) - 1, selected_index))
+    choice = st.selectbox(
+        label,
+        options=range(len(options)),
+        index=selected_index,
+        format_func=lambda i: options[i]["label"],
+        key=f"{state_key}__select",
+    )
+    value = options[int(choice)]["value"]
+    st.session_state[state_key] = value
+    return value
+
+
+def _resolve_history_label(
+    options: Sequence[Dict[str, Any]],
+    value: Any,
+) -> str:
+    """Return the display label for the stored option value."""
+    for option in options:
+        if option["value"] == value:
+            return option["label"]
+    return options[0]["label"] if options else ""
 
 
 def _list_associates_with_metrics(repository: AssociateHubRepository, **kwargs: Any) -> List[AssociateMetrics]:
@@ -79,10 +174,6 @@ def _list_associates_with_metrics(repository: AssociateHubRepository, **kwargs: 
             trimmed.pop("risk_filter", None)
             return repository.list_associates_with_metrics(**trimmed)
         raise
-
-OVERVIEW_FUNDING_DIALOG_KEY = "associates_overview_funding_dialog"
-OVERVIEW_DIALOG_PAYLOAD_KEY = f"{OVERVIEW_FUNDING_DIALOG_KEY}__payload"
-METRIC_OVERRIDE_KEY = "associates_hub_metric_overrides"
 
 
 @dataclass(frozen=True)
@@ -104,6 +195,39 @@ class AssociateRow:
 class FundingDialogValidationError(Exception):
     """Raised when overview funding dialog validation fails."""
 
+
+def _user_can_submit_funding() -> bool:
+    """Return True when the operator unlocked funding actions."""
+    return has_funding_permission()
+
+
+def _render_funding_permission_gate() -> None:
+    """Render the checkbox that unlocks funding controls for the session."""
+    st.checkbox(
+        "I confirm I am authorized to post funding transactions this session.",
+        key=FUNDING_PERMISSION_KEY,
+        help="Required before Deposit/Withdraw actions are enabled.",
+    )
+    if not _user_can_submit_funding():
+        st.info(
+            ":material/lock: Funding actions are locked until the confirmation "
+            "checkbox above is enabled."
+        )
+
+
+def _ensure_funding_permission() -> bool:
+    """Emit a warning if funding actions are attempted without permission."""
+    if _user_can_submit_funding():
+        return True
+    st.warning(
+        "Funding actions are locked. Confirm the Finance permission checkbox "
+        "in this tab before posting ledger entries."
+    )
+    st.toast(
+        "Funding actions locked - enable the Finance permission first.",
+        icon=":material/report:",
+    )
+    return False
 
 def _resolve_operator_identity() -> str:
     """Return the best operator identifier available for created_by fields."""
@@ -182,6 +306,8 @@ def _launch_overview_funding_dialog(
     action: str,
 ) -> None:
     """Open the funding dialog prefilled for the given associate."""
+    if not _ensure_funding_permission():
+        return
     st.session_state[SELECTED_ASSOCIATE_KEY] = associate.associate_id
     st.session_state[OVERVIEW_DIALOG_PAYLOAD_KEY] = {
         "associate_id": associate.associate_id,
@@ -342,6 +468,7 @@ def _build_bookmaker_dataframe(
                 "active_balance_eur": _decimal_to_float(active_balance),
                 "pending_balance_eur": _decimal_to_float(summary.pending_balance_eur),
                 "last_balance_check": summary.last_balance_check_utc or "Never",
+                "action": "",
             }
         )
     columns = [
@@ -362,6 +489,7 @@ def _build_bookmaker_dataframe(
         "active_balance_eur",
         "pending_balance_eur",
         "last_balance_check",
+        "action",
     ]
     if not records:
         return pd.DataFrame(columns=columns), metadata
@@ -489,8 +617,45 @@ def _handle_associate_actions(
             _queue_tab_switch(OVERVIEW_TAB_INDEX, f"{alias} opened in the Overview tab.")
             safe_rerun("associate_overview_jump")
         elif action == "View history":
+            _set_history_focus(associate_id)
             _queue_tab_switch(HISTORY_TAB_INDEX, f"{alias} opened in Balance History.")
             safe_rerun("associate_history_jump")
+
+
+def _handle_bookmaker_actions(
+    state: Optional[Dict[str, Any]],
+    edited_df: pd.DataFrame,
+) -> None:
+    """Process bookmaker Selectbox actions without polluting change state."""
+    if not state:
+        return
+    edited_rows = state.get("edited_rows")
+    if not isinstance(edited_rows, dict):
+        return
+
+    pending_actions: List[Tuple[int, str]] = []
+    for row_idx, payload in list(edited_rows.items()):
+        action = payload.pop("action", None)
+        if action:
+            pending_actions.append((row_idx, action))
+        if not payload:
+            edited_rows.pop(row_idx, None)
+
+    for row_idx, action in pending_actions:
+        if row_idx >= len(edited_df):
+            continue
+        row = edited_df.iloc[row_idx]
+        associate_id = int(row.get("associate_id") or 0)
+        bookmaker_id = int(row.get("id") or 0)
+        bookmaker_name = row.get("bookmaker_name", "Bookmaker")
+        if action == "View history" and associate_id and bookmaker_id:
+            st.session_state[SELECTED_ASSOCIATE_KEY] = associate_id
+            _set_history_focus(associate_id, bookmaker_id=bookmaker_id)
+            _queue_tab_switch(
+                HISTORY_TAB_INDEX,
+                f"{bookmaker_name} opened in Balance History.",
+            )
+            safe_rerun("bookmaker_history_jump")
 
 
 def _handle_pending_bookmaker_confirmation(
@@ -773,6 +938,7 @@ def _render_associate_table(
         limit=page_size,
         offset=page * page_size,
     )
+    associates = _apply_metric_overrides(associates)
     df = _build_associate_dataframe(associates)
     associate_lookup = {
         metric.associate_id: metric.associate_alias for metric in associates
@@ -864,8 +1030,7 @@ def _render_associate_table(
         column_config=column_config,
         num_rows="dynamic",
         hide_index=True,
-        width="stretch",
-        use_container_width=True,
+        width='stretch',
     )
     raw_state = st.session_state.get(ASSOC_EDITOR_KEY)
     try:
@@ -885,14 +1050,14 @@ def _render_associate_table(
         if st.button(
             ":material/save: Save Associate Changes",
             type="primary",
-            use_container_width=True,
+            width='stretch',
         ):
             _persist_associate_changes(repository, df, edited_df, state)
     else:
         st.button(
             ":material/save: Save Associate Changes",
             type="primary",
-            use_container_width=True,
+            width='stretch',
             disabled=True,
         )
 
@@ -1004,6 +1169,11 @@ def _render_bookmaker_table(
             "Last balance check",
             disabled=True,
         ),
+        "action": st.column_config.SelectboxColumn(
+            "Action",
+            options=["", "View history"],
+            help="Jump to Balance History with this bookmaker in focus.",
+        ),
     }
 
     edited_df = st.data_editor(
@@ -1012,16 +1182,16 @@ def _render_bookmaker_table(
         column_config=column_config,
         num_rows="dynamic",
         hide_index=True,
-        width="stretch",
-        use_container_width=True,
+        width='stretch',
     )
     state = st.session_state.get(BOOKMAKER_EDITOR_KEY)
+    _handle_bookmaker_actions(state, edited_df)
 
     if _editor_has_changes(state):
         if st.button(
             ":material/save: Save Bookmaker Changes",
             type="primary",
-            use_container_width=True,
+            width='stretch',
         ):
             _persist_bookmaker_changes(
                 repository,
@@ -1035,7 +1205,7 @@ def _render_bookmaker_table(
         st.button(
             ":material/save: Save Bookmaker Changes",
             type="primary",
-            use_container_width=True,
+            width='stretch',
             disabled=True,
         )
 
@@ -1089,6 +1259,9 @@ def _build_overview_quick_actions() -> Sequence[QuickAction]:
     """Quick actions for the Overview tab cards."""
 
     def _details_callback(associate: AssociateMetrics) -> None:
+        st.session_state.pop(OVERVIEW_DIALOG_PAYLOAD_KEY, None)
+        st.session_state.pop(f"{OVERVIEW_FUNDING_DIALOG_KEY}__open", None)
+        st.session_state.pop(OVERVIEW_FUNDING_BUSY_KEY, None)
         st.session_state[SELECTED_ASSOCIATE_KEY] = associate.associate_id
         _open_overview_drawer(associate.associate_id, tab="profile")
 
@@ -1099,6 +1272,15 @@ def _build_overview_quick_actions() -> Sequence[QuickAction]:
             f"{associate.associate_alias} opened in the Management tab.",
         )
         safe_rerun("overview_go_to_management")
+
+    def _go_to_history(associate: AssociateMetrics) -> None:
+        st.session_state[SELECTED_ASSOCIATE_KEY] = associate.associate_id
+        _set_history_focus(associate.associate_id)
+        _queue_tab_switch(
+            HISTORY_TAB_INDEX,
+            f"{associate.associate_alias} opened in Balance History.",
+        )
+        safe_rerun("overview_history_jump")
 
     return (
         QuickAction(
@@ -1131,6 +1313,13 @@ def _build_overview_quick_actions() -> Sequence[QuickAction]:
             help_text="Jump to the Management tab with this associate highlighted",
             callback=_go_to_management,
         ),
+        QuickAction(
+            key_prefix="overview_history",
+            label="View history",
+            icon=":material/timeline:",
+            help_text="Open Balance History with this associate pre-filtered",
+            callback=_go_to_history,
+        ),
     )
 
 
@@ -1145,6 +1334,7 @@ def _close_overview_funding_dialog() -> None:
         "overview_funding_note",
     ):
         st.session_state.pop(key, None)
+    st.session_state.pop(OVERVIEW_FUNDING_BUSY_KEY, None)
 
 
 def _render_overview_funding_dialog(
@@ -1160,6 +1350,10 @@ def _render_overview_funding_dialog(
     if not payload:
         return
     if not dialog_open:
+        return
+
+    if not _ensure_funding_permission():
+        _close_overview_funding_dialog()
         return
 
     associate_id = payload.get("associate_id")
@@ -1217,13 +1411,16 @@ def _render_overview_funding_dialog(
                 placeholder="Optional audit note",
                 height=80,
             )
+            is_busy = bool(st.session_state.get(OVERVIEW_FUNDING_BUSY_KEY))
             submitted = st.form_submit_button(
                 f"Record {action_label}",
                 type="primary",
-                use_container_width=True,
+                disabled=is_busy,
+                width='stretch',
             )
 
         if submitted:
+            st.session_state[OVERVIEW_FUNDING_BUSY_KEY] = True
             try:
                 ledger_id, metrics = submit_overview_funding_transaction(
                     funding_service=funding_service,
@@ -1238,9 +1435,15 @@ def _render_overview_funding_dialog(
                 )
             except FundingDialogValidationError as exc:
                 st.error(str(exc))
+                st.session_state[OVERVIEW_FUNDING_BUSY_KEY] = False
                 return
             except FundingTransactionError as exc:
                 st.error(f"Funding operation failed: {exc}")
+                st.session_state[OVERVIEW_FUNDING_BUSY_KEY] = False
+                return
+            except Exception as exc:  # pragma: no cover - defensive
+                st.error(f"Unexpected funding error: {exc}")
+                st.session_state[OVERVIEW_FUNDING_BUSY_KEY] = False
                 return
 
             st.success(f"{action_label} recorded successfully (Ledger #{ledger_id}).")
@@ -1250,6 +1453,7 @@ def _render_overview_funding_dialog(
             )
             _store_metric_override(metrics)
             _close_overview_funding_dialog()
+            st.session_state[OVERVIEW_FUNDING_BUSY_KEY] = False
             safe_rerun("overview_funding_success")
             return
 
@@ -1257,7 +1461,7 @@ def _render_overview_funding_dialog(
             ":material/close: Cancel",
             key="overview_funding_cancel",
             type="secondary",
-            use_container_width=True,
+            width='stretch',
         ):
             _close_overview_funding_dialog()
 
@@ -1275,12 +1479,265 @@ def _render_overview_funding_dialog(
             _render_form()
 
 
-def _render_history_placeholder() -> None:
-    st.title("Balance History")
-    st.info(
-        "Balance History will arrive in Story 13.3. The selected associate "
-        "state is preserved for future charts and exports."
+def _render_history_tab(
+    repository: AssociateHubRepository,
+    history_service: BalanceHistoryService,
+) -> None:
+    """Render the Balance History filters, charts, table, and exports."""
+    st.title(":material/timeline: Balance History")
+    st.caption(
+        "Deep dive into ND/YF/TB/I'' trends per associate/bookmaker and export the "
+        "currently filtered view without leaving the hub."
     )
+
+    if HISTORY_RANGE_KEY not in st.session_state:
+        _reset_history_filters()
+    if HISTORY_PAGE_SIZE_KEY not in st.session_state:
+        st.session_state[HISTORY_PAGE_SIZE_KEY] = DEFAULT_HISTORY_PAGE_SIZE
+
+    associates = _list_associates_with_metrics(repository, limit=500)
+    associate_options = [{"label": "All associates", "value": None}]
+    associate_options.extend(
+        {
+            "label": f"{metric.associate_alias} (ID {metric.associate_id})",
+            "value": metric.associate_id,
+        }
+        for metric in associates
+    )
+
+    bookmaker_options: List[Dict[str, Any]] = [{"label": "All bookmakers", "value": None}]
+
+    with st.container():
+        col_assoc, col_bookmaker, col_range = st.columns([2, 2, 2])
+        with col_assoc:
+            selected_associate = _select_history_option(
+                "Associate",
+                associate_options,
+                HISTORY_ASSOCIATE_FILTER_KEY,
+            )
+        with col_bookmaker:
+            if selected_associate:
+                try:
+                    summaries = repository.list_bookmakers_for_associate(selected_associate)
+                except Exception as exc:  # pragma: no cover - defensive
+                    st.error(f"Failed to load bookmakers: {exc}")
+                    summaries = []
+                bookmaker_options = [{"label": "All bookmakers", "value": None}]
+                bookmaker_options.extend(
+                    {
+                        "label": f"{summary.bookmaker_name} (ID {summary.bookmaker_id})",
+                        "value": summary.bookmaker_id,
+                    }
+                    for summary in summaries
+                )
+                selected_bookmaker = _select_history_option(
+                    "Bookmaker",
+                    bookmaker_options,
+                    HISTORY_BOOKMAKER_FILTER_KEY,
+                )
+            else:
+                st.selectbox(
+                    "Bookmaker",
+                    options=["Select an associate to refine by bookmaker"],
+                    index=0,
+                    disabled=True,
+                )
+                selected_bookmaker = None
+                st.session_state[HISTORY_BOOKMAKER_FILTER_KEY] = None
+
+        with col_range:
+            range_labels = list(HISTORY_RANGE_OPTIONS.keys())
+            current_range = st.session_state.get(
+                HISTORY_RANGE_KEY, DEFAULT_HISTORY_RANGE_LABEL
+            )
+            if current_range not in HISTORY_RANGE_OPTIONS:
+                current_range = DEFAULT_HISTORY_RANGE_LABEL
+                st.session_state[HISTORY_RANGE_KEY] = current_range
+            selected_range = st.selectbox(
+                "Date range",
+                options=range_labels,
+                key=HISTORY_RANGE_KEY,
+            )
+            range_days = HISTORY_RANGE_OPTIONS.get(selected_range)
+            if range_days is None:
+                default_range = st.session_state.get(HISTORY_CUSTOM_RANGE_KEY)
+                if not default_range:
+                    default_range = _default_history_dates(30)
+                custom = st.date_input(
+                    "Custom window (UTC)",
+                    value=default_range,
+                    help="Select start/end dates for Balance History.",
+                )
+                if isinstance(custom, tuple) and len(custom) == 2:
+                    start_date, end_date = custom
+                else:
+                    start_date = custom
+                    end_date = custom
+                st.session_state[HISTORY_CUSTOM_RANGE_KEY] = (start_date, end_date)
+            else:
+                start_date, end_date = _default_history_dates(range_days)
+                st.session_state[HISTORY_CUSTOM_RANGE_KEY] = (start_date, end_date)
+                st.caption(f"{start_date.isoformat()} to {end_date.isoformat()}")
+
+    start_date, end_date = st.session_state.get(HISTORY_CUSTOM_RANGE_KEY) or _default_history_dates(
+        HISTORY_RANGE_OPTIONS[DEFAULT_HISTORY_RANGE_LABEL]
+    )
+    if start_date > end_date:
+        st.error("Start date must be before end date.")
+        return
+
+    if st.button(
+        ":material/restart_alt: Reset filters",
+        help="Clear Balance History filters to their defaults.",
+        key="history_reset_btn",
+    ):
+        _reset_history_filters()
+        safe_rerun("history_filters_reset")
+        return
+
+    guard_window = (end_date - start_date).days
+    if guard_window > 120 and selected_associate is None:
+        st.warning(
+            "Large date ranges without an associate filter may impact performance. "
+            "Consider narrowing the window or selecting a specific associate."
+        )
+
+    col_page, col_page_size = st.columns([1, 1])
+    with col_page:
+        current_page = int(st.session_state.get(HISTORY_PAGE_KEY, 0))
+        page_number = int(
+            st.number_input(
+                "Page",
+                min_value=0,
+                value=current_page,
+                step=1,
+                key=HISTORY_PAGE_KEY,
+            )
+        )
+    size_options = [25, 50, 100]
+    with col_page_size:
+        current_size = int(
+            st.session_state.get(HISTORY_PAGE_SIZE_KEY, DEFAULT_HISTORY_PAGE_SIZE)
+        )
+        if current_size not in size_options:
+            current_size = DEFAULT_HISTORY_PAGE_SIZE
+        page_size = st.selectbox(
+            "Rows per page",
+            options=size_options,
+            index=size_options.index(current_size),
+            key=HISTORY_PAGE_SIZE_KEY,
+        )
+        page_size = int(page_size)
+
+    try:
+        history_result = history_service.fetch_history(
+            associate_id=selected_associate,
+            bookmaker_id=selected_bookmaker,
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+            limit=page_size,
+            offset=page_number * page_size,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        st.error(f"Failed to load balance history: {exc}")
+        return
+
+    associate_label = _resolve_history_label(associate_options, selected_associate)
+    bookmaker_label = _resolve_history_label(bookmaker_options, selected_bookmaker)
+    st.caption(
+        f"Context: {associate_label} / {bookmaker_label} — "
+        f"{start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')}"
+    )
+
+    entries = history_result.entries
+    if not entries:
+        st.info(
+            "No balance history matches the selected filters. Try broadening the "
+            "date range or choosing a different associate/bookmaker."
+        )
+        return
+
+    chart_rows: List[Dict[str, Any]] = []
+    for entry in sorted(entries, key=lambda item: item.check_date_utc):
+        chart_rows.append(
+            {
+                "Timestamp": entry.check_date_utc,
+                "Net Deposits (ND)": float(entry.net_deposits_eur),
+                "Yield Funds (YF)": float(entry.yf_eur),
+                "Total Balance (TB)": float(entry.tb_eur),
+                "Imbalance (I'')": float(entry.imbalance_eur),
+            }
+        )
+
+    chart_df = pd.DataFrame(chart_rows)
+    if not chart_df.empty:
+        melted = chart_df.melt(id_vars=["Timestamp"], var_name="Metric", value_name="Amount")
+        history_chart = (
+            alt.Chart(melted)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("Timestamp:T", title="Snapshot time (UTC)"),
+                y=alt.Y("Amount:Q", title="EUR"),
+                color=alt.Color("Metric:N", title="Series"),
+                tooltip=[
+                    alt.Tooltip("Timestamp:T", title="Timestamp"),
+                    alt.Tooltip("Metric:N", title="Metric"),
+                    alt.Tooltip("Amount:Q", title="EUR", format=".2f"),
+                ],
+            )
+            .interactive()
+        )
+        st.altair_chart(history_chart, width='stretch')
+
+    table_rows: List[Dict[str, Any]] = []
+    for entry in entries:
+        table_rows.append(
+            {
+                "Timestamp": format_utc_datetime_local(entry.check_date_utc),
+                "Associate": entry.associate_alias,
+                "Bookmaker": entry.bookmaker_name,
+                "ND (EUR)": float(entry.net_deposits_eur),
+                "YF (EUR)": float(entry.yf_eur),
+                "TB (EUR)": float(entry.tb_eur),
+                "I'' (EUR)": float(entry.imbalance_eur),
+                "Ledger TB (EUR)": float(entry.ledger_balance_eur),
+                "Balance (native)": format_currency_amount(
+                    entry.balance_native, entry.native_currency
+                ),
+                "Source": entry.source,
+                "Note": entry.note or "",
+            }
+        )
+
+    table_df = pd.DataFrame(table_rows)
+    st.dataframe(table_df, width='stretch', hide_index=True)
+
+    first_row = page_number * page_size + 1
+    last_row = first_row + len(entries) - 1
+    st.caption(
+        f"Displaying rows {first_row:,}–{last_row:,} of {history_result.total_count:,}."
+    )
+
+    try:
+        export_payload = history_service.export_history(
+            associate_id=selected_associate,
+            bookmaker_id=selected_bookmaker,
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+            associate_label=associate_label,
+            bookmaker_label=bookmaker_label,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        st.warning(f"Failed to prepare Excel export: {exc}")
+    else:
+        st.download_button(
+            ":material/download: Export Excel",
+            data=export_payload.content,
+            file_name=export_payload.file_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width='stretch',
+        )
+        st.caption(f"Export includes {export_payload.row_count} historical rows.")
 
 
 def _render_overview_tab(
@@ -1293,6 +1750,7 @@ def _render_overview_tab(
         "Monitor ND/YF/TB/I'' at a glance and launch read-only detail views or "
         "funding flows without leaving the hub."
     )
+    _render_funding_permission_gate()
 
     filter_state, should_refresh = render_filters(
         repository,
@@ -1348,6 +1806,7 @@ def main() -> None:
         repository = AssociateHubRepository()
         funding_service = FundingTransactionService()
         balance_service = BookmakerBalanceService()
+        history_service = BalanceHistoryService()
     except Exception as exc:
         st.error(f"Failed to initialise services: {exc}")
         return
@@ -1396,9 +1855,14 @@ def main() -> None:
     elif active_tab_index == OVERVIEW_TAB_INDEX:
         _render_overview_tab(repository, funding_service)
     else:
-        _render_history_placeholder()
+        _render_history_tab(repository, history_service)
 
-    render_detail_drawer(repository, funding_service, balance_service)
+    render_detail_drawer(
+        repository,
+        funding_service,
+        balance_service,
+        show_telegram_actions=False,
+    )
 
 
 if __name__ == "__main__":

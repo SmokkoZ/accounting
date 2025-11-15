@@ -313,7 +313,7 @@ else:
         column_config=column_config,
         disabled=disabled_columns,
         hide_index=True,
-        use_container_width=True,
+        width='stretch',
         key="verified_bets_editor",
     )
 

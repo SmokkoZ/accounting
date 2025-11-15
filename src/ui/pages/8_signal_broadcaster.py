@@ -167,7 +167,7 @@ def main() -> None:
             "Send signal",
             type="primary",
             disabled=not can_send,
-            use_container_width=True,
+            width='stretch',
         )
 
         if helper_message:

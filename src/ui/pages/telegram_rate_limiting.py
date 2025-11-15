@@ -250,7 +250,7 @@ else:
     st.dataframe(
         rows,
         hide_index=True,
-        use_container_width=True,
+        width='stretch',
     )
 
 st.caption(
@@ -278,7 +278,7 @@ else:
         ]
         submitted = st.form_submit_button(
             "Save rate limit changes",
-            use_container_width=True,
+            width='stretch',
             type="primary",
         )
 

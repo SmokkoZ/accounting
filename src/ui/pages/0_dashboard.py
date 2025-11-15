@@ -319,7 +319,7 @@ def _render_action_trigger(action: OperationalAction) -> None:
         key=f"{action.key}__button",
         help=action.description,
         type="secondary",
-        use_container_width=True,
+        width='stretch',
     ):
         st.session_state[payload_key] = True
         open_dialog(action.key)

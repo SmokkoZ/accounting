@@ -1,0 +1,79 @@
+story: "13.3"
+epic: "13"
+decision: CONCERNS
+date: 2025-11-15
+gate_keeper: "Quinn - Test Architect"
+
+risk_score: 12
+risk_level: Medium
+risk_factors:
+  - factor: "Charts and exports only see the paginated subset, so most of the requested history is never visualised."
+    probability: 4
+    impact: 3
+    score: 12
+    priority: High
+  - factor: "Excel export silently caps at 5k rows and runs an O(n) ledger aggregation per row."
+    probability: 3
+    impact: 4
+    score: 12
+    priority: High
+  - factor: "No integration/AppTest coverage exercises Balance History deep-link/state flows."
+    probability: 3
+    impact: 3
+    score: 9
+    priority: Medium
+
+nfr_assessment:
+  security: PASS
+  performance: CONCERNS
+  reliability: CONCERNS
+  usability: CONCERNS
+  maintainability: PASS
+
+traceability:
+  total_requirements: 7
+  tested_requirements: 2
+  coverage_percentage: 29%
+  gaps_identified:
+    - "No automation covers Management/Overview → Balance History deep linking or default filters."
+    - "Charts/exports rely on paginated datasets, so long date windows are never rendered or validated."
+    - "Export truncation (>5k rows) lacks UX messaging and automated verification."
+
+quality_gate:
+  decision: CONCERNS
+  rationale: "Operators cannot trust Balance History yet because the chart/export only show the latest page of rows, exports drop anything beyond 5k entries while hammering ledger_entries, and none of these flows have automated safety nets."
+  critical_issues:
+    - "Chart + table share the same paginated fetch, so only the most recent page of rows is ever visualised or exported."
+    - "Export path caps at 5k rows and executes one expensive ledger aggregation per row, inviting timeouts and silent data loss."
+  recommendations:
+    - "Fetch full-range datasets (or clearly chunk them) for charts and exports, and emit an explicit warning when truncation occurs."
+    - "Aggregate ledger metrics in bulk (window queries/materialised view) before export instead of calling `_calculate_financials` per row."
+    - "Add AppTest/E2E coverage for deep linking, pagination, export, and empty/error states."
+  next_steps:
+    - "Define the supported export window/row limit, document the UX, and surface it in the UI."
+    - "Implement the data/automation fixes above before promoting the story to Ready for Review."
+
+test_strategy:
+  unit_tests: "Partial - BalanceHistoryService is covered but guardrails and truncation paths lack tests."
+  integration_tests: "Required - no Streamlit/AppTest covers Balance History flows."
+  e2e_tests: "Required - export, chart, and deep-link journeys remain manual."
+  performance_tests: "Required - need proof that 5k+ row exports do not stall."
+  security_tests: "Not Required"
+  automation_potential: High
+
+technical_debt:
+  identified_issues:
+    - "History tab couples charts/exports to the paginated subset instead of the requested range."
+    - "Ledger metrics are recomputed per row/export without caching or batching."
+  severity: Medium
+  remediation_priority: High
+  estimated_effort: 24 hours
+
+success_criteria:
+  - "Charts and exports reflect the entire filtered history (or explicitly communicate any truncation)."
+  - "Exports run within SLA after batching ledger metric calculations."
+
+sign_off:
+  qa_engineer: "Quinn - Test Architect"
+  review_date: 2025-11-15
+  approval_status: Conditional

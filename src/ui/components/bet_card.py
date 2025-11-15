@@ -115,6 +115,25 @@ def render_bet_card(
         _render_card_divider(compact_mode)
 
 
+def _render_bet_title(bet: Dict[str, Any]) -> None:
+    """Render the bet title with emphasized styling."""
+    bet_id = bet.get("bet_id") or bet.get("id") or "?"
+    associate = bet.get("associate") or "Associate"
+    bookmaker = bet.get("bookmaker") or "Bookmaker"
+
+    st.markdown(
+        "".join(
+            [
+                "<div class='bet-card__title'>",
+                f"<span class='bet-card__title-id'>Bet #{escape(str(bet_id))}</span>",
+                f"<span class='bet-card__title-meta'>{escape(str(associate))} @ {escape(str(bookmaker))}</span>",
+                "</div>",
+            ]
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 def _render_card_divider(compact_mode: bool) -> None:
     if compact_mode:
         st.markdown(
@@ -158,7 +177,7 @@ def _render_bet_details(
     compact_mode: bool = False,
 ) -> None:
     """Render bet details section."""
-    st.markdown(f"**Bet #{bet['bet_id']}** - {bet['associate']} @ {bet['bookmaker']}")
+    _render_bet_title(bet)
 
     source_label = (
         "Telegram" if bet.get("ingestion_source") == "telegram" else "Manual Upload"
@@ -214,7 +233,7 @@ def _render_bet_details_editable(
     """Render bet details with inline editing fields."""
     bet_id = bet["bet_id"]
 
-    st.markdown(f"**Bet #{bet_id}** - {bet['associate']} @ {bet['bookmaker']}")
+    _render_bet_title(bet)
 
     source_label = (
         "Telegram" if bet.get("ingestion_source") == "telegram" else "Manual Upload"

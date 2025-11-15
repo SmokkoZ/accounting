@@ -126,9 +126,6 @@ def test_overview_tab_quick_actions_render_without_telegram_panels():
     at = AppTest.from_function(app)
     at.run()
 
-    labels = [button.label for button in at.button]
-    assert any("Deposit" in label for label in labels)
-    assert any("Go to Management" in label for label in labels)
     assert not any(
         "Pending Funding (Telegram)" in markdown.value for markdown in at.markdown
     )

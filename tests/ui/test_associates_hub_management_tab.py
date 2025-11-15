@@ -113,17 +113,29 @@ def test_management_tab_smoke():
         page.AssociateHubRepository = lambda: fake_repo  # type: ignore[attr-defined]
         page.FundingTransactionService = lambda: object()  # type: ignore[attr-defined]
         page.BookmakerBalanceService = lambda: object()  # type: ignore[attr-defined]
+
+        class FakeHistoryService:
+            def fetch_history(self, **kwargs):
+                return type("Result", (), {"entries": [], "total_count": 0})()
+
+            def export_history(self, **kwargs):
+                return type("Export", (), {"file_name": "history.xlsx", "content": b"", "row_count": 0})()
+
+        page.BalanceHistoryService = lambda: FakeHistoryService()  # type: ignore[attr-defined]
         page.render_filters = lambda repo, **kwargs: (filter_state, False)  # type: ignore[attr-defined]
         page.render_detail_drawer = lambda *args, **kwargs: None  # type: ignore[attr-defined]
         page._render_overview_tab = lambda *args, **kwargs: None  # type: ignore[attr-defined]
+        page._configure_page = lambda: None  # type: ignore[attr-defined]
 
         page.main()  # type: ignore[attr-defined]
 
     at = AppTest.from_function(app)
     at.run()
 
-    tab_labels = [tab.label for tab in at.tabs]
-    assert tab_labels == ["Management", "Overview", "Balance History"]
+    assert not at.exception
+    assert at.radio, "Expected at least one radio group for tabs"
+    tab_radio = at.radio[0]
+    assert tab_radio.options == ["Management", "Overview", "Balance History"]
 
     money_words = ("Deposit", "Withdrawal", "Balance Adjustment")
     for button in at.button:
